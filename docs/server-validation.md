@@ -49,12 +49,22 @@ web interface and saved privately. MAC, serial number and network details are
 not published. This confirms one powered, reachable phone, not SIP registration
 or the condition of the remaining batch.
 
+The [preserved SIP45 SR4-3 bundle](firmware-archive.md) was subsequently downloaded,
+its eight component hashes checked, and the same files staged on the PBX node.
+A verified private profile for extension **201** was deployed; Asterisk is Ready
+and Home Assistant discovered its five phone entities after an integration
+reload. The phone remains unregistered on SCCP. Its source is admitted by a
+single-host `/32` rule, and the existing NTP server was verified. The existing
+AMI password was preserved and `AMI Connected` remains on. TFTP is still closed,
+no TFTP Job is running, and DHCP has not been changed. Vendor signature acceptance
+and physical flashing remain pending.
+
 ## Remaining physical acceptance
 
-1. Obtain authorized SIP45 firmware and verify the hardware-compatible
-   [upgrade path](sip-conversion.md). Firmware is not stored in Git.
-2. Extend the private bootstrap inventory, generate real profiles, open a
-   restricted TFTP window and commission the first phone.
+1. Activate the prepared per-phone DHCP/TFTP settings in a commissioning window
+   and restart the first phone normally. Follow the [upgrade path](sip-conversion.md);
+   preserve device signature checks. Firmware is not stored in Git.
+2. Confirm SIP firmware and registration before accepting the phone for service.
 3. Verify registration, echo600, a call between two phones, DTMF and two-way audio.
    For Assist, enable calls for the actual VoIP device after its first call and
    select a working STT/TTS pipeline.
