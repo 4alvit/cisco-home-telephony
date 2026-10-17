@@ -20,6 +20,9 @@
 - [radio-services.svg](radio-services.svg): per-call radio workers, approved
   broadcaster streams, and alarms that ring until manually stopped.
   See the [radio and alarms guide](../radio-and-alarms.md) for limits and tests.
+- [phone-directory.svg](phone-directory.svg): fictional room names for ten
+  example Cisco line pairs, a separate Mac client and the central inventory data
+  path. Actual household assignments remain private; this is not a placement map.
 
 Each file is a standalone SVG containing editable text and vector objects.
 There are no MAC addresses, passwords or delivery details. Diagram sources and

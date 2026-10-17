@@ -193,7 +193,7 @@ class Gateway:
         return result['data']
 
 
-def validate_inventory(data, line):
+def validate_inventory(data, line=None):
     require(data.get('ami_fresh') is True, 'gateway_ami_not_fresh')
     observed = data.get('observed_at')
     require(type(observed) in (int, float) and math.isfinite(observed)
@@ -210,37 +210,65 @@ def validate_inventory(data, line):
             require(isinstance(number, str) and re.fullmatch(r'2[0-9]{2}', number)
                     and number not in seen, 'ambiguous_or_invalid_line_mapping')
             seen.add(number)
+        validate_phone_status(phone)
         if line in lines:
             selected = phone
+    for name in ('dial_allowlist', 'ring_allowlist'):
+        require(isinstance(data.get(name), list) and all(isinstance(n, str) and
+                re.fullmatch(r'[0-9]{3,8}', n) for n in data[name]), 'invalid_destination_inventory')
+    validate_softphones(data, seen)
+    if line is None:
+        return phones
     require(selected is not None, 'line_not_in_cisco_gateway_inventory')
+    return selected
+
+
+def validate_phone_status(phone):
+    room = phone.get('room')
+    require(room is None or valid_room(room), 'invalid_phone_room')
     for key in ('online', 'dnd', 'autoanswer', 'dnd_pending'):
-        require(type(selected.get(key)) is bool, 'invalid_phone_status')
-    capabilities = selected.get('capabilities')
+        require(type(phone.get(key)) is bool, 'invalid_phone_status')
+    capabilities = phone.get('capabilities')
     require(isinstance(capabilities, list) and all(isinstance(c, str) for c in capabilities),
             'invalid_phone_capabilities')
-    channels = selected.get('channels')
+    channels = phone.get('channels')
     require(isinstance(channels, list) and len(channels) <= 32, 'invalid_channel_inventory')
     for ch in channels:
-        require(isinstance(ch, dict) and ch.get('line') in selected['lines'] and
+        require(isinstance(ch, dict) and ch.get('line') in phone['lines'] and
                 isinstance(ch.get('name'), str) and re.fullmatch(
                     r'PJSIP/' + ch['line'] + r'-[A-Za-z0-9]+', ch['name']) and
                 isinstance(ch.get('uniqueid'), str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,160}', ch['uniqueid']) and
                 isinstance(ch.get('state'), str) and re.fullmatch(r'[A-Za-z ]{1,40}', ch['state']),
                 'invalid_channel_identity')
-    for name in ('dial_allowlist', 'ring_allowlist'):
-        require(isinstance(data.get(name), list) and all(isinstance(n, str) and
-                re.fullmatch(r'[0-9]{3,8}', n) for n in data[name]), 'invalid_destination_inventory')
-    alert = selected.get('alert')
+    alert = phone.get('alert')
     if alert is not None:
         require(isinstance(alert, dict) and isinstance(alert.get('id'), str) and
-                re.fullmatch(r'[0-9a-f]{32}', alert['id']) and alert.get('line') in selected['lines'] and
+                re.fullmatch(r'[0-9a-f]{32}', alert['id']) and alert.get('line') in phone['lines'] and
                 alert.get('kind') in ('timer', 'alarm') and alert.get('state') in
                 ('starting', 'ringing', 'stopping', 'ended', 'unknown'), 'invalid_alert_inventory')
-    return selected
+
+
+def valid_room(room):
+    return isinstance(room, str) and room == room.strip() and bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _'()-]{0,47}", room))
+
+
+def validate_softphones(data, used_lines):
+    softphones = data.get('softphones', [])
+    require(isinstance(softphones, list) and len(softphones) <= 50, 'invalid_softphone_inventory')
+    seen = set(used_lines)
+    for phone in softphones:
+        require(isinstance(phone, dict), 'invalid_softphone_inventory')
+        line = phone.get('extension')
+        require(isinstance(line, str) and re.fullmatch(r'2[0-9]{2}', line) and line not in seen,
+                'ambiguous_or_invalid_line_mapping')
+        seen.add(line)
+        require(phone.get('room') is None or valid_room(phone['room']), 'invalid_phone_room')
+        require(type(phone.get('online')) is bool, 'invalid_phone_status')
+    return softphones
 
 
 def commands(phone):
-    result = ['status', 'help', 'destinations'] + [value for key, value in COMMANDS.items()
+    result = ['status', 'help', 'directory', 'destinations'] + [value for key, value in COMMANDS.items()
               if key in phone['capabilities']]
     if 'answer' in phone['capabilities']:
         result.append('pickup')
@@ -250,6 +278,7 @@ def commands(phone):
 def status_result(data, phone, line):
     # Deliberately exclude any additional, unexpected server fields.
     filtered = {k: phone[k] for k in ('id', 'lines', 'online', 'dnd', 'dnd_pending', 'autoanswer')}
+    filtered['room'] = phone.get('room')
     filtered['channels'] = [{k: c[k] for k in ('line', 'name', 'uniqueid', 'state')}
                             for c in phone['channels']]
     alert = phone.get('alert')
@@ -258,6 +287,27 @@ def status_result(data, phone, line):
             'phone': filtered, 'observed_at': data['observed_at'], 'ami_fresh': True,
             'available_commands': commands(phone), 'dial_allowlist': data['dial_allowlist'],
             'ring_allowlist': data['ring_allowlist']}
+
+
+def directory_result(data, selected_line=None):
+    phones = validate_inventory(data)
+    softphones = validate_softphones(data, {line for phone in phones for line in phone['lines']})
+    if selected_line is not None:
+        require(any(selected_line in p['lines'] for p in phones) or
+                any(selected_line == p['extension'] for p in softphones), 'line_not_in_phone_directory')
+    entries = []
+    for phone in phones:
+        entry = {key: phone[key] for key in ('id', 'lines', 'online', 'dnd', 'dnd_pending', 'autoanswer')}
+        entry.update(type='cisco', room=phone.get('room'), channel_count=len(phone['channels']),
+                     selected=selected_line in phone['lines'])
+        entries.append(entry)
+    for phone in softphones:
+        entries.append({'type': 'softphone', 'id': phone['extension'], 'lines': [phone['extension']],
+                        'room': phone.get('room'), 'online': phone['online'],
+                        'selected': selected_line == phone['extension']})
+    entries.sort(key=lambda phone: int(phone['id']))
+    return {'status': 'ok', 'directory': entries, 'selected_line': selected_line,
+            'observed_at': data['observed_at'], 'ami_fresh': True}
 
 
 def make_action(args, data, phone):
@@ -433,19 +483,20 @@ def normalize_shorthand(argv):
 
 def parser():
     p = argparse.ArgumentParser(description=__doc__, prog='cisco', epilog=
-        'Examples: cisco 213; cisco 213 600; cisco 213 dial 600. Calls use the selected line.')
+        'Examples: cisco directory; cisco 213; cisco 213 600. Calls use the selected line.')
     global_options(p)
-    p.add_argument('extension', help='exact configured Cisco line, not a destination or phone IP')
+    p.add_argument('extension', help='exact configured Cisco line, or directory for the whole phone registry')
     sub = p.add_subparsers(dest='command')
     descriptions = {
         'status': 'Read current phone status and optional HA schedules.',
         'help': 'Show local commands without accessing private configuration or the network.',
         'destinations': 'Read allowed dial and finite-ring destinations.',
+        'directory': 'List Cisco phones and read-only softphone entries, highlighting this selected line.',
         'answer': 'Answer one exact ringing call on this line; never answer a timer/alarm alert.',
         'pickup': 'Alias for Answer of one ringing call. Idle use requires explicit speaker toggle.',
         'hangup': 'Hang up one exact observed call; refuse multiple channels or a sibling call.',
     }
-    for name in ('status', 'help', 'destinations', 'answer', 'pickup', 'hangup'):
+    for name in ('status', 'help', 'directory', 'destinations', 'answer', 'pickup', 'hangup'):
         sub.add_parser(name, help=descriptions[name], description=descriptions[name])
     sub.add_parser('dial').add_argument('number')
     sub.add_parser('ring').add_argument('number', nargs='?', default='640')
@@ -498,6 +549,21 @@ def display_schedule(schedule):
 
 
 def display(result):
+    if 'directory' in result:
+        print('Phone directory:')
+        for phone in result['directory']:
+            marker = '*' if phone['selected'] else ' '
+            room = phone['room'] if phone['room'] is not None else 'Unassigned'
+            text = f"{marker} {' / '.join(phone['lines'])}: {room} — online {phone['online']}"
+            if phone['type'] == 'cisco':
+                text += f"; DND {phone['dnd']}; auto-answer {phone['autoanswer']}; channels {phone['channel_count']}"
+            else:
+                text += '; softphone (directory only; no Cisco controls)'
+            print(text)
+        if result['selected_line'] is not None:
+            print(f"* Hosting phone for selected line {result['selected_line']}.")
+        print('Online means all assigned lines are available in the fresh gateway snapshot.')
+        return
     if 'schedule' in result and 'phone_id' in result:
         print(f"Line {result['selected_line']} / phone {result['phone_id']} — {result['status']}")
         if 'gateway_error' in result:
@@ -509,6 +575,7 @@ def display(result):
         return
     phone, line = result['phone'], result['selected_line']
     print(f"Line {line} / button {result['line_button']} — phone {phone['id']} ({', '.join(phone['lines'])})")
+    print('Room: ' + (phone.get('room') or 'Unassigned'))
     print(f"Phone online (all assigned lines): {phone['online']}; DND: {phone['dnd']}"
           f"; pending DND restore: {phone['dnd_pending']}; auto-answer: {phone['autoanswer']}")
     for ch in phone['channels']:
@@ -548,14 +615,14 @@ def main(argv=None):
     p = parser()
     if not argv or argv in (['--json'], ['-j']):
         if argv:
-            print(json.dumps({'status': 'help', 'commands': ['status', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS]}))
+            print(json.dumps({'status': 'help', 'commands': ['status', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS]}))
         else:
             p.print_help()
         return 0
     args = p.parse_args(normalize_shorthand(argv))
     if args.command == 'help':
         if args.json:
-            print(json.dumps({'status': 'help', 'commands': ['status', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS]}))
+            print(json.dumps({'status': 'help', 'commands': ['status', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS]}))
         else:
             p.print_help()
             print('\nDevice commands: ' + '; '.join(COMMANDS.values()))
@@ -565,7 +632,11 @@ def main(argv=None):
     action_key = None
     exit_code = 0
     try:
-        require(re.fullmatch(r'2[0-9]{2}', args.extension), 'extension_requires_three_digit_cisco_line')
+        if args.extension == 'directory':
+            require(args.command is None, 'global_directory_takes_no_subcommand')
+            args.extension, args.command = None, 'directory'
+        else:
+            require(re.fullmatch(r'2[0-9]{2}', args.extension), 'extension_requires_three_digit_cisco_line')
         require(1 <= args.timeout <= 60, 'timeout_requires_1_to_60_seconds')
         config = load_config(args.config)
         phone = None
@@ -573,7 +644,8 @@ def main(argv=None):
             try:
                 gateway = Gateway(config, args.timeout)
                 data = gateway.request('/v1/phones')
-                phone = validate_inventory(data, args.extension)
+                if args.command != 'directory':
+                    phone = validate_inventory(data, args.extension)
             except (Refused, OSError, ValueError, UnicodeError, TypeError, KeyError, AttributeError, RecursionError) as exc:
                 if args.command not in (None, 'status') or 'home_assistant' not in config:
                     raise
@@ -591,7 +663,9 @@ def main(argv=None):
                     display(result)
                     print('Schedule commands: ' + '; '.join(SCHEDULE_COMMANDS))
                 return 1
-        if args.command in ('schedule', 'timer', 'alarm'):
+        if args.command == 'directory':
+            result = directory_result(data, args.extension)
+        elif args.command in ('schedule', 'timer', 'alarm'):
             require('home_assistant' in config, 'home_assistant_schedule_config_required')
             ha_config = config['home_assistant']
             body = schedule_request(args, phone, ha_config)
@@ -667,7 +741,7 @@ def main(argv=None):
         if action_key is not None:
             result.update(action_id=action_key, note='Do not retry blindly; inspect status first.')
         elif args.command is None:
-            result['offline_commands'] = ['status', 'help', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS]
+            result['offline_commands'] = ['status', 'help', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS]
         print(json.dumps(result), file=sys.stdout if args.json else sys.stderr)
         if not args.json and args.command is None:
             print('Offline command help (live availability unknown):', file=sys.stderr)

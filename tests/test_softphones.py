@@ -84,6 +84,30 @@ class SoftphoneTests(unittest.TestCase):
                 with self.subTest(saved_keys=list(saved)),self.assertRaises(ValueError):
                     provision.generate(self.site,self.inventory,out)
 
+    def test_room_changes_only_softphone_callerid_without_changing_credentials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            provision.generate(self.site, self.inventory, out)
+            before = {p.relative_to(out): p.read_bytes() for p in out.rglob('*') if p.is_file()}
+            self.site['softphones'][0]['room'] = "Operator's Mac"
+            provision.generate(self.site, self.inventory, out)
+            after = {p.relative_to(out): p.read_bytes() for p in out.rglob('*') if p.is_file()}
+            key = Path('asterisk/pjsip.conf')
+            self.assertEqual(after.pop(key), before.pop(key).replace(b'callerid=Mac <209>', b"callerid=Operator's Mac <209>"))
+            self.assertEqual(after, before)
+            self.check(self.read_configs(out))
+
+    def test_invalid_room_is_rejected_before_output(self):
+        for room in (None, 1, False, [], {}, '', ' Mac', 'Mac ', '\tMac', 'Mac\n',
+                     'Mac;permit=all', 'Mac\\name', '"Mac"', 'M\u00e1c', '-Mac', 'A' * 49):
+            with self.subTest(room=room), tempfile.TemporaryDirectory() as tmp:
+                site = copy.deepcopy(self.site)
+                site['softphones'][0]['room'] = room
+                out = Path(tmp) / 'not-created'
+                with self.assertRaisesRegex(ValueError, 'room must'):
+                    provision.generate(site, self.inventory, out)
+                self.assertFalse(out.exists())
+
     def test_invalid_input_fails_before_output(self):
         cases=[None,{},'209',[dict(self.client,extra=True)],[dict(self.client,extension=209)],
             [dict(self.client,extension='620')],[dict(self.client,label='bad\nvalue')],
@@ -126,7 +150,8 @@ class SoftphoneTests(unittest.TestCase):
     def test_preflight_rejects_stale_source_transport_or_removed_client(self):
         with tempfile.TemporaryDirectory() as tmp:
             provision.generate(self.site,self.inventory,tmp);config=self.read_configs(tmp)
-            for key,value in [('source_ipv4','192.168.50.91'),('transport','udp'),('label','NewLabel')]:
+            for key,value in [('source_ipv4','192.168.50.91'),('transport','udp'),('label','NewLabel'),
+                              ('room', "Operator's Mac")]:
                 site=copy.deepcopy(self.site);site['softphones'][0][key]=value
                 with self.subTest(key=key),self.assertRaises(ValueError):self.check(config,site)
             removed=copy.deepcopy(self.site);removed.pop('softphones')

@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import softphones
 
 from phone_control import load_config, write_new
 from render_gateway import gateway
@@ -33,14 +34,23 @@ def prepare(site, inventory, callbacks, ami, clients, api_port=18084):
         require(callback['auth_bind_ipv4'] == site['node_ipv4'], 'callback_bind_must_match_node', 400)
         require(callback['phone_ipv4'] + '/32' in site['phone_cidrs'], 'exact_phone_acl_required', 400)
         lines = [line['extension'] for line in item['lines']] if 'lines' in item else [item['extension']]
-        phones.append({'id': lines[0], 'lines': lines, 'ipv4': callback['phone_ipv4'], 'device': device,
+        phone = {'id': lines[0], 'lines': lines, 'ipv4': callback['phone_ipv4'], 'device': device,
                        'port': callback['auth_port'], 'auth_path': callback['auth_path'],
-                       'username': callback['username'], 'password': callback['password']})
-    numbers = [line for phone in phones for line in phone['lines']] + ['600', '601', '620', '630', '640']
+                       'username': callback['username'], 'password': callback['password']}
+        if 'room' in item:
+            phone['room'] = softphones.room_name(item['room'])
+        phones.append(phone)
+    clients_metadata = [{'extension': client['extension'], 'room': client.get('room')}
+                        for client in softphones.validate(site, [line for phone in phones for line in phone['lines']])]
+    numbers = ([line for phone in phones for line in phone['lines']]
+               + [client['extension'] for client in clients_metadata]
+               + ['600', '601', '620', '630', '640'])
     result = {'persistent_enabled': True, 'bind_ipv4': site['node_ipv4'], 'api_port': api_port,
               'api_clients': clients, 'api_token': secrets.token_urlsafe(36),
               'ami': {'host': site['node_ipv4'], 'port': 5038, 'username': ami['username'], 'secret': ami['secret']},
               'phones': phones, 'dial_allowlist': numbers, 'ring_allowlist': ['640']}
+    if clients_metadata:
+        result['softphones'] = clients_metadata
     return gateway.validate(result)
 
 

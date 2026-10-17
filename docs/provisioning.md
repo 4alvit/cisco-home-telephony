@@ -26,6 +26,11 @@ whole inventory. Keep the existing private secrets when adding a line: the
 generator reuses the first line's password and creates one for the new line.
 Group 620 rings the first line of each physical phone only.
 
+An optional per-phone `room` assigns one room name to both lines and supplies
+their PJSIP caller-ID name without changing numeric handset labels. The
+[room directory guide](phone-directory.md) covers the central inventory,
+separate Mac entry, validation and full synthetic ten-phone example.
+
 `verified:true` means the model and MAC were checked against the actual phone;
 it does not verify firmware compatibility. `firmware_load` is the exact `.loads`
 filename **without its extension**, for example `SIP45.9-4-2SR4-3S`, only if that

@@ -68,10 +68,50 @@ class PhoneLinesTests(unittest.TestCase):
             self.assertEqual((out / 'secrets.json').read_bytes(), saved)
             self.assertNotIn('[202]', (out / 'asterisk/pjsip.conf').read_text())
 
+    def test_room_changes_only_callerid_and_keeps_numeric_buttons_and_secrets(self):
+        phone = copy.deepcopy(self.phone)
+        for line in phone['lines']:
+            line['label'] = line['extension']
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            p.generate(self.site, {'phones': [phone]}, out)
+            before = {item.relative_to(out): item.read_bytes() for item in out.rglob('*') if item.is_file()}
+            phone['room'] = "Operator's Room (Upstairs)"
+            p.generate(self.site, {'phones': [phone]}, out)
+            after = {item.relative_to(out): item.read_bytes() for item in out.rglob('*') if item.is_file()}
+            expected = before[Path('asterisk/pjsip.conf')]
+            for ext in ('201', '202'):
+                expected = expected.replace(f'callerid={ext} <{ext}>'.encode(),
+                                            f'callerid={phone["room"]} <{ext}>'.encode())
+            self.assertEqual(after.pop(Path('asterisk/pjsip.conf')), expected)
+            before.pop(Path('asterisk/pjsip.conf'))
+            self.assertEqual(after, before)
+            xml = ET.parse(out / 'tftp/SEP020000000001.cnf.xml')
+            self.assertEqual([line.findtext('featureLabel') for line in xml.findall('./sipProfile/sipLines/line')],
+                             ['201', '202'])
+
+    def test_invalid_room_is_rejected_before_output(self):
+        for room in (None, True, 42, [], {}, '', ' Room', 'Room ', 'Room\t', 'Room\n',
+                     'Room;permit=all', 'Room\\name', '"Room"', 'R\u00f6om', '_Room', 'A' * 49):
+            with self.subTest(room=room), tempfile.TemporaryDirectory() as tmp:
+                out = Path(tmp) / 'not-created'
+                with self.assertRaisesRegex(ValueError, 'room must'):
+                    p.generate(self.site, {'phones': [dict(self.phone, room=room)]}, out)
+                self.assertFalse(out.exists())
+
+    def test_room_accepts_documented_ascii_boundary_without_mutating_inventory(self):
+        for room in ('1', 'A' * 48, "Kid's Room (South)_2-3"):
+            with self.subTest(room=room):
+                inventory = {'phones': [dict(self.legacy, room=room)]}
+                before = copy.deepcopy(inventory)
+                phones, _ = p.validate(self.site, inventory)
+                self.assertEqual(phones[0]['room'], room)
+                self.assertEqual(inventory, before)
+
     def test_ring_group_uses_one_primary_line_per_physical_phone(self):
         other = copy.deepcopy(self.phone)
         other['mac'] = '020000000002'
-        other['lines'] = [{'extension': '203', 'label': 'Kitchen'}, {'extension': '204', 'label': 'Other'}]
+        other['lines'] = [{'extension': '203', 'label': 'Example Room C'}, {'extension': '204', 'label': 'Other'}]
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(p.generate(self.site, {'phones': [self.phone, other]}, tmp), 2)
             dial = (Path(tmp) / 'asterisk/extensions.conf').read_text()

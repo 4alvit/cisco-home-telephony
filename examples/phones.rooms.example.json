@@ -1,0 +1,214 @@
+{
+  "phones": [
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "02:00:00:00:00:01",
+      "room": "Example Room A",
+      "label": "201_202",
+      "lines": [
+        {
+          "extension": "201",
+          "label": "201"
+        },
+        {
+          "extension": "202",
+          "label": "202"
+        }
+      ],
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    },
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "02:00:00:00:00:02",
+      "room": "Example Room B",
+      "label": "203_204",
+      "lines": [
+        {
+          "extension": "203",
+          "label": "203"
+        },
+        {
+          "extension": "204",
+          "label": "204"
+        }
+      ],
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    },
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "02:00:00:00:00:03",
+      "room": "Example Room C",
+      "label": "205_206",
+      "lines": [
+        {
+          "extension": "205",
+          "label": "205"
+        },
+        {
+          "extension": "206",
+          "label": "206"
+        }
+      ],
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    },
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "02:00:00:00:00:04",
+      "room": "Example Room D",
+      "label": "207_208",
+      "lines": [
+        {
+          "extension": "207",
+          "label": "207"
+        },
+        {
+          "extension": "208",
+          "label": "208"
+        }
+      ],
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    },
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "02:00:00:00:00:05",
+      "room": "Example Room E",
+      "label": "210_211",
+      "lines": [
+        {
+          "extension": "210",
+          "label": "210"
+        },
+        {
+          "extension": "211",
+          "label": "211"
+        }
+      ],
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    },
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "02:00:00:00:00:06",
+      "room": "Example Room F",
+      "label": "212_213",
+      "lines": [
+        {
+          "extension": "212",
+          "label": "212"
+        },
+        {
+          "extension": "213",
+          "label": "213"
+        }
+      ],
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    },
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "02:00:00:00:00:07",
+      "room": "Example Room G",
+      "label": "214_215",
+      "lines": [
+        {
+          "extension": "214",
+          "label": "214"
+        },
+        {
+          "extension": "215",
+          "label": "215"
+        }
+      ],
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    },
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "02:00:00:00:00:08",
+      "room": "Example Room H",
+      "label": "216_217",
+      "lines": [
+        {
+          "extension": "216",
+          "label": "216"
+        },
+        {
+          "extension": "217",
+          "label": "217"
+        }
+      ],
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    },
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "02:00:00:00:00:09",
+      "room": "Example Room I",
+      "label": "218_219",
+      "lines": [
+        {
+          "extension": "218",
+          "label": "218"
+        },
+        {
+          "extension": "219",
+          "label": "219"
+        }
+      ],
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    },
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "02:00:00:00:00:10",
+      "room": "Example Room J",
+      "label": "220_221",
+      "lines": [
+        {
+          "extension": "220",
+          "label": "220"
+        },
+        {
+          "extension": "221",
+          "label": "221"
+        }
+      ],
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    }
+  ]
+}

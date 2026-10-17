@@ -15,6 +15,21 @@ The two dialing commands above originate from 212 and 213 respectively. They wor
 
 The CLI uses the existing [phone gateway](phone-gateway.md). Gateway actions resolve the selected extension against fresh `GET /v1/phones` data. For example, 213 belongs to the phone whose primary ID is 212; requests go to that phone's API route while explicitly retaining `line: "213"`. Schedule actions let the HA service resolve the exact line from its validated gateway inventory. Neither path guesses the primary line from odd/even numbering. The Mac softphone, 209, can be a configured call destination but is not a Cisco gateway control target.
 
+## Room directory
+
+`cisco directory` and `cisco 212 directory` both show the complete deployed
+directory, sorted by extension; the latter selects the hosting phone's entry. Even
+`cisco 209 directory` is a read-only directory lookup. Use `cisco --json directory` for structured
+output. Assigned room names come from the central private inventory, and
+ordinary line status includes the hosting phone's room. A room is an intended
+placement, not a location detected from registration or the network.
+
+The public example includes **209 — Operator's Mac** as a fictional software-client
+entry. Real room assignments and personal device names remain in private inventory.
+This does not enable Cisco controls on 209. Continue dialing numeric
+extensions; room names are not dialing aliases. See the [room directory guide](phone-directory.md)
+for a fictional ten-room example, caller-ID behavior and safe inventory updates.
+
 ## Install and private configuration
 
 Use Python 3.10 or later on macOS or Linux; there are no extra Python dependencies. From the repository root:
@@ -51,6 +66,8 @@ Both transports require an explicit RFC1918 IPv4 gateway literal and disable HTT
 
 ```bash
 cisco 213                       # Live status, commands and examples; read-only
+cisco directory                 # Complete room directory; read-only
+cisco 213 directory             # The same complete directory, not a line filter
 cisco 213 help                  # Local help; no config or network needed
 cisco 213 destinations          # Read the current dial/ring allowlists
 cisco 213 220                   # Place a call FROM 213 TO 220

@@ -341,6 +341,8 @@ def validate(site, inventory, *, pbx_only=False):
         seen_mac.add(mac)
         if not isinstance(phone.get("label"), str) or not re.fullmatch(r"[A-Za-z0-9 _-]{1,24}", phone["label"]):
             raise ValueError("phone label must be 1..24 ASCII letters/digits/spaces/_/-")
+        if "room" in phone:
+            softphones.room_name(phone["room"])
         if "extension" in phone and "lines" in phone:
             raise ValueError("use either legacy extension or lines, not both")
         if "extension" not in phone and "lines" not in phone:
@@ -510,7 +512,7 @@ def generate(site, inventory, out, *, pbx_only=False):
     for p in phones:
         transport=p.get("transport","tcp")
         for line in phone_lines(p):
-            ext, label = line["extension"], line["label"]
+            ext, label = line["extension"], p.get("room", line["label"])
             pw=passwords[ext]
             pjsip.append(f'''[{ext}]
 type=endpoint

@@ -1,5 +1,6 @@
 import copy
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -52,6 +53,69 @@ class GatewayTests(unittest.TestCase):
         with self.assertRaises(gateway.Refused): gateway.validate(value)
         value = config(); value['phones'][0]['lines'] = ['201', '201']
         with self.assertRaises(gateway.Refused): gateway.validate(value)
+
+    def test_rooms_and_softphones_are_public_metadata_only(self):
+        self.server.config['phones'][0]['room'] = 'Living Room'
+        self.server.config['softphones'] = [{'extension': '209', 'room': "Operator's Mac"}, {'extension': '210'}]
+        gateway.validate(self.server.config)
+        FakeAMI.endpoints['209'] = 'Not in use'
+        listing = self.server.listing()
+        self.assertEqual(listing['phones'][0]['room'], 'Living Room')
+        self.assertEqual(listing['softphones'], [
+            {'extension': '209', 'room': "Operator's Mac", 'online': True},
+            {'extension': '210', 'room': None, 'online': False}])
+        self.assertEqual(set(listing['phones'][0]), {
+            'id', 'lines', 'room', 'dnd', 'autoanswer', 'dnd_pending', 'alert', 'online', 'channels', 'capabilities'})
+        encoded = json.dumps(listing)
+        for private in ('a' * 48, 'b' * 48, 'u' * 24, 'p' * 24, 'c' * 64,
+                        '192.168.50.', 'SEP001122334455'):
+            self.assertNotIn(private, encoded)
+        for state in ('In use', 'Unavailable', 'Invalid', None):
+            FakeAMI.endpoints['209'] = state
+            with self.subTest(state=state):
+                self.assertEqual(self.server.listing()['softphones'][0]['online'], state == 'In use')
+        with self.assertRaises(gateway.Refused) as caught:
+            self.server.mutate('209', 'dial', {'number': '600', 'idempotency_key': 'metadata-only-209'})
+        self.assertEqual(caught.exception.reason, 'unknown_phone')
+        self.send.assert_not_called()
+
+    def test_missing_and_null_gateway_rooms_are_unassigned_without_config_mutation(self):
+        before = copy.deepcopy(self.server.config)
+        self.assertEqual(self.server.listing()['softphones'], [])
+        self.assertIsNone(self.server.listing()['phones'][0]['room'])
+        self.assertEqual(self.server.config, before)
+        self.server.config['phones'][0]['room'] = None
+        self.server.config['softphones'] = [{'extension': '209', 'room': None}]
+        gateway.validate(self.server.config)
+        self.assertIsNone(self.server.listing()['phones'][0]['room'])
+        self.assertIsNone(self.server.listing()['softphones'][0]['room'])
+
+    def test_room_metadata_validation_rejects_unsafe_or_ambiguous_values(self):
+        for room in (False, 42, [], {}, '', ' Room', 'Room ', 'Room\n', 'Room\t', 'Room;value=x',
+                     'Room/Name', 'Room\\Name', '"Room"', 'R\u00f6om', '_Room', 'A' * 49):
+            for kind in ('phone', 'softphone'):
+                with self.subTest(room=room, kind=kind):
+                    value = config()
+                    if kind == 'phone':
+                        value['phones'][0]['room'] = room
+                    else:
+                        value['softphones'] = [{'extension': '209', 'room': room}]
+                    with self.assertRaises(gateway.Refused) as caught:
+                        gateway.validate(value)
+                    self.assertEqual(caught.exception.reason, 'bad_room')
+        for room in ('1', 'A' * 48, "Kid's Room (South)_2-3"):
+            value = config(); value['phones'][0]['room'] = room
+            self.assertIs(gateway.validate(value), value)
+
+    def test_softphone_metadata_has_unique_valid_extensions_and_no_private_fields(self):
+        for clients in (None, {}, '209', [{'extension': 209}], [{'extension': '620'}],
+                        [{'extension': '202'}], [{'extension': '209'}, {'extension': '209'}],
+                        [{'extension': '209', 'password': 'secret'}],
+                        [{'extension': '209', 'source_ipv4': '192.168.50.90'}],
+                        [{'room': 'Mac'}], [None], [{'extension': '209'}] * 51):
+            with self.subTest(clients=clients):
+                value = config(); value['softphones'] = clients
+                with self.assertRaises(gateway.Refused): gateway.validate(value)
 
     def test_dial_uses_real_line_key_not_invalid_dial_suffix(self):
         self.request('dial', line='202', number='600')

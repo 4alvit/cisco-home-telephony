@@ -10,6 +10,14 @@ import stat
 PRIVATE = tuple(ipaddress.IPv4Network(n) for n in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
 SECRET_PATTERN = r'[A-Za-z0-9_-]{24,30}'
 MARKER = 'HOME_CLIENT_KIND=softphone'
+ROOM_PATTERN = r"[A-Za-z0-9][A-Za-z0-9 _'()-]{0,47}"
+
+
+def room_name(value):
+    """Accept a short caller-ID name without Asterisk configuration syntax."""
+    if not isinstance(value, str) or not re.fullmatch(ROOM_PATTERN, value) or value != value.strip():
+        raise ValueError('room must be 1..48 ASCII letters/digits/spaces/_/\'/(/)/-, start with a letter or digit, and have no surrounding whitespace')
+    return value
 
 
 def validate(site, cisco_extensions=()):
@@ -19,8 +27,9 @@ def validate(site, cisco_extensions=()):
     used = set(cisco_extensions)
     result = []
     for client in values:
-        if not isinstance(client, dict) or set(client) != {'extension', 'label', 'source_ipv4', 'transport'}:
-            raise ValueError('each softphone requires exactly extension, label, source_ipv4 and transport')
+        required = {'extension', 'label', 'source_ipv4', 'transport'}
+        if not isinstance(client, dict) or not required <= set(client) or set(client) - required - {'room'}:
+            raise ValueError('each softphone requires extension, label, source_ipv4 and transport, with optional room')
         extension = client['extension']
         if not isinstance(extension, str) or not re.fullmatch(r'2[0-9]{2}', extension):
             raise ValueError('softphone extension must be a string in 200..299')
@@ -29,6 +38,8 @@ def validate(site, cisco_extensions=()):
         used.add(extension)
         if not isinstance(client['label'], str) or not re.fullmatch(r'[A-Za-z0-9 _-]{1,24}', client['label']):
             raise ValueError('softphone label must be 1..24 ASCII letters/digits/spaces/_/-')
+        if 'room' in client:
+            room_name(client['room'])
         if client['transport'] not in ('tcp', 'udp'):
             raise ValueError('softphone transport must be tcp or udp')
         value = client['source_ipv4']
@@ -78,7 +89,7 @@ def render_client(site, client, password):
     """Use the existing LAN transport and home services, with an exact endpoint ACL."""
     if not isinstance(password, str) or not re.fullmatch(SECRET_PATTERN, password):
         raise ValueError('invalid softphone secret')
-    extension, label = client['extension'], client['label']
+    extension, label = client['extension'], client.get('room', client['label'])
     pjsip = f'''[{extension}]
 type=endpoint
 transport=transport-{client['transport']}

@@ -36,7 +36,7 @@ root=pathlib.Path(sys.argv[1])
  'gateway':{'enabled':True,'ami_client_ipv4':'127.0.0.1'},
  'home_assistant':{'enabled':True,'ami_client_ipv4':'127.0.0.1','allow_originate':True,
  'assist':{'enabled':True,'host_ipv4':'127.0.0.1','sip_port':5061}}}))
-(root/'phones.json').write_text(json.dumps({'phones':[{'model':'CP-7945G','verified':True,'mac':'020000000001','extension':'201','label':'CI synthetic','firmware_load':'SIP45.9-4-2SR3-1S','transport':'tcp'}]}))
+(root/'phones.json').write_text(json.dumps({'phones':[{'model':'CP-7945G','verified':True,'mac':'020000000001','extension':'201','label':'CI synthetic','room':"Kid's Room (West)",'firmware_load':'SIP45.9-4-2SR3-1S','transport':'tcp'}]}))
 PY
 python3 scripts/provision.py --site "$test_root/site.json" --inventory "$test_root/phones.json" --out "$test_root/generated"
 cp tests/radio_fixture_agi.py "$test_root/radio_fixture_agi.py"
@@ -81,6 +81,12 @@ for attempt in {1..30}; do
   sleep 1
 done
 docker exec "$container" asterisk -rx 'pjsip show endpoints' | grep -E 'Endpoint:.*201' > /dev/null
+docker exec -i "$container" python3 - <<'PYROOM'
+import re, subprocess
+endpoint = subprocess.check_output(['asterisk', '-rx', 'pjsip show endpoint 201'], text=True)
+assert re.search(r'''^\s*callerid\s*:\s*"?Kid's Room \(West\)"?\s*<201>\s*$''', endpoint, re.M), 'Room caller ID was not parsed by Asterisk'
+print('Room caller ID parsed by Asterisk, including apostrophe and parentheses.')
+PYROOM
 docker exec "$container" asterisk -rx 'pjsip show transports' | grep -E 'transport-tcp.*127.0.0.1:5060' > /dev/null
 docker exec "$container" asterisk -rx 'pjsip show transports' | grep -E 'transport-udp.*127.0.0.1:5060' > /dev/null
 docker exec "$container" asterisk -rx 'dialplan show 600@home' | grep 'Echo' > /dev/null

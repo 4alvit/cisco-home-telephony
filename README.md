@@ -36,6 +36,9 @@ conversion to MPP is not required.
 - [Cisco command line](docs/cli.md): `cisco 212` shows status; `cisco 212 220`
   calls from line 212 to 220. Includes pickup, speaker toggle, DND, auto-answer,
   timers, weekday alarms, messages and photos, with private local configuration.
+- [Room directory](docs/phone-directory.md): a fictional ten-room demonstration
+  plus an example Mac client, with stable numbers, room caller ID and read-only
+  `cisco directory` lookup. Actual room assignments stay in private inventory.
 - [Mac SIP client](docs/macos-softphone.md): compact Zoiper5 with independent extension
   **209**, its own credentials and a single-host access rule.
 - [Telegram, WhatsApp and Viber](docs/messaging-bridges.md): researched voice-bridge

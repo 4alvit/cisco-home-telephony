@@ -49,6 +49,14 @@ def private_ip(value):
     return str(address)
 
 
+def room_name(value):
+    """Validate optional public metadata, never credentials or configuration text."""
+    require(value is None or isinstance(value, str)
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 _'()-]{0,47}", value)
+            and value == value.strip(), 'bad_room', 400)
+    return value
+
+
 def validate(config):
     require(config.get('persistent_enabled') is True, 'explicit_persistent_mode_required', 400)
     private_ip(config['bind_ipv4'])
@@ -65,6 +73,7 @@ def validate(config):
     ports, addresses, lines = {config['api_port']}, set(), set()
     require(1 <= len(config['phones']) <= 32, 'bad_phone_count', 400)
     for phone in config['phones']:
+        room_name(phone.get('room'))
         require(phone['id'] == phone['lines'][0] and 1 <= len(phone['lines']) <= 2, 'bad_line_mapping', 400)
         private_ip(phone['ipv4'])
         require(phone['ipv4'] not in addresses, 'duplicate_phone_ip', 400)
@@ -80,6 +89,16 @@ def validate(config):
         for line in phone['lines']:
             require(re.fullmatch(r'2[0-9]{2}', line) and line not in lines, 'duplicate_or_bad_line', 400)
             lines.add(line)
+    softphones = config.get('softphones', [])
+    require(isinstance(softphones, list) and len(softphones) <= 50, 'bad_softphones', 400)
+    for client in softphones:
+        require(isinstance(client, dict) and 'extension' in client
+                and set(client) <= {'extension', 'room'}, 'bad_softphone_metadata', 400)
+        extension = client['extension']
+        require(isinstance(extension, str) and re.fullmatch(r'2[0-9]{2}', extension)
+                and extension not in lines, 'duplicate_or_bad_softphone_extension', 400)
+        lines.add(extension)
+        room_name(client.get('room'))
     require(all(isinstance(number, str) and re.fullmatch(r'[0-9]{3,8}', number)
                 for number in config['dial_allowlist']), 'bad_dial_allowlist', 400)
     require(isinstance(config.get('ring_allowlist', ['640']), list)
@@ -288,8 +307,13 @@ class Gateway:
             return {'ami_fresh': True, 'observed_at': time.time(),
                     'dial_allowlist': self.config['dial_allowlist'],
                     'ring_allowlist': self.config.get('ring_allowlist', ['640']),
+                    'softphones': [
+                        {'extension': client['extension'], 'room': client.get('room'),
+                         'online': endpoints.get(client['extension']) not in (None, 'Unavailable', 'Invalid')}
+                        for client in self.config.get('softphones', [])],
                     'phones': [
-                {'id': phone['id'], 'lines': phone['lines'], **self.preference(phone['id']),
+                {'id': phone['id'], 'lines': phone['lines'], 'room': phone.get('room'),
+                 **self.preference(phone['id']),
                  'dnd_pending': phone['id'] in self.dnd_pending,
                  'alert': self.latest_alert(phone['id']),
                  'online': all(endpoints.get(line) not in (None, 'Unavailable', 'Invalid') for line in phone['lines']),

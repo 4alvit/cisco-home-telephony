@@ -4,7 +4,7 @@
       "model": "CP-7945G",
       "verified": false,
       "mac": "REPLACE-WITH-VERIFIED-MAC",
-      "label": "201 / 202",
+      "label": "201_202",
       "lines": [
         {"extension": "201", "label": "201"},
         {"extension": "202", "label": "202"}

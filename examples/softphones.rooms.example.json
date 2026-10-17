@@ -1,0 +1,12 @@
+{
+  "softphones": [
+    {
+      "extension": "209",
+      "label": "Mac",
+      "room": "Operator's Mac",
+      "source_ipv4": "192.168.50.90",
+      "transport": "tcp"
+    }
+  ]
+}
+
