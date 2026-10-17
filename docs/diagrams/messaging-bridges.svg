@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="660" viewBox="0 0 1080 660" role="img" aria-labelledby="title desc">
+  <title id="title">Messaging voice bridges: research, not deployed</title>
+  <desc id="desc">The existing home PBX connects Cisco phones and a Mac SIP client. Separate potential gateways connect Telegram user calls or eligible WhatsApp and Viber business calling. No messenger bridge is deployed.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto-start-reverse"><path d="M0 0 8 4 0 8Z" fill="#496b84"/></marker>
+    <style>text{font-family:Arial,Helvetica,sans-serif;fill:#16324b}.title{font-size:30px;font-weight:700}.sub{font-size:16px}.h{font-size:20px;font-weight:700}.body{font-size:16px}.small{font-size:14px}.box{stroke:#cbd9e3;stroke-width:2}.link{fill:none;stroke:#496b84;stroke-width:3;marker-start:url(#arrow);marker-end:url(#arrow)}</style>
+  </defs>
+  <rect width="1080" height="660" rx="20" fill="#f4f8fb"/>
+  <text x="40" y="51" class="title">Messaging voice bridges</text>
+  <text x="40" y="80" class="sub">Research checked 17 October 2026 · No messenger gateway is deployed</text>
+  <rect x="40" y="117" width="230" height="120" rx="14" fill="#dff3ee" class="box"/>
+  <text x="60" y="151" class="h">Home SIP clients</text>
+  <text x="60" y="184" class="body">Cisco 7945G fleet</text>
+  <text x="60" y="211" class="body">Mac SIP client · 209*</text>
+  <path d="M282 177H331" class="link"/>
+  <rect x="343" y="117" width="245" height="120" rx="14" fill="#deebfc" class="box"/>
+  <text x="365" y="151" class="h">Asterisk on k3s</text>
+  <text x="365" y="184" class="body">Restricted internal routing</text>
+  <text x="365" y="211" class="body">SIP / RTP media boundary</text>
+  <path d="M600 177H648" class="link"/>
+  <rect x="660" y="117" width="380" height="120" rx="14" fill="#e5f4f3" class="box"/>
+  <text x="682" y="151" class="h">Telegram user-account bridge</text>
+  <text x="682" y="182" class="body">Experimental tg2sip / NTgCalls candidate</text>
+  <text x="682" y="208" class="body">Approved contacts ↔ one selected SIP line</text>
+  <path d="M465 249V303" class="link"/>
+  <rect x="343" y="315" width="245" height="125" rx="14" fill="#fff0cf" class="box"/>
+  <text x="365" y="350" class="h">Business gateway</text>
+  <text x="365" y="383" class="body">Provider eligibility + terms</text>
+  <text x="365" y="410" class="body">TLS / SRTP as required</text>
+  <path d="M600 354H648" class="link"/>
+  <rect x="660" y="290" width="380" height="107" rx="14" fill="#fff0cf" class="box"/>
+  <text x="682" y="325" class="h">WhatsApp Business Calling</text>
+  <text x="682" y="355" class="body">Eligible business sender + call permission</text>
+  <text x="682" y="381" class="small">Personal-account SIP login is not provided</text>
+  <path d="M600 408H625V474H648" class="link"/>
+  <rect x="660" y="420" width="380" height="107" rx="14" fill="#fff0cf" class="box"/>
+  <text x="682" y="455" class="h">Viber Business Calls</text>
+  <text x="682" y="485" class="body">Business voice product via a provider</text>
+  <text x="682" y="511" class="small">The public Bot API covers messaging</text>
+  <rect x="40" y="281" width="230" height="246" rx="14" fill="#fff" class="box"/>
+  <text x="60" y="318" class="h">Before any pilot</text>
+  <text x="60" y="352" class="body">Choose account + contacts</text>
+  <text x="60" y="383" class="body">Keep sessions private</text>
+  <text x="60" y="414" class="body">No arbitrary destinations</text>
+  <text x="60" y="445" class="body">No PSTN breakout</text>
+  <text x="60" y="476" class="body">Test both call directions</text>
+  <text x="60" y="507" class="body">Test reject + hangup</text>
+  <text x="40" y="577" class="body">Messenger encryption ends at its gateway. A mixed SIP call is not end-to-end encrypted.</text>
+  <text x="40" y="607" class="small">*209 is configured by the separate Mac rollout. This diagram describes proposed messenger paths only.</text>
+  <text x="40" y="632" class="small">Sources, dependency concerns and service restrictions: docs/messaging-bridges.md</text>
+</svg>

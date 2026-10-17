@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1264" role="img" aria-labelledby="title desc">
+  <title id="title">Cisco CLI: select a line, resolve its phone</title>
+  <desc id="desc">The command cisco 213 reads live gateway inventory and finds that line 213 belongs to the phone whose primary ID is 212. Dialing 600 keeps line 213 as the outgoing line. DND, auto-answer, speaker and screen content affect the hosting phone. Answer and hangup use a fresh exact channel name and unique ID and refuse ambiguous calls. Scheduled operations use the atomic Home Assistant schedule service, with one timer and one alarm per physical phone, each retaining its own line independently of the general line selector. The CLI uses explicitly configured private API transports and separate credentials for the gateway and Home Assistant. Credentials remain in private files and request headers or stdin, never command arguments.</desc>
+  <defs>
+    <marker id="teal-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="#48DDCC"/></marker>
+    <marker id="gold-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="#F7CB64"/></marker>
+    <style>
+      text { font-family: Arial, sans-serif; fill: #F5F7FB; }
+      .muted { fill: #AAB9D0; }
+      .teal { fill: #48DDCC; }
+      .gold { fill: #F7CB64; }
+      .mono { font-family: monospace; }
+      .card { fill: #172841; stroke-width: 2; }
+    </style>
+  </defs>
+  <rect width="1440" height="1264" fill="#101C34"/>
+  <text x="48" y="63" font-size="38" font-weight="700">Select a line. Resolve its hosting phone.</text>
+  <text x="48" y="105" font-size="22" class="muted">Live membership chooses the device; the requested extension chooses the outgoing line.</text>
+
+  <rect class="card" x="48" y="148" width="328" height="154" rx="16" stroke="#48DDCC"/>
+  <text x="72" y="183" font-size="18" class="teal">1  CHOOSE AN EXTENSION</text>
+  <text x="72" y="230" font-size="30" class="mono">cisco 213</text>
+  <text x="72" y="270" font-size="20" class="muted">No action: status + examples</text>
+
+  <path d="M378,224 H438" fill="none" stroke="#48DDCC" stroke-width="3" marker-end="url(#teal-arrow)"/>
+  <rect class="card" x="448" y="148" width="476" height="154" rx="16" stroke="#48DDCC"/>
+  <text x="472" y="183" font-size="18" class="teal">2  READ FRESH GATEWAY INVENTORY</text>
+  <text x="472" y="227" font-size="24" class="mono">GET /v1/phones</text>
+  <text x="472" y="269" font-size="21" class="muted">Find exactly one phone containing line 213</text>
+
+  <path d="M926,224 H986" fill="none" stroke="#48DDCC" stroke-width="3" marker-end="url(#teal-arrow)"/>
+  <rect class="card" x="996" y="148" width="396" height="154" rx="16" stroke="#48DDCC"/>
+  <text x="1020" y="183" font-size="18" class="teal">3  RESOLVE THE PHYSICAL PHONE</text>
+  <text x="1020" y="229" font-size="28" font-weight="700">Phone 212 · lines 212 / 213</text>
+  <text x="1020" y="269" font-size="21" class="muted">Line 213 is its second line button</text>
+
+  <text x="48" y="362" font-size="28" font-weight="700">One target, three kinds of action</text>
+  <rect class="card" x="48" y="394" width="418" height="266" rx="16" stroke="#48DDCC"/>
+  <text x="72" y="431" font-size="22" class="teal" font-weight="700">OUTGOING CALL</text>
+  <text x="72" y="474" font-size="24" class="mono">cisco 213 dial 600</text>
+  <text x="72" y="518" font-size="19" class="mono">POST /v1/phones/212/dial</text>
+  <text x="72" y="550" font-size="20" class="mono">line: "213" · number: "600"</text>
+  <text x="72" y="594" font-size="21">Select line 2, then dial 600.</text>
+  <text x="72" y="628" font-size="20" class="muted">Accepted is not proof of connection.</text>
+
+  <rect class="card" x="490" y="394" width="438" height="266" rx="16" stroke="#F7CB64"/>
+  <text x="514" y="431" font-size="22" class="gold" font-weight="700">WHOLE PHONE</text>
+  <text x="514" y="474" font-size="24" class="mono">cisco 213 dnd on</text>
+  <text x="514" y="518" font-size="19" class="mono">POST /v1/phones/212/dnd</text>
+  <text x="514" y="558" font-size="21">DND + auto-answer preferences</text>
+  <text x="514" y="594" font-size="21">Speaker toggle + text + images</text>
+  <text x="514" y="628" font-size="20" class="muted">All apply to the hosting device.</text>
+
+  <rect class="card" x="952" y="394" width="440" height="266" rx="16" stroke="#B3A0FF"/>
+  <text x="976" y="431" font-size="22" fill="#B3A0FF" font-weight="700">EXACT CALL CONTROL</text>
+  <text x="976" y="474" font-size="24" class="mono">cisco 213 hangup</text>
+  <text x="976" y="518" font-size="19" class="mono">POST /v1/phones/212/hangup</text>
+  <text x="976" y="558" font-size="21">Fresh channel name + unique ID</text>
+  <text x="976" y="594" font-size="21">Only the call on selected line 213</text>
+  <text x="976" y="628" font-size="20" class="muted">Refuse sibling or ambiguous calls.</text>
+
+  <rect class="card" x="48" y="692" width="1344" height="186" rx="16" stroke="#B3A0FF"/>
+  <text x="72" y="728" font-size="22" font-weight="700">SCHEDULES → ATOMIC HOME ASSISTANT SERVICE</text>
+  <text x="72" y="764" font-size="20" class="mono">cisco_phone_control.schedule · explicit line + stable request ID</text>
+  <text x="72" y="809" font-size="22" class="teal">Timer: duration + captured timer line</text>
+  <text x="736" y="809" font-size="22" class="gold">Alarm: time + weekdays + captured alarm line</text>
+  <text x="72" y="850" font-size="20" class="muted">One timer and one alarm per physical phone. Each retains its own line; changing the general line selector does not redirect it.</text>
+
+  <g transform="translate(0 224)">
+  <text x="48" y="722" font-size="28" font-weight="700">Choose the configured private API transport</text>
+  <rect class="card" x="48" y="753" width="1344" height="218" rx="16" stroke="#30465F"/>
+  <rect x="72" y="777" width="224" height="105" rx="12" fill="#21334E"/>
+  <text x="184" y="818" font-size="26" text-anchor="middle" font-weight="700">CLI</text>
+  <text x="184" y="854" font-size="19" text-anchor="middle" class="muted">Private local config</text>
+  <path d="M300,800 H1048" fill="none" stroke="#48DDCC" stroke-width="3" marker-end="url(#teal-arrow)"/>
+  <rect x="417" y="781" width="441" height="36" fill="#172841"/>
+  <text x="638" y="806" font-size="20" text-anchor="middle" class="teal">Direct HTTP(S) from an allowed source</text>
+  <path d="M300,863 H407 M876,863 H1048" fill="none" stroke="#F7CB64" stroke-width="3" marker-end="url(#gold-arrow)"/>
+  <rect x="417" y="835" width="449" height="56" rx="10" fill="#21334E"/>
+  <text x="641" y="870" font-size="20" text-anchor="middle" class="gold">Configured kubectl → Home Assistant pod</text>
+  <rect x="1064" y="777" width="304" height="114" rx="12" fill="#21334E"/>
+  <text x="1216" y="815" font-size="24" text-anchor="middle" font-weight="700">Private APIs</text>
+  <text x="1216" y="847" font-size="19" text-anchor="middle" class="muted">Gateway calls · HA schedules</text>
+  <text x="1216" y="875" font-size="18" text-anchor="middle" class="muted">Separate authenticated requests</text>
+  <text x="72" y="931" font-size="20" class="muted">Separate private gateway / HA tokens. Sent in headers or kubectl stdin, never in command arguments.</text>
+  <text x="48" y="1012" font-size="20" class="muted">Use fresh inventory, exact identities and one idempotency key per operation. Never retry an uncertain action blindly.</text>
+  </g>
+</svg>

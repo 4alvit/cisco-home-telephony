@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 900" role="img" aria-labelledby="title desc">
+  <title id="title">Five Cisco identities and one Mac softphone</title>
+  <desc id="desc">Configuration schematic, not a completed acceptance claim. Five Cisco 7945G identities retain independent line pairs 201/202, 203/204, 205/206, 207/208 and 210/211. The 201/202, 205/206 and 207/208 devices are disconnected or physically replaced, with their identities preserved. Unknown replacement devices are not commissioned by this schematic. Mac Linphone uses 209 separately. Cisco devices connect through a PoE switch to Asterisk on k3s. Home Assistant has a 145-control design with Assist 630 and Silero Baya. Radio uses 701 through 710. Group 620 includes the five primary Cisco lines and excludes Mac 209. Temporary TFTP serves selected devices only.</desc>
+  <defs>
+    <marker id="teal" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8" fill="#48DDCC"/></marker>
+    <marker id="gold" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8" fill="#F7CB64"/></marker>
+    <marker id="purple" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8" fill="#B3A0FF"/></marker>
+  </defs>
+  <rect width="1280" height="900" fill="#101C34"/>
+  <g font-family="Arial, sans-serif">
+    <text x="45" y="55" font-size="34" font-weight="700" fill="#F5F7FB">Five Cisco identities + Mac Linphone</text>
+    <text x="45" y="91" font-size="21" fill="#AAB9D0">Configuration schematic · deployment and call acceptance are recorded separately</text>
+
+    <g fill="none" stroke-width="3">
+      <path d="M280,186 H322" stroke="#7E8EA5" stroke-dasharray="6 6"/>
+      <path d="M322,286 V390 H365" stroke="#48DDCC" marker-end="url(#teal)"/>
+      <path d="M280,286 H322" stroke="#48DDCC"/>
+      <path d="M280,391 H322" stroke="#7E8EA5" stroke-dasharray="6 6"/>
+      <path d="M280,496 H322" stroke="#7E8EA5" stroke-dasharray="6 6"/>
+      <path d="M322,596 V425 H365" stroke="#48DDCC" marker-end="url(#teal)"/>
+      <path d="M280,596 H322 V496" stroke="#48DDCC"/>
+      <path d="M555,405 H645" stroke="#48DDCC" marker-start="url(#teal)" marker-end="url(#teal)"/>
+      <path d="M890,385 H941 V327 H985" stroke="#F7CB64" marker-start="url(#gold)" marker-end="url(#gold)"/>
+      <path d="M890,426 H941 V513 H985" stroke="#F7CB64" marker-end="url(#gold)"/>
+      <path d="M280,718 H604 V450 H645" stroke="#B3A0FF" marker-end="url(#purple)"/>
+      <path d="M460,259 V340" stroke="#FF836D" stroke-dasharray="8 6"/>
+      <path d="M765,475 V596" stroke="#F7CB64" marker-end="url(#gold)"/>
+    </g>
+
+    <g fill="#172841" stroke="#48DDCC" stroke-width="2">
+      <rect x="45" y="245" width="235" height="82" rx="10"/>
+      <rect x="45" y="555" width="235" height="82" rx="10"/>
+      <rect x="365" y="340" width="190" height="135" rx="10"/>
+      <rect x="645" y="340" width="245" height="135" rx="10"/>
+    </g>
+    <rect x="45" y="145" width="235" height="92" rx="10" fill="#172841" stroke="#7E8EA5" stroke-width="2" stroke-dasharray="6 6"/>
+    <rect x="45" y="455" width="235" height="92" rx="10" fill="#172841" stroke="#7E8EA5" stroke-width="2" stroke-dasharray="6 6"/>
+    <rect x="45" y="345" width="235" height="92" rx="10" fill="#172841" stroke="#7E8EA5" stroke-width="2" stroke-dasharray="6 6"/>
+    <rect x="45" y="675" width="235" height="90" rx="10" fill="#172841" stroke="#B3A0FF" stroke-width="2"/>
+    <g text-anchor="middle" fill="#F5F7FB">
+      <text x="162" y="175" font-size="20" fill="#AAB9D0">Cisco A · preserved</text><text x="162" y="205" font-size="29" font-weight="700">201 / 202</text><text x="162" y="228" font-size="16" fill="#AAB9D0">Currently disconnected</text>
+      <text x="162" y="275" font-size="20">Cisco B · 7945G</text><text x="162" y="309" font-size="29" font-weight="700">203 / 204</text>
+      <text x="162" y="375" font-size="20" fill="#AAB9D0">Cisco C · preserved</text><text x="162" y="406" font-size="29" font-weight="700">205 / 206</text>
+      <text x="162" y="428" font-size="16" fill="#AAB9D0">Currently unplugged</text>
+      <text x="162" y="485" font-size="20" fill="#AAB9D0">Cisco D · preserved</text><text x="162" y="515" font-size="29" font-weight="700">207 / 208</text><text x="162" y="538" font-size="16" fill="#AAB9D0">Currently disconnected</text>
+      <text x="162" y="585" font-size="20">Cisco E · 7945G</text><text x="162" y="619" font-size="29" font-weight="700">210 / 211</text>
+      <text x="162" y="708" font-size="22">Mac Linphone</text><text x="162" y="745" font-size="30" font-weight="700">209</text>
+      <text x="460" y="391" font-size="26" font-weight="600">PoE switch</text><text x="460" y="429" font-size="21">Power + LAN</text>
+      <text x="767" y="390" font-size="30" font-weight="600">Asterisk</text><text x="767" y="429" font-size="23">PJSIP · k3s</text>
+    </g>
+    <text x="600" y="320" text-anchor="middle" font-size="20" fill="#48DDCC">SIP / RTP</text>
+    <text x="437" y="700" text-anchor="middle" font-size="20" fill="#B3A0FF">Separate TCP account</text>
+    <text x="437" y="747" text-anchor="middle" font-size="18" fill="#AAB9D0">LAN · no Cisco profile</text>
+
+    <rect x="365" y="145" width="350" height="114" rx="10" fill="#172841" stroke="#FF836D" stroke-width="2"/>
+    <g text-anchor="middle">
+      <text x="540" y="180" font-size="26" font-weight="600" fill="#F5F7FB">Temporary TFTP</text>
+      <text x="540" y="212" font-size="20" fill="#F5F7FB">Profiles · signed firmware · wallpaper</text>
+      <text x="540" y="241" font-size="18" fill="#FF836D">Selected devices · bounded window</text>
+    </g>
+
+    <rect x="985" y="250" width="250" height="170" rx="10" fill="#172841" stroke="#F7CB64" stroke-width="2"/>
+    <g text-anchor="middle" fill="#F5F7FB">
+      <text x="1110" y="286" font-size="25" font-weight="600">Home Assistant</text>
+      <text x="1110" y="319" font-size="21">145-control design</text>
+      <text x="1110" y="358" font-size="28" font-weight="700">Assist 630</text>
+      <text x="1110" y="395" font-size="20" fill="#F7CB64">Russian · Silero Baya</text>
+    </g>
+    <rect x="985" y="465" width="250" height="100" rx="10" fill="#172841" stroke="#F7CB64" stroke-width="2"/>
+    <text x="1110" y="505" text-anchor="middle" font-size="26" font-weight="600" fill="#F5F7FB">Radio 701–710</text>
+    <text x="1110" y="540" text-anchor="middle" font-size="18" fill="#F7CB64">Fetch only during a call</text>
+
+    <rect x="645" y="596" width="590" height="145" rx="10" fill="#172841" stroke="#F7CB64" stroke-width="2"/>
+    <text x="670" y="636" font-size="27" font-weight="600" fill="#F5F7FB">Group 620 · primary Cisco lines</text>
+    <text x="670" y="674" font-size="26" fill="#F7CB64">201 + 203 + 205 + 207 + 210</text>
+    <text x="670" y="714" font-size="19" fill="#AAB9D0">One call leg per device · Mac 209 excluded</text>
+
+    <text x="45" y="819" font-size="21" fill="#AAB9D0">Each line has its own SIP secret. Each physical Cisco device has separate management credentials.</text>
+    <text x="45" y="854" font-size="20" fill="#AAB9D0">Preserve unplugged identities. Verify registration, controls and audio before claiming acceptance.</text>
+    <text x="45" y="883" font-size="18" fill="#AAB9D0">Close temporary provisioning access after completion; retain persistent, source-restricted management.</text>
+  </g>
+</svg>

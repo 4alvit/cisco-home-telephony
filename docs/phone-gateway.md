@@ -11,9 +11,11 @@ until a person answers, rejects the call or presses **Stop alert**. They never
 auto-answer and play no audio after an answer. A button press is not evidence
 of successful delivery; see the dated [validation record](server-validation.md).
 
-The new alert contract below requires the matching gateway, Asterisk helper and
-HA integration update. Deployment and live acceptance of this revised behavior
-are pending. Earlier finite-tone tests do not validate the new alert behavior.
+The alert contract below requires the matching gateway, Asterisk helper and
+HA integration update. All three were deployed on 2026-10-17, and the operator
+confirmed manual dismissal on the physical phone. The dated validation record
+tracks the remaining acceptance checks. Earlier finite-tone tests do not
+validate the revised alert behavior.
 
 This service is an explicit change from the short-lived commissioning callback.
 It keeps the previously provisioned callback URLs and credentials, so the phones
@@ -149,7 +151,7 @@ request is not proof of ringing. Observe `ringing`, and after a stop confirm
 `ended` and no associated channels. Treat `unknown` or an ambiguous timeout as
 an operation to reconcile, not a reason to create a second alert.
 
-The updated HA integration exposes **116 entities for four phones**. It removes
+The updated HA integration exposes **29 entities per physical phone**. It removes
 the Alarm sound and Timer sound selectors and adds **Stop alert**. **Cancel
 timer** cancels a pending timer and stops its active timer alert. Disabling
 **Alarm enabled** stops an active alarm as well as future occurrences. A person

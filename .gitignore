@@ -14,3 +14,9 @@ node_modules/
 
 # Local PDF render previews
 tmp/pdfs/
+
+# Local CLI credentials (examples in deploy/ remain versioned)
+cisco-cli.json
+gateway-token.txt
+ha-token.txt
+home-assistant-token.txt

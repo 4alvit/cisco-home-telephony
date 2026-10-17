@@ -1,0 +1,11 @@
+{
+  "gateway_url": "http://192.168.50.10:18084",
+  "transport": "kubectl",
+  "token_file": "gateway-token.txt",
+  "kubectl": {
+    "context": "home-k3s",
+    "namespace": "home-assistant",
+    "selector": "app=homeassistant",
+    "container": "homeassistant"
+  }
+}

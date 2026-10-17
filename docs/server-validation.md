@@ -377,8 +377,258 @@ restart, delayed originate completion and exclusion from automatic answering.
 The HA update adds **Stop alert**, makes timer cancellation and alarm disabling
 stop their own active alert, and removes the obsolete sound selectors. Its
 expected inventory is **29 controls per phone, 116 across four phones**.
-Deployment and physical acceptance of this corrected behavior are pending;
-the earlier finite-call test must not be treated as their acceptance.
+
+The Asterisk and gateway update from commit `5fd8ea4` passed
+[native AMD64 CI and isolated tests](https://github.com/4alvit/cisco-home-telephony/actions/runs/39068853623)
+and was deployed by its verified registry digest. Both containers became Ready
+without restarts; all eight physical-phone contacts and all three provider
+registrations recovered. The new helper and `WaitForSignal` were present, 802
+remained routed, and registration-only 801/803 remained unrouted. No phone call,
+TFTP session or firewall change was part of that rollout. The original private
+configuration was backed up before promoting the verified candidate.
+
+Home Assistant **0.2.0**, including destination labels from commit `9b79eed`,
+then passed its configuration check and one controlled restart. Its verified
+inventory contains **116 controls**, four new Stop alert buttons, and no
+obsolete owned sound selectors. The **6,585** other existing registry
+identities were preserved; the 83 Recorder exclusions and existing settings
+were retained. The four owned
+dashboard tabs were saved and read back. There were eight available phone
+contacts, zero active PBX channels and zero pending schedules at verification.
+Two physical timer occurrences rang and ended when the operator manually
+answered or pressed a button on the phone. Asterisk recorded a phone answer,
+ran the abort-on-answer handler and immediately ended each call; the gateway
+recorded `call_ended`. Cleanup confirmed zero channels and pending schedules,
+with the original preferences restored. General auto-answer was enabled during
+these tests, but the test harness sent no Answer command.
+
+Both calls were manually dismissed before the planned 40-second observation.
+They validate physical manual dismissal, not uninterrupted physical ringing
+beyond the old timeout. The longer ringing result above belongs to the isolated
+SIP-handset test. A subsequent alarm selected **Saturday at 14:25
+America/Los_Angeles** and reached ringing at 14:25:02. The physical call remained
+ringing for more than 90 seconds before the phone answered and the abort handler
+ended it. This verifies the weekday/time trigger and physical ringing beyond
+the old limit.
+
+That test also exposed an HTTP routing defect: the gateway's path expression
+rejected the underscore in `alert_stop`, returning 404 before the stop handler.
+The correction admits underscore-separated action names while retaining the
+explicit action allowlist. A real loopback HTTP regression checks alert
+creation, exact-channel stop, idempotent replay and preservation of an unrelated
+call. Deployment and HA-button acceptance of this correction are recorded
+separately below. The earlier finite-call test does not validate the revised
+behavior.
+
+The fix in commit `052c374` passed the
+[native build and isolated smoke tests](https://github.com/4alvit/cisco-home-telephony/actions/runs/39071068234).
+Its verified image was deployed to Asterisk and the phone gateway, changing only
+the image references. All configuration and credentials remained unchanged;
+the three connected Cisco phones, Mac 209 and three providers recovered.
+The operator had deliberately disconnected 205/206, whose configuration was
+retained.
+
+A subsequent physical test created one owned timer alert on **201**, observed
+`ringing` for three seconds, then invoked the actual discovered HA **Stop alert**
+button. The same alert reached `ended` with reason `stopped`, and Asterisk had
+zero active channels. No fallback termination was used and no schedule or
+preference was changed. This verifies the corrected HTTP path and HA stop
+control in addition to the separate manual-dismissal and long-ring tests.
+
+## Mac client and children's radio expansion
+
+The official Mac App Store build of **Telephone 1.6 (143)** was installed and
+passed strict code-signature and Gatekeeper verification; its binary includes
+arm64. Extension **209** has a separately generated SIP identity and source ACL.
+Telephone then showed **Available**, while Asterisk reported one reachable 209
+contact at approximately 16 ms RTT. The running app had an established TCP
+connection to the PBX; IPv4 and TCP were selected and the outbound proxy was
+disabled. The app stored its secret in Keychain. Its first numeric dial attempt
+then stalled in macOS Contacts authorization, before any call reached Asterisk.
+Telephone was quit with its saved account preserved; Contacts access was not
+granted.
+
+The replacement **Linphone 6.2.3** passed Developer ID and notarization checks
+and contained both arm64 and x86_64 code. Its documented local XML provisioning
+method configured the existing 209 identity over TCP/IPv4. Linphone showed one
+green account, and Asterisk confirmed one reachable 209 contact. Call/audio
+acceptance then passed on **209 → 600**: the channel was Up in Echo, negotiated
+PCMU, and sent/received RTP increased from 63 to 594 packets with zero reported
+loss in the sample. The 20-second test ended cleanly, and the operator confirmed
+hearing their returned voice in Linphone. Its transient import file was removed
+after successful provisioning; the private client configuration remains mode
+`0600`.
+
+The three candidate radio channels **708 (toddler music), 709 (lullabies), and
+710 (children's songs)** passed bounded decoding from the PBX network. Each
+produced 251 PCM frames, approximately five seconds, with a nonzero signal.
+Their temporary signed URLs were resolved through the official player's API.
+No calls or audio files were created, and all decoders and temporary probe
+files were cleaned up.
+
+The combined image from commit `38b7bb1` passed
+[native AMD64 build and isolated smoke checks](https://github.com/4alvit/cisco-home-telephony/actions/runs/39069535250).
+Its registry digest and configuration were verified before deployment, and
+the temporary GitHub artifact was deleted. Both workloads became Ready;
+nine local endpoints, eight physical-phone contacts, three provider
+registrations and the 708–710 AGI routes were verified. The alert helper and
+802 route remained present, while 801/803 remained unrouted. All three new
+streams passed another five-second probe using the installed worker and
+catalog; their hashes matched that exact commit.
+
+A subsequent physical call from **207 to 708** executed the toddler-music AGI
+route, and the operator confirmed audible music. The call ended normally and
+left no active channels. Stations 709 and 710 have passed the installed-worker
+PCM probes but do not yet have separate human listening confirmation. The
+digit-entry method for the 708 call was not recorded.
+
+The Mac firewall addition was kernel-checked and applied to the existing two
+guards. It added only the Mac's single source to SIP/TCP and RTP in the raw
+guard and to RTP in the external guard's INPUT chain. Existing ordered rules,
+IPv6, hook positions and external `ESTABLISHED`/`REPLY` restrictions were
+preserved. A connection from the Mac to the PBX's TCP5060 then succeeded.
+That connectivity check is not SIP registration or an audio test.
+The Mac's current Wi-Fi private address was verified as Fixed, and a single
+DHCP reservation retained its current IP. Other DHCP sections and effective
+options were unchanged. The DNS service reloaded successfully without a
+Wi-Fi restart; router, DNS and PBX connectivity remained available.
+
+## Fifth handset and preserved disconnected devices
+
+The next independently identified **CP-7945G**, hardware revision **10.0**,
+started on **SCCP45.9-3-1SR2-1S**, with application
+**jar45sccp.9-3-1ES13.sbn** and boot load **tnp45.8-3-1-21a.bin**. Its initial
+status explicitly reported no installed trust list and it requested ordinary
+SEP configuration. No routine ITL erase or factory reset was requested.
+
+The new device receives **210/211**. The operator disconnected **205/206**,
+whose inventory, credentials and entities remain reserved; **209** remains
+the separate Mac client. The server candidate retains every previous phone
+profile and credential and adds only the new device, its two lines and exact
+network source. During commissioning, the original **201/202** and **207/208**
+also ceased to match the live switch inventory: their previous ports showed
+different MACs, and one port had no link or power load. The original identities
+remain configured. A separate uncommissioned SCCP phone was identified on one
+of those ports; it is not counted as the new 210/211 device. The five-phone
+checkpoint used group members **201/203/205/207/210**; secondary lines and Mac209
+were excluded. That checkpoint is illustrated in the
+[five-phone and Mac schematic](diagrams/five-phones-and-mac.svg).
+
+The firewall migration retained the Mac rules, previous phone sources,
+external SIP reply restrictions, unrelated hooks and IPv6 rules. One scoped
+DHCP reservation and option150 tag were added. The temporary TFTP Job serves
+17 hash-verified files, with access restricted to the new phone and a separate
+fallback cleanup timer. One five-second PoE cycle targeted only the new
+phone's verified switch port; independent readback confirmed restored power
+and unchanged configuration on all eight ports.
+
+After downloading the SIP components, the phone rebooted without another
+power cycle. Its HTTP device page reported **jar45sip.9-4-2SR4-3.sbn** as the
+actual App Load and SSH access enabled. At **21:49 UTC**, both **210 and 211**
+were independently available on Asterisk. The five-phone server reconciliation
+verified all 11 local endpoint definitions, the expected alert/group routes,
+three registered providers, the original connected 203/204 and Mac 209, and
+zero active channels. The verified candidate was promoted to the canonical
+private configuration with the previous complete directory preserved.
+The completed phone then showed the expected numeric **210/211** labels and
+saved **LakeDawn** wallpaper. Authenticated CGI and screenshots worked. An
+independently observed SSH host key was pinned before using the phone's generated
+management credentials; login and the read-only debug/help checks passed.
+
+## Additional connected batch and the tenth phone
+
+The operator replaced completed phones with unconverted units and confirmed
+that ITL had already been erased on the connected batch. Four further
+**CP-7945G** identities were independently matched across their HTTP device
+pages, DHCP leases, LLDP where available, and switch forwarding entries. One is hardware
+revision **10.0** and three are **13.0**. The assigned pairs are **212/213,
+214/215, 216/217 and 218/219**; all use the same verified SR4-3 firmware path.
+The private source inventory retains the earlier five physical identities.
+
+At this checkpoint the inventory contained nine physical phones, with the Mac
+remaining on **209**. The original **201/202, 205/206 and 207/208** phones were
+deliberately disconnected and retained their profiles, credentials and HA
+identities. The tenth physical unit was initially waiting for a free PoE port;
+no profile was generated before its actual identity could be verified.
+
+The combined server rollout passed at **21:51 UTC**. Both deployments were
+Ready on the same verified image, with **19 local endpoints** (18 Cisco lines
+and the Mac), all 18 Cisco alert routes, the nine primary group members, and
+three registered providers. The connected **203/204, 209 and 210/211** contacts
+recovered, with zero active channels. Only the generated configuration Secret
+references changed. The previous five-phone canonical directory was backed up
+before promoting the nine-phone configuration. The four new phones were still
+pending physical conversion at this server checkpoint.
+
+A scoped HA integration reload discovered **261 actual phone controls** and
+ten additional Asterisk endpoint families. The candidate adds **15 scripts**,
+five control tabs and ten endpoint cards, and extends the exact Recorder
+exclusion set from **83 to 133**. Its **27 scripts and one automation** passed
+validation using the installed HA 2026.10.0 schema. This checkpoint establishes
+discovery and configuration validity; package installation and phone acceptance
+are recorded separately below. See the [fleet schematic](diagrams/fleet-and-mac.svg).
+
+The four additional phones subsequently booted **SIP45.9-4-2SR4-3S** and
+registered all eight lines **212–219**. Two phones began downloading on their
+own; the other two received one independently verified PoE cycle each. No
+second cycle interrupted an update. One phone briefly retained a stale SCCP
+Version field after its App Load already reported SIP; the Version field later
+caught up without intervention.
+
+All four passed authenticated CGI, numeric line-label screenshots, saved
+**LakeDawn** wallpaper and SSH login/read-only help checks after independent
+host-key verification. The temporary TFTP Job and its Pod were removed, the
+four-source TFTP exception was closed, and its fallback timer was stopped.
+The external SIP reply policy, unrelated firewall rules and IPv6 policy were
+unchanged. The completed fifth-phone window had been closed separately before
+this batch began.
+
+Home Assistant then passed its full configuration check and completed one
+restart. Its final live verification found **261 phone controls**, **133 exact
+Recorder exclusions**, 50 new Asterisk endpoint entities and 12 online physical
+lines. All **6,599 baseline registry identities** were preserved. The five new
+control tabs and the added endpoint cards were saved and read back through the
+HA API. All 15 newly added text inputs passed their live privacy guards.
+Existing phone preferences, native voice settings and automation enablement
+were retained; new timers and alarms started disabled.
+
+## Tenth handset
+
+At **22:08 UTC**, a fresh switch, DHCP and HTTP inventory found the tenth
+**CP-7945G**, hardware revision **12.0**, replacing the previously connected
+203/204 phone. Its actual application was **jar45sccp.9-4-2SR4-3.sbn**, even
+though the Version field still showed an older release. The operator confirmed
+that the last phone was connected and its trust protection had been removed.
+Only then were its independent lines **220/221** allocated. The disconnected
+203/204 and 218/219 devices retained their own profiles; neither device's
+identity or credentials were reassigned to the new phone.
+
+The ten-phone server rollout passed at **22:12 UTC**, with **21 local endpoint
+definitions**, 20 Cisco alert entries, ten primary group members and three
+registered providers. The same container image was retained; only the two
+configuration Secret references changed. Previously connected **209 and
+210–217** recovered after the restart, and the nine-phone canonical directory
+was retained before promotion. Live user calls resumed, so this checkpoint was
+not an idle-call snapshot.
+
+Linphone briefly showed a registration error during that restart. Its TCP
+connection and registration recovered without changing its account, password
+or network policy. Subsequent user-originated calls **209 → 210** and
+**209 → 213** reached the selected Cisco line's Ringing state. These observations
+establish call routing, not answered two-way audio acceptance.
+
+The tenth handset downloaded automatically, with **no PoE cycle**. At
+**22:19 UTC**, both **220 and 221** were available on Asterisk; its actual App
+Load was verified as **jar45sip.9-4-2SR4-3.sbn**. Authenticated CGI, numeric
+220/221 labels and SSH login with an independently verified host key passed.
+
+The final HA expansion passed its configuration check and one planned restart.
+Live verification found **290 phone controls**, **143 exact Recorder exclusions**,
+ten additional endpoint entities for 220/221 and three additional guarded
+scripts. All **6,818 identities** in the preceding baseline were retained.
+The new text inputs passed their privacy guards, and the saved dashboard
+matched the intended result. Both new lines and ten connected physical lines
+in total were online at this checkpoint; unplugged devices kept their settings.
 
 ## Remaining acceptance
 
@@ -388,14 +638,119 @@ the earlier finite-call test must not be treated as their acceptance.
    underlying HA scripts have passed live Originate/Hangup tests.
 3. Complete human-audible Assist tests for **203/205** using their verified
    native VoIP permissions and pipeline settings.
-4. Confirm a spoken request and audible Silero Baya reply from the fourth phone.
+4. Confirm a spoken request and audible Silero Baya reply on **207** and the
+   later primary lines **210, 212, 214, 216, 218 and 220**. Automated RTP and satellite
+   state checks do not establish what a person heard.
 5. Test calls between physical phones in both directions, two-way audio, DTMF,
    hold/transfer and group ringing. Echo calls do not replace these checks.
 6. Repeat relevant tests after controlled phone/PBX restarts and AMI
-   reconnection, then commission the remaining phones in small groups.
+   reconnection. All ten physical units have completed SIP conversion; complete
+   any remaining per-device audio checks when those phones are connected.
 
-The eight registered lines and service endpoint `ha-assist` do not establish that
-the whole batch is ready. A working transcoder and listening socket do not prove
+A count of registered lines and the service endpoint `ha-assist` does not
+establish that the whole batch is ready. A working transcoder and listening socket do not prove
 network quality on another phone. Human-confirmed Russian Assist applies to
 the pilot and its selected pipeline; the per-line RTP and call-control results
 above are not a load or endurance test.
+
+
+### Compact Mac client and completed tenth-phone cleanup
+
+After SIP conversion, the tenth phone saved its LakeDawn wallpaper and passed
+CGI/screenshot and independently pinned SSH login checks. Its owned TFTP Job
+was deleted by UID, the Pod/listener were absent, its exact source window was
+closed, and the fallback timer stopped. Existing reply and unrelated firewall
+rules were preserved. No PoE cycle was needed for this phone.
+
+With explicit approval for its free noncommercial licence, Zoiper5 **5.6.15**
+Community Edition was installed from the signed, notarized official package.
+Linphone was quit before the existing **209** identity was entered into Zoiper;
+no account secret or PBX configuration changed. The automatic protocol probe
+reported “Not found”, but explicit SIP/TCP setup registered successfully.
+Compact mode and collapse-on-hangup were enabled, avatars/animations and the
+startup Pro screen disabled, and video left off. The local configuration and
+backup were protected with mode 0600; unnecessary STUN and video codecs were
+disabled for this local audio endpoint.
+
+The operator confirmed audible echo on **209 → 600**. Asterisk observed PCMU
+and **880 received / 879 transmitted** RTP packets with zero reported loss at
+the 18-second sample. The call ended from the Zoiper UI. After restarting the
+client to verify saved settings, **209 → 220** reached the physical phone's
+`Ringing` state and was ended from Zoiper. That final test verifies routing and
+ringing, not an answered two-way conversation.
+
+
+### Extension-oriented CLI acceptance
+
+The local `cisco` command was installed with an owner-only configuration and
+separate token file outside the checkout. It uses the existing Kubernetes/HA
+network path; no gateway firewall or RBAC expansion was needed.
+
+- `cisco 221` resolved the second line of the 220/221 phone and displayed its
+  status and command examples.
+- `cisco 221 600` created an answered Echo call from **221**, with PCMU/RTP in
+  both directions. `cisco 221 hangup` ended the exact observed call.
+- `cisco 212 220` produced a call from **212** and a ringing channel on **220**.
+  An unrelated incoming user call arrived on 212 during this check. The CLI's
+  conservative multi-channel Hangup rule was not bypassed; the test harness
+  ended only its own channel after checking its unique ID.
+- `cisco 221 209` reached Zoiper with caller **221**. After an audio answer in
+  Zoiper, both legs exchanged PCMU/RTP with zero reported loss in the sample.
+  `cisco 221 hangup` ended that call. This is an automated media check, not a
+  separate human voice-quality confirmation.
+- `cisco 221 dnd on` changed the hosting phone's DND state, visible when reading
+  line **220**. DND was restored to off and the phone had no test calls left.
+- During a fresh **216 → 221** call, `cisco 221 pickup` changed the selected
+  ringing channel to `Up`, and `cisco 221 hangup` ended it. A second call
+  answered automatically with `cisco 221 autoanswer on`; reading line 220
+  confirmed that the preference applies to the hosting phone. Auto-answer
+  was restored to off. The test correlated both call legs by channel name,
+  unique ID and linked ID, and cleanup targeted only those owned calls.
+
+The CLI distinguishes a gateway's accepted request from a verified ringing,
+answered or audible result. The tests above used live follow-up observations.
+
+### Native Assist profiles on the later phones
+
+The connected primary lines **210, 212, 214, 216 and 220** completed native
+VoIP discovery through 630. Their Allow calls controls and existing Silero Baya
+pipeline selections were verified separately. HA-originated Assist tests on
+**210, 212, 214, 216 and 220** reached the listening state, exchanged RTP in both
+directions and ended through the exact HA Hangup control.
+
+Phone **218/219** was disconnected at this checkpoint. Its SIP conversion and
+managed controls are complete, but its native Assist discovery and media test
+remain pending until it is connected. Profile configuration and packet flow
+do not replace the human listening checks listed above.
+
+### Atomic scheduling service deployment
+
+Cisco Phone Control **0.3.0** passed its local tests and was installed from a
+frozen, hash-checked component snapshot. The full HA configuration check exited
+successfully, followed by one planned restart. Verification preserved all
+**6,877 registry identities** in that later baseline, all **290 phone controls**,
+the **143 exact Recorder exclusions**, the dashboard and the native voice
+profiles. The registry baseline is larger than the earlier tenth-phone
+expansion baseline because subsequent native VoIP discovery added entities.
+
+All ten physical-phone mappings returned valid responses from the actual
+`cisco_phone_control.schedule` service, including default-only profiles with
+no saved user changes. Existing timer deadlines and alarm settings were
+preserved. The new API keeps each timer's and alarm's target line separate from
+the general Line selector and exposes them through the CLI's schedule status.
+
+The live CLI scheduling test then passed on **220/221**. A one-minute timer
+captured line 221; replaying the same request ID retained its exact timer ID and
+deadline. Canceling it from 220 was refused, as was starting another timer
+without explicit replacement. A separate Monday/Wednesday/Friday alarm on 220
+preserved the timer's 221 target, passed enable/disable checks, and refused a
+disable request from 221.
+
+With ordinary auto-answer enabled, that exact timer alert rang on **221 for
+more than 27 seconds** without being answered automatically. Its identity was
+correlated with the gateway's durable operation record. `cisco 221 timer cancel`
+stopped the alert. Final readback showed no pending timer, no enabled alarm,
+auto-answer off and no remaining channels on the tested phone. Original alarm
+time, weekdays and owner, and the original five-minute duration were restored
+through normal APIs. The last timer owner/ID, request history and alarm's
+configured flag remained as truthful history; no HA storage file was edited.

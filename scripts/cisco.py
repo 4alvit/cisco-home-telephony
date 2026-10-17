@@ -1,0 +1,680 @@
+#!/usr/bin/env python3
+"""Control one Cisco line and its hosting phone through the private gateway."""
+import argparse
+import base64
+import json
+import math
+import os
+from pathlib import Path
+import re
+import secrets
+import stat
+import subprocess
+import sys
+import time
+
+from cisco_http import ERROR_REASONS, SCHEDULE_PATH, gateway_url, perform
+
+COMMANDS = {
+    'dial': 'dial NUMBER', 'answer': 'answer', 'hangup': 'hangup',
+    'speaker_toggle': 'speaker toggle', 'dnd': 'dnd [on|off]',
+    'autoanswer': 'autoanswer [on|off]', 'message': 'message TEXT [--title TITLE]',
+    'image': 'image FILE [--title TITLE]', 'ring': 'ring [DESTINATION]',
+    'alert': 'alert timer|alarm', 'alert_stop': 'stop-alert [--alert-id ID]',
+}
+MAX_FILE = 2 * 1024 * 1024
+SCHEDULE_COMMANDS = ['schedule', 'timer [status]', 'timer start MINUTES [--replace]',
+    'timer cancel', 'alarm [status]', 'alarm set HH:MM --days DAYS [--enable] [--replace]',
+    'alarm on', 'alarm off']
+
+
+class Refused(Exception):
+    def __init__(self, reason, *, http_status=None):
+        self.reason, self.http_status = reason, http_status
+
+
+def require(value, reason):
+    if not value:
+        raise Refused(reason)
+
+
+def read_file(path, limit, *, private=False):
+    try:
+        fd = os.open(Path(path).expanduser(), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as source:
+            info = os.fstat(source.fileno())
+            require(stat.S_ISREG(info.st_mode) and info.st_size <= limit, 'file_type_or_size_invalid')
+            if private:
+                require(info.st_uid == os.getuid() and not info.st_mode & 0o077,
+                        'private_file_requires_owner_only_permissions')
+            data = source.read(limit + 1)
+            require(len(data) <= limit, 'file_too_large')
+            return data
+    except OSError:
+        raise Refused('file_unavailable_or_symlink') from None
+
+
+def load_config(path):
+    try:
+        config = json.loads(read_file(path, 16384, private=True))
+        require(isinstance(config, dict), 'config_requires_object')
+        allowed = {'gateway_url', 'token', 'token_file', 'transport', 'kubectl', 'home_assistant'}
+        require(set(config) <= allowed, 'unknown_config_field')
+        config['gateway_url'] = gateway_url(config['gateway_url'])
+        require(('token' in config) != ('token_file' in config), 'choose_token_or_token_file')
+        if 'token_file' in config:
+            token_path = Path(config['token_file']).expanduser()
+            if not token_path.is_absolute():
+                token_path = Path(path).expanduser().parent / token_path
+            config['token'] = read_file(token_path, 512, private=True).decode().strip()
+        require(isinstance(config['token'], str) and
+                re.fullmatch(r'[A-Za-z0-9_-]{32,128}', config['token']), 'invalid_token')
+        config.setdefault('transport', 'direct')
+        require(config['transport'] in ('direct', 'kubectl'), 'invalid_transport')
+        if config['transport'] == 'kubectl':
+            kube = config.get('kubectl')
+            require(isinstance(kube, dict) and set(kube) ==
+                    {'context', 'namespace', 'selector', 'container'}, 'invalid_kubectl_config')
+            for field in ('context', 'namespace', 'container'):
+                require(isinstance(kube[field], str) and
+                        re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}', kube[field]),
+                        'invalid_kubectl_target')
+            require(isinstance(kube['selector'], str) and len(kube['selector']) <= 256 and
+                    re.fullmatch(r'[A-Za-z0-9_./-]+=[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_./-]+=[A-Za-z0-9_.-]+)*',
+                                 kube['selector']), 'invalid_kubectl_selector')
+        else:
+            require('kubectl' not in config, 'kubectl_requires_explicit_transport')
+        if 'home_assistant' in config:
+            config['home_assistant'] = load_ha_config(config['home_assistant'], path)
+        return config
+    except (ValueError, KeyError, TypeError, UnicodeError):
+        raise Refused('invalid_private_config') from None
+
+
+def load_ha_config(config, path):
+    require(isinstance(config, dict) and set(config) <=
+            {'url', 'token', 'token_file', 'transport', 'kubectl', 'entry_id'}, 'invalid_ha_config')
+    config = dict(config)
+    config['gateway_url'] = gateway_url(config.pop('url'))
+    require(isinstance(config.get('entry_id'), str) and
+            re.fullmatch(r'[A-Za-z0-9_-]{8,128}', config['entry_id']), 'invalid_ha_entry_id')
+    require(('token' in config) != ('token_file' in config), 'choose_ha_token_or_token_file')
+    if 'token_file' in config:
+        token_path = Path(config['token_file']).expanduser()
+        if not token_path.is_absolute():
+            token_path = Path(path).expanduser().parent / token_path
+        config['token'] = read_file(token_path, 4097, private=True).decode().strip()
+    require(isinstance(config['token'], str) and re.fullmatch(r'[A-Za-z0-9_.-]{32,4096}', config['token']),
+            'invalid_ha_token')
+    require(config.get('transport') in ('direct', 'kubectl'), 'ha_requires_explicit_transport')
+    if config['transport'] == 'kubectl':
+        kube = config.get('kubectl')
+        require(isinstance(kube, dict) and set(kube) == {'context', 'namespace', 'selector', 'container'},
+                'invalid_ha_kubectl_config')
+        for field in ('context', 'namespace', 'container'):
+            require(isinstance(kube[field], str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}', kube[field]),
+                    'invalid_ha_kubectl_target')
+        require(isinstance(kube['selector'], str) and len(kube['selector']) <= 256 and re.fullmatch(
+            r'[A-Za-z0-9_./-]+=[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_./-]+=[A-Za-z0-9_.-]+)*', kube['selector']),
+            'invalid_ha_kubectl_selector')
+    else:
+        require('kubectl' not in config, 'ha_kubectl_requires_explicit_transport')
+    config['api'] = 'home_assistant'
+    return config
+
+
+class Gateway:
+    def __init__(self, config, timeout=20):
+        self.config, self.timeout, self.pod = config, timeout, None
+
+    def run(self, args, *, input_data=None):
+        try:
+            result = subprocess.run(args, input=input_data, capture_output=True,
+                                    timeout=self.timeout + 10, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            raise Refused('kubectl_outcome_unknown') from None
+        require(result.returncode == 0, 'kubectl_failed_no_automatic_retry')
+        require(len(result.stdout) <= 1024 * 1024, 'kubectl_response_too_large')
+        try:
+            return json.loads(result.stdout)
+        except (ValueError, UnicodeError):
+            raise Refused('invalid_kubectl_response') from None
+
+    def kube_args(self):
+        k = self.config['kubectl']
+        return ['kubectl', '--context', k['context'], '--namespace', k['namespace']]
+
+    def resolve_pod(self):
+        k = self.config['kubectl']
+        found = self.run(self.kube_args() + ['get', 'pods', '--selector', k['selector'],
+                         '-o', 'json', '--request-timeout', str(self.timeout) + 's'])
+        require(isinstance(found, dict) and isinstance(found.get('items'), list), 'invalid_pod_list')
+        candidates = []
+        for pod in found['items']:
+            if (pod.get('metadata', {}).get('deletionTimestamp') or
+                    pod.get('status', {}).get('phase') != 'Running'):
+                continue
+            if not any(c.get('type') == 'Ready' and c.get('status') == 'True'
+                       for c in pod.get('status', {}).get('conditions', [])):
+                continue
+            if any(c.get('name') == k['container'] and c.get('ready') is True
+                   for c in pod.get('status', {}).get('containerStatuses', [])):
+                candidates.append(pod.get('metadata', {}).get('name'))
+        require(len(candidates) == 1 and isinstance(candidates[0], str) and
+                re.fullmatch(r'[a-z0-9][a-z0-9.-]{0,252}', candidates[0]), 'require_one_ready_target_pod')
+        return candidates[0]
+
+    def request(self, path, body=None):
+        payload = {'url': self.config['gateway_url'], 'token': self.config['token'],
+                   'timeout': self.timeout, 'path': path, 'body': body,
+                   'api': self.config.get('api', 'gateway')}
+        if self.config['transport'] == 'direct':
+            result = perform(payload)
+        else:
+            if self.pod is None:
+                self.pod = self.resolve_pod()
+            # The fixed repository worker is code; all credentials and user data
+            # travel only on stdin, never in argv, shell strings or environment.
+            source = Path(__file__).resolve().with_name('cisco_http.py').read_text()
+            result = self.run(self.kube_args() + ['exec', '-i', self.pod, '-c',
+                              self.config['kubectl']['container'], '--', 'python3', '-c', source],
+                              input_data=json.dumps(payload).encode())
+        require(isinstance(result, dict) and type(result.get('ok')) is bool, 'invalid_transport_response')
+        if not result['ok']:
+            # Worker errors are fixed strings, never raw remote exceptions.
+            reason = result.get('reason', '')
+            require(isinstance(reason, str) and reason in ERROR_REASONS,
+                    'invalid_transport_error')
+            status = result.get('http_status')
+            require(status is None or type(status) is int and 300 <= status <= 599,
+                    'invalid_transport_error')
+            raise Refused(reason, http_status=status)
+        require(isinstance(result.get('data'), dict), 'invalid_gateway_response')
+        return result['data']
+
+
+def validate_inventory(data, line):
+    require(data.get('ami_fresh') is True, 'gateway_ami_not_fresh')
+    observed = data.get('observed_at')
+    require(type(observed) in (int, float) and math.isfinite(observed)
+            and -5 <= time.time() - observed <= 90, 'gateway_inventory_stale')
+    phones = data.get('phones')
+    require(isinstance(phones, list) and 1 <= len(phones) <= 32, 'invalid_phone_inventory')
+    seen, selected = set(), None
+    for phone in phones:
+        require(isinstance(phone, dict), 'invalid_phone_inventory')
+        lines = phone.get('lines')
+        require(isinstance(lines, list) and 1 <= len(lines) <= 2 and phone.get('id') == lines[0],
+                'invalid_phone_mapping')
+        for number in lines:
+            require(isinstance(number, str) and re.fullmatch(r'2[0-9]{2}', number)
+                    and number not in seen, 'ambiguous_or_invalid_line_mapping')
+            seen.add(number)
+        if line in lines:
+            selected = phone
+    require(selected is not None, 'line_not_in_cisco_gateway_inventory')
+    for key in ('online', 'dnd', 'autoanswer', 'dnd_pending'):
+        require(type(selected.get(key)) is bool, 'invalid_phone_status')
+    capabilities = selected.get('capabilities')
+    require(isinstance(capabilities, list) and all(isinstance(c, str) for c in capabilities),
+            'invalid_phone_capabilities')
+    channels = selected.get('channels')
+    require(isinstance(channels, list) and len(channels) <= 32, 'invalid_channel_inventory')
+    for ch in channels:
+        require(isinstance(ch, dict) and ch.get('line') in selected['lines'] and
+                isinstance(ch.get('name'), str) and re.fullmatch(
+                    r'PJSIP/' + ch['line'] + r'-[A-Za-z0-9]+', ch['name']) and
+                isinstance(ch.get('uniqueid'), str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,160}', ch['uniqueid']) and
+                isinstance(ch.get('state'), str) and re.fullmatch(r'[A-Za-z ]{1,40}', ch['state']),
+                'invalid_channel_identity')
+    for name in ('dial_allowlist', 'ring_allowlist'):
+        require(isinstance(data.get(name), list) and all(isinstance(n, str) and
+                re.fullmatch(r'[0-9]{3,8}', n) for n in data[name]), 'invalid_destination_inventory')
+    alert = selected.get('alert')
+    if alert is not None:
+        require(isinstance(alert, dict) and isinstance(alert.get('id'), str) and
+                re.fullmatch(r'[0-9a-f]{32}', alert['id']) and alert.get('line') in selected['lines'] and
+                alert.get('kind') in ('timer', 'alarm') and alert.get('state') in
+                ('starting', 'ringing', 'stopping', 'ended', 'unknown'), 'invalid_alert_inventory')
+    return selected
+
+
+def commands(phone):
+    result = ['status', 'help', 'destinations'] + [value for key, value in COMMANDS.items()
+              if key in phone['capabilities']]
+    if 'answer' in phone['capabilities']:
+        result.append('pickup')
+    return result
+
+
+def status_result(data, phone, line):
+    # Deliberately exclude any additional, unexpected server fields.
+    filtered = {k: phone[k] for k in ('id', 'lines', 'online', 'dnd', 'dnd_pending', 'autoanswer')}
+    filtered['channels'] = [{k: c[k] for k in ('line', 'name', 'uniqueid', 'state')}
+                            for c in phone['channels']]
+    alert = phone.get('alert')
+    filtered['alert'] = None if alert is None else {k: alert[k] for k in ('id', 'line', 'kind', 'state')}
+    return {'status': 'ok', 'selected_line': line, 'line_button': phone['lines'].index(line) + 1,
+            'phone': filtered, 'observed_at': data['observed_at'], 'ami_fresh': True,
+            'available_commands': commands(phone), 'dial_allowlist': data['dial_allowlist'],
+            'ring_allowlist': data['ring_allowlist']}
+
+
+def make_action(args, data, phone):
+    command, line = args.command, args.extension
+    action = {'stop-alert': 'alert_stop', 'pickup': 'answer'}.get(command, command)
+    capability = 'speaker_toggle' if action == 'speaker' else action
+    require(capability in phone['capabilities'], 'command_not_supported_by_gateway')
+    body = {'line': line}
+    if action in ('dial', 'ring'):
+        number = args.number
+        require(number in data['dial_allowlist' if action == 'dial' else 'ring_allowlist'],
+                'destination_not_allowlisted')
+        body['number' if action == 'dial' else 'destination'] = number
+    elif action in ('answer', 'hangup'):
+        selected = [c for c in phone['channels'] if c['line'] == line]
+        if command == 'pickup' and not selected:
+            raise Refused('pickup_requires_ringing_call_use_speaker_toggle_explicitly_when_idle')
+        require(len(selected) == 1 and len(phone['channels']) == 1,
+                'require_one_channel_on_selected_line_and_no_sibling_call')
+        if action == 'answer':
+            require(selected[0]['state'] == 'Ringing', 'selected_line_not_ringing')
+        body.update(channel=selected[0]['name'], uniqueid=selected[0]['uniqueid'])
+    elif action in ('dnd', 'autoanswer'):
+        body['enabled'] = args.enabled == 'on'
+    elif action == 'speaker':
+        body['mode'] = 'toggle'
+    elif action == 'alert':
+        body['kind'] = args.kind
+    elif action == 'alert_stop':
+        alert = phone.get('alert')
+        require(alert is not None and alert['line'] == line, 'no_alert_on_selected_line')
+        require(args.alert_id is None or args.alert_id == alert['id'], 'alert_identity_changed')
+        body['alert_id'] = alert['id']
+    elif action in ('message', 'image'):
+        require(1 <= len(args.title) <= 48 and not any(ord(c) < 32 for c in args.title), 'invalid_title')
+        body['title'] = args.title
+        if action == 'message':
+            require((args.text is not None) != (args.text_file is not None), 'choose_text_or_text_file')
+            value = args.text if args.text is not None else read_file(args.text_file, 8000).decode('utf-8')
+            require(1 <= len(value) <= 2000 and not any(ord(c) < 32 and c not in '\n\t' for c in value),
+                    'message_requires_1_to_2000_characters')
+            body['text'] = value
+        else:
+            image = read_file(args.file, MAX_FILE)
+            require(image.startswith(b'\x89PNG\r\n\x1a\n') or image.startswith(b'\xff\xd8\xff'),
+                    'image_requires_png_or_jpeg')
+            body['image_base64'] = base64.b64encode(image).decode('ascii')
+    key = args.idempotency_key or 'cli-' + secrets.token_hex(16)
+    require(re.fullmatch(r'[A-Za-z0-9_.:-]{8,128}', key), 'invalid_idempotency_key')
+    body['idempotency_key'] = key
+    return action, body
+
+
+def weekdays(value):
+    names = ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun')
+    aliases = {'weekdays': list(range(5)), 'weekend': [5, 6], 'daily': list(range(7))}
+    if value in aliases:
+        return aliases[value]
+    values = value.lower().split(',')
+    require(values and len(set(values)) == len(values) and all(day in names for day in values),
+            'days_require_mon_to_sun_or_weekdays_weekend_daily')
+    return sorted(names.index(day) for day in values)
+
+
+def schedule_request(args, phone, config):
+    operation = 'status'
+    body = {'entry_id': config['entry_id'], 'line': args.extension}
+    if phone is not None:
+        body['phone'] = phone['id']
+    if args.command == 'timer':
+        if args.schedule_action == 'start':
+            require(1 <= args.minutes <= 1440, 'timer_minutes_require_1_to_1440')
+            operation = 'timer_start'
+            body.update(minutes=args.minutes, replace=args.replace)
+        elif args.schedule_action == 'cancel':
+            operation = 'timer_cancel'
+    elif args.command == 'alarm':
+        if args.schedule_action == 'set':
+            require(re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]', args.at), 'alarm_time_requires_HH_MM')
+            operation = 'alarm_set'
+            body.update(time=args.at, weekdays=weekdays(args.days), enabled=args.enable, replace=args.replace)
+        elif args.schedule_action in ('on', 'off'):
+            operation = 'alarm_enable' if args.schedule_action == 'on' else 'alarm_disable'
+    body['operation'] = operation
+    if operation != 'status':
+        key = args.idempotency_key or 'cli-' + secrets.token_hex(16)
+        require(re.fullmatch(r'[A-Za-z0-9_.:-]{8,80}', key), 'schedule_request_id_requires_8_to_80_characters')
+        body['request_id'] = key
+    return body
+
+
+def schedule_result(value, phone, line):
+    lines = value.get('lines')
+    require(isinstance(lines, list) and 1 <= len(lines) <= 2 and
+            all(isinstance(number, str) and re.fullmatch(r'2[0-9]{2}', number) for number in lines) and
+            len(set(lines)) == len(lines) and value.get('phone') == lines[0] and line in lines,
+            'invalid_ha_line_mapping')
+    if phone is None:
+        phone = {'id': value['phone'], 'lines': lines}
+    else:
+        require(phone['lines'] == lines, 'ha_gateway_line_mapping_mismatch')
+    require(type(value.get('schema_version')) is int and value['schema_version'] == 1 and
+            value.get('phone') == phone['id'] and value.get('line') == line,
+            'ha_schedule_identity_or_version_mismatch')
+    require(type(value.get('gateway_fresh')) is bool, 'invalid_ha_gateway_freshness')
+    timezone = value.get('timezone')
+    require(isinstance(timezone, str) and re.fullmatch(r'[A-Za-z0-9_+./-]{1,100}', timezone),
+            'invalid_ha_timezone')
+    timer, alarm = value.get('timer'), value.get('alarm')
+    require(isinstance(timer, dict) and isinstance(alarm, dict), 'invalid_ha_schedule')
+    require(timer.get('line') in phone['lines'] and type(timer.get('active')) is bool, 'invalid_ha_timer')
+    require(timer.get('id') is None or isinstance(timer['id'], str) and re.fullmatch(r'[0-9a-f]{32}', timer['id']),
+            'invalid_ha_timer_id')
+    deadline, remaining = timer.get('deadline'), timer.get('remaining_seconds')
+    require(deadline is None or type(deadline) in (float, int) and math.isfinite(deadline) and deadline >= 0,
+            'invalid_ha_timer_deadline')
+    require(remaining is None or type(remaining) is int and remaining >= 0, 'invalid_ha_timer_remaining')
+    require(alarm.get('line') in phone['lines'] and type(alarm.get('enabled')) is bool and
+            type(alarm.get('configured')) is bool and
+            isinstance(alarm.get('time'), str) and re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]', alarm['time']) and
+            isinstance(alarm.get('weekdays'), list) and all(type(day) is int and 0 <= day <= 6 for day in alarm['weekdays']),
+            'invalid_ha_alarm')
+    alert = value.get('alert')
+    if alert is not None:
+        require(isinstance(alert, dict) and isinstance(alert.get('id'), str) and
+                re.fullmatch(r'[0-9a-f]{32}', alert['id']) and alert.get('line') in phone['lines'] and
+                alert.get('kind') in ('timer', 'alarm') and alert.get('state') in
+                ('starting', 'ringing', 'stopping', 'ended', 'unknown'), 'invalid_ha_alert')
+        alert = {key: alert[key] for key in ('id', 'line', 'kind', 'state')}
+    operation = value.get('operation_result')
+    require(operation in ('applied', 'replayed', 'outcome_unknown', 'not_active', 'status'),
+            'invalid_ha_schedule_result')
+    return {'schema_version': 1, 'phone': phone['id'], 'lines': lines, 'line': line, 'timezone': timezone,
+            'gateway_fresh': value['gateway_fresh'],
+            'timer': {key: timer[key] for key in ('line', 'id', 'active', 'deadline', 'remaining_seconds')},
+            'alarm': {key: alarm[key] for key in ('line', 'time', 'weekdays', 'enabled', 'configured')},
+            'alert': alert, 'operation_result': operation}
+
+
+def global_options(p, *, inherited=False):
+    def default(value):
+        return argparse.SUPPRESS if inherited else value
+    p.add_argument('-c', '--config', default=default(os.environ.get('CISCO_CONFIG', '~/.config/cisco-home/cli.json')))
+    p.add_argument('-j', '--json', action='store_true', default=default(False), help='machine-readable JSON only')
+    p.add_argument('-t', '--timeout', type=int, default=default(20), help='HTTP timeout seconds, 1..60 (default 20)')
+    p.add_argument('--idempotency-key', default=default(None), help='reuse only for the same logical operation and exact request')
+    p.add_argument('--dry-run', action='store_true', default=default(False), help='read live inventory and show a redacted action without posting')
+
+
+def normalize_shorthand(argv):
+    """Insert `dial` for a numeric second positional token, preserving options."""
+    takes_value = {'-c', '--config', '-t', '--timeout', '--idempotency-key'}
+    flags = {'-j', '--json', '--dry-run'}
+    positions, index = [], 0
+    while index < len(argv):
+        token = argv[index]
+        if token in takes_value:
+            index += 2
+            continue
+        if token in flags or any(token.startswith(flag + '=') for flag in takes_value if flag.startswith('--')):
+            index += 1
+            continue
+        if token.startswith('-'):
+            break  # Leave unknown options and `--` to argparse.
+        positions.append(index)
+        if len(positions) == 2:
+            if re.fullmatch(r'[0-9]+', token):
+                return [*argv[:index], 'dial', *argv[index:]]
+            break
+        index += 1
+    return argv
+
+
+def parser():
+    p = argparse.ArgumentParser(description=__doc__, prog='cisco', epilog=
+        'Examples: cisco 213; cisco 213 600; cisco 213 dial 600. Calls use the selected line.')
+    global_options(p)
+    p.add_argument('extension', help='exact configured Cisco line, not a destination or phone IP')
+    sub = p.add_subparsers(dest='command')
+    descriptions = {
+        'status': 'Read current phone status and optional HA schedules.',
+        'help': 'Show local commands without accessing private configuration or the network.',
+        'destinations': 'Read allowed dial and finite-ring destinations.',
+        'answer': 'Answer one exact ringing call on this line; never answer a timer/alarm alert.',
+        'pickup': 'Alias for Answer of one ringing call. Idle use requires explicit speaker toggle.',
+        'hangup': 'Hang up one exact observed call; refuse multiple channels or a sibling call.',
+    }
+    for name in ('status', 'help', 'destinations', 'answer', 'pickup', 'hangup'):
+        sub.add_parser(name, help=descriptions[name], description=descriptions[name])
+    sub.add_parser('dial').add_argument('number')
+    sub.add_parser('ring').add_argument('number', nargs='?', default='640')
+    sub.add_parser('speaker', description='Explicit idle speaker-key toggle for the whole phone. '
+                   'Final speaker state is unknown; this is not an idempotent on/off command.').add_argument('mode', choices=['toggle'])
+    for name in ('dnd', 'autoanswer'):
+        description = ('Set or read whole-phone Do Not Disturb.' if name == 'dnd' else
+                       'Set or read whole-phone gateway auto-answer. Timer/alarm alerts always remain manual.')
+        sub.add_parser(name, description=description).add_argument('enabled', nargs='?', choices=['on', 'off'])
+    msg = sub.add_parser('message'); msg.add_argument('text', nargs='?')
+    msg.add_argument('--text-file'); msg.add_argument('--title', default='Notice')
+    img = sub.add_parser('image'); img.add_argument('file'); img.add_argument('--title', default='Notice')
+    sub.add_parser('alert').add_argument('kind', choices=['timer', 'alarm'])
+    sub.add_parser('stop-alert').add_argument('--alert-id')
+    sub.add_parser('schedule')
+    timer_sub = sub.add_parser('timer').add_subparsers(dest='schedule_action')
+    timer_sub.add_parser('status')
+    start = timer_sub.add_parser('start')
+    start.add_argument('minutes', type=int)
+    start.add_argument('--replace', action='store_true')
+    timer_sub.add_parser('cancel')
+    alarm_sub = sub.add_parser('alarm').add_subparsers(dest='schedule_action')
+    for action in ('status', 'on', 'off'):
+        alarm_sub.add_parser(action)
+    alarm = alarm_sub.add_parser('set')
+    alarm.add_argument('at', metavar='HH:MM')
+    alarm.add_argument('--days', required=True, help='mon,tue,... or weekdays, weekend, daily')
+    alarm.add_argument('--enable', action='store_true', help='enable this alarm; otherwise save it disabled')
+    alarm.add_argument('--replace', action='store_true', help='explicitly replace an alarm owned by the sibling line')
+    for command_parser in sub.choices.values():
+        global_options(command_parser, inherited=True)
+    for command_parser in (*timer_sub.choices.values(), *alarm_sub.choices.values()):
+        global_options(command_parser, inherited=True)
+    return p
+
+
+def display_schedule(schedule):
+    timer, alarm = schedule['timer'], schedule['alarm']
+    print(f"Timezone: {schedule['timezone']}; schedule result: {schedule['operation_result']}")
+    if not schedule['gateway_fresh']:
+        print('Gateway state is unavailable; the active ringing state is unknown.')
+    print(f"Timer: line {timer['line']}, active {timer['active']}, remaining {timer['remaining_seconds']} seconds")
+    day_names = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
+    days = ', '.join(day_names[day] for day in alarm['weekdays']) or 'no days'
+    print(f"Alarm: line {alarm['line']}, {alarm['time']} on {days}, enabled {alarm['enabled']}, configured {alarm['configured']}")
+    if schedule['alert']:
+        alert = schedule['alert']
+        print(f"Alert: {alert['kind']} on {alert['line']}, {alert['state']}, id {alert['id']}")
+    print('One timer and one weekly alarm slot are shared by this physical phone.')
+
+
+def display(result):
+    if 'schedule' in result and 'phone_id' in result:
+        print(f"Line {result['selected_line']} / phone {result['phone_id']} — {result['status']}")
+        if 'gateway_error' in result:
+            print('Live gateway status unavailable: ' + result['gateway_error']['reason'])
+        display_schedule(result['schedule'])
+        return
+    if result['status'] not in ('ok', 'partial'):
+        print(json.dumps(result, indent=2))
+        return
+    phone, line = result['phone'], result['selected_line']
+    print(f"Line {line} / button {result['line_button']} — phone {phone['id']} ({', '.join(phone['lines'])})")
+    print(f"Phone online (all assigned lines): {phone['online']}; DND: {phone['dnd']}"
+          f"; pending DND restore: {phone['dnd_pending']}; auto-answer: {phone['autoanswer']}")
+    for ch in phone['channels']:
+        print(f"Call on {ch['line']}: {ch['state']} — {ch['name']} / {ch['uniqueid']}")
+    if not phone['channels']:
+        print('No active phone channels observed.')
+    if phone['alert']:
+        a = phone['alert']; print(f"Alert: {a['kind']} on {a['line']}, {a['state']}, id {a['id']}")
+    if 'schedule' in result:
+        display_schedule(result['schedule'])
+    elif 'schedule_error' in result:
+        print('Schedule status unavailable: ' + result['schedule_error']['reason'] + ' (partial status).')
+    print('Commands:')
+    for command in result['available_commands']:
+        print(f'  cisco {line} {command}')
+    print('Allowed dial numbers: ' + ', '.join(result['dial_allowlist']))
+    print('Examples (these change the phone only when you run them):')
+    destinations = [n for n in result['dial_allowlist'] if n.startswith('2') and n not in phone['lines']]
+    if destinations and 'dial NUMBER' in result['available_commands']:
+        target = '220' if '220' in destinations else destinations[0]
+        print(f'  cisco {line} {target}')
+    if '600' in result['dial_allowlist'] and 'dial NUMBER' in result['available_commands']:
+        print(f'  cisco {line} dial 600')
+    if 'message TEXT [--title TITLE]' in result['available_commands']:
+        print(f'  cisco {line} message "Dinner is ready"')
+    if 'dnd [on|off]' in result['available_commands']:
+        print(f'  cisco {line} dnd on')
+        print(f'  cisco {line} dnd off')
+    if 'schedule' in result['available_commands']:
+        print(f'  cisco {line} timer start 5')
+        print(f'  cisco {line} alarm set 07:30 --days weekdays --enable')
+    print('Calls use the selected line; DND, auto-answer, speaker and screen content affect its whole phone.')
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    p = parser()
+    if not argv or argv in (['--json'], ['-j']):
+        if argv:
+            print(json.dumps({'status': 'help', 'commands': ['status', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS]}))
+        else:
+            p.print_help()
+        return 0
+    args = p.parse_args(normalize_shorthand(argv))
+    if args.command == 'help':
+        if args.json:
+            print(json.dumps({'status': 'help', 'commands': ['status', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS]}))
+        else:
+            p.print_help()
+            print('\nDevice commands: ' + '; '.join(COMMANDS.values()))
+            print('pickup: answer one exact ringing call; idle speaker use requires explicit speaker toggle.')
+            print('Schedules (optional Home Assistant config): ' + '; '.join(SCHEDULE_COMMANDS))
+        return 0
+    action_key = None
+    exit_code = 0
+    try:
+        require(re.fullmatch(r'2[0-9]{2}', args.extension), 'extension_requires_three_digit_cisco_line')
+        require(1 <= args.timeout <= 60, 'timeout_requires_1_to_60_seconds')
+        config = load_config(args.config)
+        phone = None
+        if args.command not in ('schedule', 'timer', 'alarm'):
+            try:
+                gateway = Gateway(config, args.timeout)
+                data = gateway.request('/v1/phones')
+                phone = validate_inventory(data, args.extension)
+            except (Refused, OSError, ValueError, UnicodeError, TypeError, KeyError, AttributeError, RecursionError) as exc:
+                if args.command not in (None, 'status') or 'home_assistant' not in config:
+                    raise
+                ha_config = config['home_assistant']
+                value = Gateway(ha_config, args.timeout).request(SCHEDULE_PATH, {
+                    'entry_id': ha_config['entry_id'], 'line': args.extension, 'operation': 'status'})
+                value = schedule_result(value, None, args.extension)
+                result = {'status': 'partial', 'selected_line': args.extension, 'phone_id': value['phone'],
+                          'schedule': value, 'gateway_error': {'reason': exc.reason if isinstance(exc, Refused)
+                                                             else 'gateway_read_failed'},
+                          'available_commands': ['status', 'help', *SCHEDULE_COMMANDS]}
+                if args.json:
+                    print(json.dumps(result))
+                else:
+                    display(result)
+                    print('Schedule commands: ' + '; '.join(SCHEDULE_COMMANDS))
+                return 1
+        if args.command in ('schedule', 'timer', 'alarm'):
+            require('home_assistant' in config, 'home_assistant_schedule_config_required')
+            ha_config = config['home_assistant']
+            body = schedule_request(args, phone, ha_config)
+            action_key = body.get('request_id')
+            ha = Gateway(ha_config, args.timeout)
+            if args.dry_run and action_key is not None:
+                current = ha.request(SCHEDULE_PATH, {key: body[key] for key in ('entry_id', 'line')} |
+                                     {'operation': 'status'})
+                current = schedule_result(current, None, args.extension)
+                result = {'status': 'dry_run', 'selected_line': args.extension, 'phone_id': current['phone'],
+                          'action': body['operation'], 'request': {key: value for key, value in body.items()
+                                                                 if key != 'entry_id'}}
+            else:
+                value = schedule_result(ha.request(SCHEDULE_PATH, body), None, args.extension)
+                result = {'status': 'ok' if action_key is None else 'accepted', 'selected_line': args.extension,
+                          'phone_id': value['phone'], 'schedule': value}
+                if action_key is not None:
+                    result['action_id'] = action_key
+                    result['note'] = 'Schedule update accepted; future ringing is not guaranteed. No automatic retry.'
+                if value['operation_result'] == 'outcome_unknown':
+                    exit_code = 1
+                    result.update(status='not_confirmed', reason='ha_schedule_outcome_unknown',
+                                  note='Local schedule state is shown; ringing outcome is unknown. Do not retry blindly.')
+        elif args.command in (None, 'status', 'destinations') or (
+                args.command in ('dnd', 'autoanswer') and args.enabled is None):
+            result = status_result(data, phone, args.extension)
+            if 'home_assistant' in config:
+                result['available_commands'].extend(SCHEDULE_COMMANDS)
+                if args.command in (None, 'status'):
+                    try:
+                        ha_config = config['home_assistant']
+                        value = Gateway(ha_config, args.timeout).request(SCHEDULE_PATH, {
+                            'entry_id': ha_config['entry_id'], 'phone': phone['id'],
+                            'line': args.extension, 'operation': 'status'})
+                        result['schedule'] = schedule_result(value, phone, args.extension)
+                        if not result['schedule']['gateway_fresh']:
+                            result['status'], exit_code = 'partial', 1
+                    except (Refused, OSError, ValueError, UnicodeError, TypeError, KeyError, AttributeError, RecursionError) as exc:
+                        result['status'], exit_code = 'partial', 1
+                        result['schedule_error'] = {'reason': exc.reason if isinstance(exc, Refused)
+                                                    else 'ha_schedule_read_failed'}
+                        if isinstance(exc, Refused) and exc.http_status is not None:
+                            result['schedule_error']['http_status'] = exc.http_status
+        else:
+            action, body = make_action(args, data, phone)
+            action_key = body['idempotency_key']
+            path = f"/v1/phones/{phone['id']}/{action}"
+            if args.dry_run:
+                fields = {k: v for k, v in body.items() if k not in ('text', 'title', 'image_base64')}
+                result = {'status': 'dry_run', 'selected_line': args.extension, 'phone_id': phone['id'],
+                          'action': action, 'request': fields, 'content_omitted': action in ('message', 'image')}
+            else:
+                response = gateway.request(path, body)
+                require(response.get('status') == 'accepted' and response.get('action_id') == action_key,
+                        'unconfirmed_gateway_response')
+                result = {'status': 'accepted', 'selected_line': args.extension, 'phone_id': phone['id'],
+                          'action': action, 'action_id': action_key,
+                          'note': 'Request accepted; run status to observe the effect. No automatic retry.'}
+                if 'alert_id' in response:
+                    require(isinstance(response['alert_id'], str) and re.fullmatch(r'[0-9a-f]{32}', response['alert_id']),
+                            'invalid_alert_response')
+                    result['alert_id'] = response['alert_id']
+        if args.json:
+            print(json.dumps(result, ensure_ascii=True))
+        else:
+            display(result)
+        return exit_code
+    except (Refused, OSError, ValueError, UnicodeError, TypeError, KeyError, AttributeError, RecursionError) as exc:
+        result = {'status': 'refused' if action_key is None else 'not_confirmed',
+                  'reason': exc.reason if isinstance(exc, Refused) else 'local_or_transport_error'}
+        if isinstance(exc, Refused) and exc.http_status is not None:
+            result['http_status'] = exc.http_status
+        if action_key is not None:
+            result.update(action_id=action_key, note='Do not retry blindly; inspect status first.')
+        elif args.command is None:
+            result['offline_commands'] = ['status', 'help', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS]
+        print(json.dumps(result), file=sys.stdout if args.json else sys.stderr)
+        if not args.json and args.command is None:
+            print('Offline command help (live availability unknown):', file=sys.stderr)
+            for command in result['offline_commands']:
+                print(f'  cisco {args.extension} {command}', file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

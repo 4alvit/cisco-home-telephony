@@ -1,11 +1,11 @@
-# Add more Cisco 7945G phones without disturbing the pilot
+# Add more Cisco 7945G phones
 
-This runbook expands a working installation to four physical phones with eight
-independent lines. Repeat the same checks for every later batch. A phone's
+This runbook uses the first four physical phones and their eight independent
+lines as its example. Repeat the same checks for every later phone. A phone's
 successful conversion does not prove another unit's firmware compatibility,
 registration, audio or remote-management behavior.
 
-The installed four-phone setup registers **201–208** on
+The first four-phone deployment registered **201–208** on
 **SIP45.9-4-2SR4-3S**, with saved LakeDawn backgrounds and verified two-stage SSH
 access. Each added line **203–208** passed an Echo 600 call, bidirectional RTP
 checks and exact-channel HA Hangup. All four primary identities
@@ -18,7 +18,13 @@ All addresses below are synthetic examples. Real MAC addresses, switch ports,
 hardware observations, credentials and deployment receipts belong in private
 `.local/` files, never in this document or Git.
 
-![Example: four phones, eight lines, temporary TFTP and HA Assist](diagrams/four-phones.svg)
+![Cisco fleet and a separate Mac client](diagrams/fleet-and-mac.svg)
+
+The fleet schematic includes ten verified physical identities and the Mac.
+Commissioning status is recorded in the [validation log](server-validation.md);
+a configured identity does not by itself prove a completed conversion. The
+four-phone worked example below remains useful for a smaller deployment;
+[its original diagram](diagrams/four-phones.svg) is retained.
 
 ## 1. Keep one complete inventory and preserve the working credentials
 
@@ -65,12 +71,44 @@ manage devices sequentially or use separate listeners/configurations and
 matching per-phone URLs. Follow the [remote-management guide](phone-control.md)
 for enable flags, renewal, access restrictions and observed limitations.
 
+### Keep disconnected devices and generic clients in the inventory
+
+A disconnected phone still owns its extensions and credentials. Adding a new
+physical unit is not permission to overwrite that device's MAC or reuse its
+numbers. Retain its complete record so it can reconnect later. Record an
+expected offline device explicitly when checking rollout health; do not waive
+registration checks for unrelated phones.
+
+In this installation **209** belongs to the Mac's
+[Linphone client](macos-softphone.md). The next physical unit therefore receives
+**210/211**, while the unplugged **205/206** stays configured. Append the new
+phone to the existing inventory, add its exact source address to every relevant
+firewall layer, and use a distinct gateway callback listener. The gateway's
+API listener also consumes a port, so do not assume callback ports are consecutive.
+Include 210, its first line, in group 620; exclude 211 and the Mac from that
+physical-phone group.
+
+For the next four verified devices, allocate **212/213, 214/215, 216/217 and
+218/219**, followed by **220/221** for the tenth independently identified
+device. Disconnected pairs remain reserved. If there are fewer free PoE ports
+than phones, finish a device's firmware update and verification before
+unplugging it to free a port. Identify each newly connected phone before
+generating its profile; do not invent placeholder MACs or reuse the previous
+occupant's credentials. Never free a port by interrupting an upgrade.
+
+If the external SIP guard is installed, also update its saved local-source
+baseline and inherited RTP INPUT rule. Keep the existing external
+`ESTABLISHED`/`REPLY` overlay when opening or closing TFTP. Replacing the raw
+chain with an earlier phone-only example can break an existing provider or
+Mac audio path. Compare complete rules, hook positions and persistent files
+before and after the change.
+
 ## 2. Verify each physical device and firmware path
 
 For each new phone, privately record the label/model, SW-port MAC, hardware
 revision, current App Load, current IP, switch/physical port and trust-list
-state. Correlate the phone identity with DHCP, LLDP and the switch forwarding
-table; a lease, power draw or port number alone is insufficient. Set
+state. Correlate the phone identity with DHCP and the switch forwarding table,
+using LLDP where available. A lease, power draw or port number alone is insufficient. Set
 `verified: true` only after checking the actual **CP-7945G** model and MAC.
 
 Review the [firmware conversion path](sip-conversion.md) and the
@@ -161,15 +199,16 @@ bash scripts/deploy.sh --site "$deployment/site.json" --with-tftp --server-dry-r
 
 These steps generate private files, check the complete bundle, perform a local
 render, and finally validate against the cluster without applying. The existing
-namespace is required for the server dry run. Review the eight endpoints, source
+namespace is required for the server dry run. Review every expected endpoint, source
 ACLs, actual firmware load, image digests and node placement. Compare the old
 phones' credentials and configuration without printing them. Follow the
 [k3s deployment guide](k3s-deployment.md) for host firmware staging, permissions
 and firewall/socket checks.
 
 A changed core configuration replaces the Asterisk Pod and interrupts calls.
-Before applying, confirm **zero active calls** and use the authorized maintenance
-window. Ensure the verified firmware is staged and the temporary host firewall
+Use an authorized maintenance window. Normally confirm **zero active calls**;
+if the operator explicitly authorizes interruption, record that authorization
+and the actual call count before the restart. Do not request it repeatedly. Ensure the verified firmware is staged and the temporary host firewall
 policy permits exactly this batch, then:
 
 ```bash
@@ -198,6 +237,14 @@ ITL erase may request the new profile without another power cycle; this was
 observed on the fourth phone. Continue monitoring the resulting load and
 registration instead of interrupting an update to force another restart.
 
+Before treating an unreachable phone as stuck, compare the switch's uptime
+with the port's last link-change time. A recently restarted phone can respond
+to ping while refusing HTTP and temporarily disappearing from LLDP. Recheck
+for a bounded period and inspect the final application load before cycling it
+again. A device status page may retain a starred old Version value while the
+App Load already identifies the SIP application; corroborate with actual SIP
+registration instead of using that one field to trigger another flash.
+
 Prefer a normal supported restart when available. When remote management is
 not yet provisioned, a controlled PoE cycle can load the new profile. A PoE
 cycle is a power interruption, not a graceful shutdown: never do it during
@@ -205,8 +252,9 @@ firmware transfer or flash writes.
 
 Immediately before a cycle, recheck the phone MAC/SEP identity against LLDP,
 the forwarding table, bridge/interface mapping and the exact physical switch
-port. Confirm zero active PBX calls, no firmware operation, and that the
-management connection does not depend on the target port. Preserve all other
+port. Check the active call count and any authorization to interrupt calls.
+Confirm there is no firmware operation and that the management connection
+does not depend on the target port. Preserve all other
 ports and the target's existing priority, power limit, timer and detection
 settings. Follow the [verified single-port procedure](phone-control.md#recover-through-a-verified-poe-port),
 which documents the tested switch behavior without assuming every model or
@@ -246,7 +294,7 @@ verify the final App Load. If settings remain locked or conversion fails,
 record the result and stop that phone's rollout instead of repeatedly cycling
 power. Keep its status pending and leave working devices alone.
 
-## 7. Accept all eight lines, then add HA controls
+## 7. Accept each new line and add HA controls
 
 For each physical phone, require independent contacts for both assigned
 extensions in `pjsip show contacts`. Generated endpoints, visible button labels
@@ -257,7 +305,14 @@ the test tone at a moderate volume. Test incoming calls to each line and a
 real two-way call between two physical phones; two lines on one handset do
 not satisfy that cross-device test.
 
-Test **620** after all four devices are ready: each phone rings once through
+Before an automated dial test, inspect the target phone's screen as well as
+its PBX channels. An on-hook number-entry buffer can exist with zero active
+channels. Confirm a clean idle screen, identify any actual Cancel softkey from
+its displayed position, and avoid interfering with a person's call or typing.
+An accepted CGI command does not prove that a call started. Verify the exact
+source line and destination at the PBX before counting the test as passed.
+
+Test **620** after the intended devices are ready: each phone rings once through
 its primary line, and answering stops the other legs. Record failures and
 untested features separately; firmware support, a successful SIP transaction
 and actual human-audible speech are different evidence.
@@ -278,16 +333,28 @@ configuration, and label those endpoints **pending**. This is configuration
 readiness only; it does not pass the call or phone acceptance checks. Native
 Assist still requires a first call from each intended SIP identity.
 
-For Assist, start with each physical phone's **primary line: 201, 203, 205, 207**.
+The persistent **Cisco phone controls** entry needs a scoped reload after the
+gateway inventory grows. Its periodic update refreshes existing entities but
+does not create the new phone's controls. Reload the Asterisk entry separately
+to discover the new endpoint entities. Use those actual discovered IDs when
+adding guarded Hangup/Assist scripts, dashboard cards and Recorder exclusions.
+The current control schema creates 29 entities per physical phone: ten phones
+therefore require 290. Preserve all existing IDs and user settings; group any
+necessary configuration changes into one validated HA restart.
+
+For Assist, use each physical phone's first line. This fleet assigns the
+primaries **201, 203, 205, 207, 210, 212, 214, 216, 218 and 220**.
 Dial **630** from that specific line to discover its native VoIP identity, then
 enable **Allow calls** and choose the intended language/pipeline for that device.
 The installed home setup uses **Local Russian Home** with **Silero Baya**.
 Preserve unrelated Echo/device selections and global pipeline definitions. Native
-VoIP identity follows the SIP From extension, so approval for 201 does not approve 203, 205 or
-207; secondary lines need their own discovery only if Assist is wanted there.
+VoIP identity follows the SIP From extension: approval for one line does not
+approve another. Secondary lines need their own discovery if Assist is wanted
+there too.
 Call again and confirm a spoken request, an audible answer and clean hangup.
-Do not restart HA during an active call. Validate new package configuration
-before any necessary reload/restart, and verify existing entities afterward.
+Schedule any necessary HA restart between calls, unless the operator has
+authorized interruptions. Validate new package configuration before any necessary
+reload/restart, and verify existing entities afterward.
 
 Verify guarded HA Hangup against the actual active channel for each new line.
 The integration can retain stale channel metadata; see the companion guide's
@@ -320,5 +387,5 @@ load rather than assuming persistent access is unnecessary.
 Keep a private receipt per device: verified identity, final load, two registered
 extensions, call/audio/HA/Assist results, wallpaper/management results when
 requested, cleanup verification, and any unresolved limitation. Record skipped
-checks as pending. A prepared eight-line configuration becomes a completed
-four-phone rollout only when those device-level checks have passed.
+checks as pending. A generated configuration becomes a completed rollout only
+when those device-level checks have passed.

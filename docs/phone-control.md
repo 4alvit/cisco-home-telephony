@@ -517,10 +517,14 @@ login separately before claiming those management paths work.
 
 A single-port PoE cycle can load a staged phone profile when authenticated CGI
 or a compatible SIP restart path is not yet available. This is a power
-interruption: first confirm the phone is idle, the approved TFTP window is
-running, and the served profile, firmware and optional image files match the
-prepared hashes. Keep the switch management path independent of the target
-port. Do not reboot the switch or change its VLAN, link or power-budget settings.
+interruption: first confirm that no firmware download or flash write is in
+progress, the approved TFTP window is running, and the served profile, firmware
+and optional image files match the prepared hashes. A quiet TFTP sample alone
+does not prove that flash writes have finished; check the phone's current boot
+and application state. Wait for calls to finish unless the operator has already
+authorized interruption. That authorization never makes it safe to interrupt a
+firmware write. Keep the switch management path independent of the target port.
+Do not reboot the switch or change its VLAN, link or power-budget settings.
 
 Identify the connection before changing power. The phone's **Network-Port
 Information** status page can expose **LLDP Neighbor IP Address**. On the switch,

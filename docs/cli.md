@@ -1,0 +1,177 @@
+# Cisco command line
+
+`cisco LINE` reads live status and shows commands and concrete examples. When HA scheduling is configured, it also shows the current timer/alarm slots, their owning lines and HA timezone. A second numeric argument places a call **from the selected line**:
+
+```bash
+cisco 212
+cisco 212 220
+cisco 213 dial 600
+cisco 213 hangup
+```
+
+The two dialing commands above originate from 212 and 213 respectively. They work only when the destination is in the gateway's current allowlist and the phone is available. Running status does not start a call.
+
+![A selected line is resolved to its physical phone before an action](diagrams/cli-routing.svg)
+
+The CLI uses the existing [phone gateway](phone-gateway.md). Gateway actions resolve the selected extension against fresh `GET /v1/phones` data. For example, 213 belongs to the phone whose primary ID is 212; requests go to that phone's API route while explicitly retaining `line: "213"`. Schedule actions let the HA service resolve the exact line from its validated gateway inventory. Neither path guesses the primary line from odd/even numbering. The Mac softphone, 209, can be a configured call destination but is not a Cisco gateway control target.
+
+## Install and private configuration
+
+Use Python 3.10 or later on macOS or Linux; there are no extra Python dependencies. From the repository root:
+
+```bash
+mkdir -p "$HOME/.local/bin"
+ln -s "$PWD/scripts/cisco.py" "$HOME/.local/bin/cisco"
+export PATH="$HOME/.local/bin:$PATH"
+cisco --help
+```
+
+Keep `scripts/cisco.py` and `scripts/cisco_http.py` together in the checkout; the symlink follows future repository updates. If `cisco` already exists, inspect it before changing the link. Add the PATH line to your shell startup file if needed.
+
+The default configuration is `~/.config/cisco-home/cli.json`. Override it with `--config PATH` or `CISCO_CONFIG`. Configuration and token files must be owned by your user, have no group/other permissions, and must not be symlinks. Use a private parent directory as well:
+
+```bash
+umask 077
+mkdir -p "$HOME/.config/cisco-home"
+chmod 700 "$HOME/.config/cisco-home"
+cp deploy/cisco-cli.kubectl.example.json "$HOME/.config/cisco-home/cli.json"
+chmod 600 "$HOME/.config/cisco-home/cli.json"
+```
+
+Edit the copied example with your actual gateway address and Kubernetes target. Place the **existing** gateway API bearer token in `gateway-token.txt` beside `cli.json`, with mode `0600` or `0400`. Use a private editor or an existing secure provisioning process; do not place the token in a shell argument, public example, or Git. `token_file` may instead be an absolute path. An inline `token` string is supported, but exactly one of `token` and `token_file` is required. The repository's `.local/` and `private/` directories are ignored if you prefer to store private CLI configuration there.
+
+Choose the transport explicitly:
+
+- **Direct:** start from [cisco-cli.example.json](../deploy/cisco-cli.example.json). The CLI host must already be allowed by the gateway's `api_clients` and firewall. SIP access for a Mac does not grant gateway API access.
+- **Kubernetes:** start from [cisco-cli.kubectl.example.json](../deploy/cisco-cli.kubectl.example.json). The configured context, namespace, label selector and container must identify exactly one Running, Ready pod whose source is already allowed by the gateway, such as an existing Home Assistant pod. The CLI requires existing `get pods` and `pods/exec` permission and Python 3 in that container. It does not create RBAC, modify a pod, install software, or widen firewall rules. It sends the fixed HTTP worker to `python3 -c` and sends the token and request body on stdin. A rollout with two matching Ready pods is refused; try status again after the rollout finishes.
+
+Both transports require an explicit RFC1918 IPv4 gateway literal and disable HTTP proxies and redirects. HTTPS uses normal certificate verification. HTTP is for the existing trusted private network. There is no automatic transport fallback and no direct AMI, CGI, SSH or phone-reboot fallback.
+
+## Commands and scope
+
+```bash
+cisco 213                       # Live status, commands and examples; read-only
+cisco 213 help                  # Local help; no config or network needed
+cisco 213 destinations          # Read the current dial/ring allowlists
+cisco 213 220                   # Place a call FROM 213 TO 220
+cisco 213 dial 600              # Echo test FROM 213
+cisco 213 answer                # Answer the exact observed ringing call on 213
+cisco 213 pickup                # Alias for Answer; requires an actual ringing call
+cisco 213 hangup                # Hang up the exact observed call on 213
+cisco 213 dnd                   # Read status without changing DND
+cisco 213 dnd on                # DND for the WHOLE phone, including its sibling line
+cisco 213 dnd off
+cisco 213 autoanswer on         # Opt in for the whole phone; alerts still need manual dismissal
+cisco 213 autoanswer off
+cisco 213 speaker toggle        # Whole phone; gateway requires idle
+cisco 213 message "Dinner is ready"
+cisco 213 message --text-file ./notice.txt --title Notice
+cisco 213 image ./photo.png --title Photo
+cisco 213 alert timer           # Start an immediate persistent alert on 213
+cisco 213 stop-alert            # Stop the current alert only if it belongs to 213
+cisco 213 stop-alert --alert-id 0123456789abcdef0123456789abcdef
+cisco 213 ring 640              # Legacy finite ringing call; not a timer/alarm schedule
+```
+
+Commands are displayed only when the gateway advertises the relevant capability. DND, auto-answer, speaker, text and image actions affect the physical phone hosting the selected line. Images must be PNG or JPEG and at most 2 MiB; the gateway validates and resizes them for the service screen. Titles allow at most 48 characters and default to `Notice`. Text can be UTF-8 and at most 2,000 characters. Prefer `--text-file` for sensitive text to avoid storing it in shell history.
+
+Answer and Hangup send both the exact fresh channel name and its unique ID. They refuse if the selected line has no call, if there is more than one phone channel, or if a sibling line is active. The gateway checks the identity again before acting, and blocks automatic answering of timer/alarm alerts. A CLI status snapshot is not proof that a later action has already happened.
+
+### Pickup, speaker and automatic answering
+
+`pickup` is an alias for `answer`: it answers one isolated, freshly observed incoming **Ringing** call on the selected line. It is not a mechanical handset lift and does not silently toggle the speaker when idle. If there is no ringing call, it refuses before sending a control request.
+
+For idle speaker/dial-tone use, explicitly run `cisco 213 speaker toggle`. The gateway requires no active phone channel and sends the handset's speaker toggle key. It cannot reliably observe the resulting speaker state, so there are intentionally no misleading `speaker on`, `speaker off` or idempotent `offhook` commands. A repeated toggle may reverse the previous state.
+
+`cisco 213 autoanswer on` opts the whole hosting phone into gateway auto-answer; `autoanswer off` disables it, and `autoanswer` alone reads status. Incoming calls must pass the gateway's fresh isolated-call checks. Timer and alarm alerts remain manual regardless of this preference. Neither auto-answer nor pickup guarantees that a particular audio output device or volume is selected on the physical handset.
+
+`alert timer` and `alert alarm` start an alert immediately; they do not schedule it. Alerts ring until manual answer/reject or Stop, with no audio after answering. For countdowns and recurring weekday schedules, use the [Home Assistant integration](https://github.com/ha-homelab/asterisk-telephony) and [radio/alarms guide](radio-and-alarms.md). `ring 640` keeps the legacy 20-second ringing timeout and finite destination behavior.
+
+## Countdown timers and recurring alarms
+
+These commands use the companion integration's atomic `cisco_phone_control.schedule` service. They require companion version **0.3.0 or later** and an optional `home_assistant` section in the private CLI configuration. The basic gateway commands remain independent of that service. Use [cisco-cli.schedule.example.json](../deploy/cisco-cli.schedule.example.json) as a template: keep the gateway token and HA long-lived token in separate owner-only files, set the existing loaded Cisco Phone Control entry ID, and choose the HA transport explicitly. An HA admin token is required by this admin-only service. The HA transport can be direct or use its own explicit `kubectl` target, using the same fields as the gateway transport.
+
+There is **one countdown slot and one recurring alarm slot per physical phone**. They have explicit, independent target lines. For example, a timer on 213 does not change an alarm on 212 or the UI's general Line selector. The CLI does not implement schedules by changing a selector and pressing a button: HA validates and saves each request atomically under its schedule lock.
+
+```bash
+cisco 213 schedule                 # Both slots, target lines, active alert and HA timezone
+cisco 213 timer                    # Same read-only schedule overview
+cisco 213 timer status
+cisco 213 timer start 5             # Ring line 213 in five minutes
+cisco 213 timer start 30 --replace  # Explicitly replace the phone's pending countdown
+cisco 213 timer cancel             # Cancel 213's countdown and stop its matching timer alert
+
+cisco 212 alarm                    # Inspect the saved alarm before changing it
+cisco 212 alarm set 07:30 --days weekdays --enable
+cisco 212 alarm set 09:00 --days weekend --enable
+cisco 212 alarm set 08:15 --days mon,wed,fri --enable
+cisco 212 alarm set 20:00 --days daily   # Save a daily alarm, initially disabled
+cisco 212 alarm on                  # Enable the saved alarm without rewriting its time/days
+cisco 212 alarm off                 # Disable it and stop its matching active alarm
+cisco 213 alarm set 06:45 --days tue,thu --enable --replace
+```
+
+Timer duration is a whole number of minutes from 1 to 1,440. Alarm time is 24-hour `HH:MM` in the **HA timezone**, which is shown by `schedule`; it is not implicitly the Mac timezone. Days are `mon,tue,wed,thu,fri,sat,sun`, or the aliases `weekdays`, `weekend`, and `daily`. Duplicate days and invalid times are refused. `alarm set` saves disabled unless `--enable` is present. `--replace` is available only for a new timer or alarm definition. Cancel, On, Off and Stop refuse to act on a sibling line's owned slot or alert; select that owning line explicitly instead.
+
+Starting a timer when another countdown is pending requires `--replace`. Moving an existing alarm to the sibling line also requires `--replace`. Listing the schedule shows both owners so this limitation is visible before making changes. The system does not silently create a second timer slot, stack several weekly alarms, or retarget the shared phone using line-number arithmetic.
+
+Pending schedules persist in HA. A due occurrence is saved as claimed before it is sent to the gateway. Events missed while HA is down are not replayed, and a running scheduler skips events more than 20 seconds late. Busy phones, DND, an existing active/unknown alert, unavailable services and ambiguous outcomes are not retried. The repeated autumn DST minute runs once; a nonexistent spring minute is skipped. These are convenience alerts, not a guaranteed wake-up service.
+
+`stop-alert` ends the current exact alert but leaves future recurring alarms enabled. `timer cancel` also clears the pending countdown; `alarm off` disables future weekly occurrences. Scheduled alerts always require manual answer/reject or Stop even if gateway auto-answer is enabled. DND suppresses new calls and alerts; it does not cancel a pending schedule. Disable/cancel the schedule if that is the intended result.
+
+The scheduler uses HA's [REST service response interface](https://developers.home-assistant.io/docs/api/rest/#post-apiservicesdomainservice), with an explicit request ID for mutations. The CLI filters responses to the selected schedule; it does not expose unrelated `changed_states`. If the service is absent, refuses the request, or times out, the CLI reports failure without falling back to non-atomic helper changes. Inspect the schedule before deciding what to do next.
+
+Schedule commands go directly to the loaded HA integration. It resolves the exact selected line against one unambiguous phone in its validated current or cached gateway inventory; the CLI sends no guessed primary ID and maintains no stale local map. While the gateway is unreachable, the service can still read persisted schedules, cancel an owned pending timer or disable an owned alarm. Starting or enabling a schedule requires fresh gateway state. An offline cancellation may persist locally while the already-ringing state remains unknown; the CLI preserves the local schedule state in its error result. Use physical dismissal if a ringing phone cannot be reached.
+
+## Scripts, errors and retries
+
+Global flags may be used before the line or after a command:
+
+```bash
+cisco --json 213
+cisco 213 220 --json --idempotency-key evening-call-20261017
+cisco --dry-run --json 213 220
+cisco --timeout 60 213 message "Dinner is ready"
+```
+
+`--json` emits one JSON result without human examples. A successful read returns `status: "ok"`; a POST returns `status: "accepted"`, its action ID and the selected line/phone. **Accepted does not mean connected, answered, played or heard.** Run status to inspect the resulting channels, then use actual endpoint/media evidence where appropriate. The status field `phone.online` is aggregate availability of all assigned phone lines; the API does not expose per-line registration, firmware, handset IP, or speaker state.
+
+Exit status is zero for a successful read, help, dry run or accepted action, one for a refused/unknown outcome or partial status, and two for a command-line syntax error. If an optional HA schedule read fails, default/status output retains the live gateway result, reports `status: "partial"` and a structured `schedule_error`, and exits one; it does not pretend the timer is inactive. If the gateway fails but HA can read the schedule, it instead shows the schedule plus `gateway_error`, without inventing live call/registration status. A missing private configuration still shows offline command help. `--dry-run` performs live reads and validation but does not request a mutation. Schedule reads use the HA service's read-only `status` operation over HTTP POST. Screen text, titles, entry IDs and image bytes are omitted from dry-run output.
+
+HTTP socket timeout defaults to 20 seconds and is configurable from 1 to 60. Kubernetes subprocesses have an additional 10-second bound. HTTP responses are capped at 256 KiB. The CLI prints fixed error codes, not raw HTTP responses, subprocess stderr, tokens, request bodies or exception details. JSON status intentionally contains channel/alert IDs needed for precise control, so treat captured operational output as private.
+
+No failed action is retried automatically. An action may have executed even when its HTTP response times out. Preserve the returned `action_id`, inspect status, and do not blindly issue a new command. An explicit `--idempotency-key` is for the same logical operation with the same exact request; the gateway refuses conflicting reuse and unknown partial outcomes. Re-running Hangup/Answer may capture a different channel identity and therefore is not a transparent retry. Never build an unbounded retry loop around a dialing or alert command.
+
+The same option becomes a durable HA `request_id` for schedule mutations, limited to 8–80 safe characters. Reusing the same ID and payload cannot restart a countdown. For a new intentional operation use a new ID. After an uncertain cancellation, inspect both the pending slot and active alert; a local schedule cancellation and stopping an already ringing phone are distinct outcomes.
+
+## Other useful operations and limits
+
+- **Radio:** `cisco 213 701` or another number advertised by `destinations`; 708–710 are the children's stations when enabled. Stop the exact call with `hangup`. Audio quality and station availability still depend on the stream and network.
+- **Assist:** `cisco 213 630` uses that selected line. Complete that line's native VoIP discovery, Allow calls and pipeline setup first; a sibling line does not inherit native Assist acceptance automatically.
+- **Calling groups or a Mac:** use the currently allowed numeric destination, such as 620 or 209. The selected Cisco remains the caller. The CLI does not control Mac applications or start a Mac-originated call.
+- **Call waiting or conferences:** the current Answer/Hangup commands require one isolated phone channel. They deliberately refuse multi-channel situations rather than guessing which party to interrupt. No transfer, conference, hold, DTMF injection or arbitrary SIP URI command is exposed.
+- **Photos versus wallpaper:** `image` is a temporary service-screen notification. Persistent wallpaper installation/selection is a separate [phone-control](phone-control.md) workflow. This CLI does not reboot phones, cycle PoE, flash firmware, open TFTP, rotate secrets or execute arbitrary handset keys.
+- **Screen and speaker state:** accepted screen delivery is not proof the user saw it, and speaker toggle does not return a reliable final speaker-state reading. Inspect the physical screen or use the separate authenticated diagnostics where needed.
+
+## Validation
+
+```bash
+python3 -m unittest discover -s tests -p 'test_cisco*.py' -v
+```
+
+The tests cover secondary-line routing, non-consecutive line mappings, the numeric shorthand, stale/ambiguous inventory, exact channel and alert identity, refusal of sibling-call ambiguity, allowlists, JSON/help behavior, private configuration permissions, stdin-only Kubernetes credentials, redirects, response limits, atomic schedule request shapes and sanitized transport errors. They use synthetic fixtures and a local HTTP test server; they do not place calls.
+
+Live basic CLI acceptance on 2026-10-17 verified secondary line 221 resolving to phone 220/button 2, a 221→600 Echo call with bidirectional audio packets, exact CLI Hangup, and numeric shorthand 212→220 reaching Ringing. A concurrent user call created two channels on the calling phone; no ambiguous CLI Hangup was attempted. Only the separately tracked test channel was cleaned up. These checks validate line routing and conservative ownership, not human listening on every handset or future scheduler availability.
+
+Further live **216→221** checks verified `pickup` changing the exact ringing
+call to `Up`, CLI Hangup, and ordinary incoming auto-answer. Both legs were
+correlated by channel name, unique ID and linked ID. The shared auto-answer
+preference was read back through line 220 and restored to off after cleanup.
+
+The live HA 0.3.0 test also verified a one-minute timer on 221, unchanged
+deadline/ID on request replay, exact sibling-line refusals, and independent
+weekday-alarm enable/disable on 220. With ordinary auto-answer enabled, the
+owned timer still rang for more than 27 seconds. `timer cancel` stopped it;
+final checks found no active test call or enabled schedule, with auto-answer
+off and the original alarm settings and timer duration restored. Detailed
+scope and retained history are recorded in [deployment validation](server-validation.md).

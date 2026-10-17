@@ -10,9 +10,13 @@ numbers. All features on this page are disabled unless explicitly enabled.
 
 The revised timer/alarm path rings until manual dismissal, without auto-answer
 or after-answer audio. It requires the matching Asterisk, gateway and HA
-updates. Asterisk and the gateway were deployed on 2026-10-17; HA migration and
-physical acceptance are in progress. Earlier finite-tone tests validate only
-the previous behavior. Radio and manual dialing are unchanged.
+updates. Asterisk, the gateway and Home Assistant were deployed and verified
+on 2026-10-17. Physical tests confirmed manual dismissal, a selected-weekday
+alarm ringing for more than 90 seconds, and the actual HA **Stop alert** button
+ending the exact ringing alert. An HTTP routing defect found during acceptance
+was corrected and redeployed before the successful Stop test. Earlier
+finite-tone tests validate only the previous behavior. Radio and manual
+dialing are unchanged.
 
 ## Station numbers
 
@@ -51,8 +55,9 @@ to nonzero 8 kHz PCM by the real worker on **2026-10-17**; availability can chan
 These three dedicated Children's Radio channels are the selected options for
 ages 1–4. The third channel serves a broader age range; the broadcaster can
 change its playlist. They are separate from the main FM schedule, which also
-has programmes for older children. The new routes require the updated worker
-image and private station selection; their live rollout is in progress.
+has programmes for older children. All three routes are deployed with the
+updated worker and private station selection, and are available as named
+destinations in Home Assistant.
 
 There is no station audio in this repository, archive, proxy endpoint, or
 download library. Use the original broadcasts under each provider's terms.
@@ -116,6 +121,15 @@ for immediate number recognition. That step need not change their firmware
 or credentials. Keep the per-phone source guards and normal
 [provisioning cleanup](adding-phones.md) procedure.
 
+Before that optional template refresh, use **on-hook predial** for 708–710:
+leave the handset down and Speaker/Headset off, enter the complete number,
+then press the **Dial** softkey. Do not press a line key first. Cisco documents
+this procedure in the [7945G/7965G user guide](https://www.cisco.com/en/US/docs/voice_ip_comm/cuipph/7965g_7945g/6_1/english/user/guide/65enu61.pdf)
+and describes the resulting en-bloc digit submission in its
+[SIP dial-rule guidance](https://www.cisco.com/en/US/docs/voice_ip_comm/cucm/srnd/5x/50dialpl.html).
+The new server routes must already be deployed. Verify this method on the
+installed firmware before deciding a template refresh is unnecessary.
+
 Call one enabled station from a single idle phone. Confirm intelligible audio,
 then hang up and verify that the channel and its decoder disappear. Repeat
 with a second station. Pressing `#` also ends the radio session when Asterisk
@@ -138,17 +152,27 @@ through a synthetic loopback AudioSocket session. Every probe released its
 concurrency slot, stopped its worker thread and reaped its exact FFmpeg child.
 The installed worker and catalog hashes matched the repository sources.
 
-The three new children's channels passed the same five-second probe from the
-PBX network using temporary copies of the candidate worker and catalog. Each
-produced 251 PCM frames with nonzero signal; all three decoders were reaped,
-workers stopped and temporary files removed. No calls or audio files were
-created. This validates the candidate's network and decoding path, not deployed
-routes or physical speaker output.
+The three new children's channels first passed the same five-second probe
+using temporary copies of the candidate worker and catalog. After deployment,
+all three were tested again using the installed worker, whose source and
+catalog hashes matched commit `38b7bb1`. Each produced 251 PCM frames with
+nonzero signal; all three decoders were reaped and workers stopped. No calls
+or audio files were created by those probes. The deployed 708–710 AGI routes
+were checked separately. These passive results alone do not establish physical
+speaker output.
 
 This verifies stream reachability and decoding from the deployed network.
 The probes created no Asterisk calls and saved no audio. They do not establish
 AGI dialplan execution, SIP/RTP delivery, speaker output, or human audibility on
-a physical phone. Those still require the separate handset checks above.
+a physical phone. Those require the separate handset checks above.
+
+On **2026-10-17**, a real call from Cisco line **207 to 708** executed
+`AGI(radio.py,deti-toddlers)`, and the user confirmed that music was audible.
+Existing PBX logs record the AGI start at **21:16:17 UTC** and its hangup result
+at **21:16:33 UTC**; a later check found zero active channels and calls. The
+digit-entry method was not confirmed, so this is not specifically an on-hook
+predial test. Stations **709 and 710** passed the installed-worker PCM probes
+above but have not yet been confirmed audible on a physical phone.
 
 ## Audio and network lifecycle
 
@@ -205,6 +229,15 @@ state. When an occurrence is due, it requests a gateway `alert` with the verifie
 line and `kind: "timer"` or `"alarm"`. The gateway requires a registered, idle
 phone with DND off and gives the occurrence its own persisted identity.
 
+The [CLI](cli.md#countdown-timers-and-recurring-alarms) uses the same scheduler:
+`cisco 213 timer start 5` sets a five-minute countdown on line 213, while
+`cisco 212 alarm set 07:30 --days weekdays --enable` sets a weekday alarm on
+212. Each physical phone has one countdown slot and one recurring alarm slot,
+with independently saved target lines. Changing the general Line selector
+does not retarget a saved alarm. Inspect both slots with `cisco 213 schedule`.
+Use `timer cancel` or `alarm off` on the owning line to disable that schedule;
+`stop-alert` stops current ringing while preserving future alarm occurrences.
+
 The phone keeps ringing without an application ring-duration limit until one of
 these manual actions ends it:
 
@@ -216,7 +249,7 @@ these manual actions ends it:
 Alerts never use auto-answer, even if that phone's ordinary auto-answer switch
 is enabled. HA's ordinary Answer control is also blocked for alert channels.
 The updated integration removes Alarm sound and Timer sound selectors and
-provides Stop alert instead: **116 entities across four phones**.
+provides Stop alert instead: **29 entities per physical phone**.
 
 The Asterisk `cisco-alert` helper uses a private Local channel, no Dial timeout,
 and ignores forwarding. Its other leg waits in `WaitForSignal` without a

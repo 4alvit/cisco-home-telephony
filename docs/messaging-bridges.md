@@ -4,6 +4,8 @@ Research checked on **2026-10-17**. None of these bridges is deployed or logged
 into an account. A messaging bot, an audio-file message, and a live voice-call
 bridge are different capabilities.
 
+![Proposed messaging voice bridges and their boundaries](diagrams/messaging-bridges.svg)
+
 ## Telegram: a feasible experimental bridge
 
 Telegram's [call method](https://core.telegram.org/method/phone.requestCall) is

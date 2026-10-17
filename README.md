@@ -31,9 +31,12 @@ conversion to MPP is not required.
 - [Home Assistant](docs/home-assistant.md): phone states, DTMF, call control and
   Assist on extension **630**.
 - [Internet radio, timers and weekday alarms](docs/radio-and-alarms.md), including
-  ten station extensions, including toddler music and lullabies, and alerts
+  ten station extensions with toddler music and lullabies, and alerts
   that ring until manually stopped.
-- [Mac SIP client](docs/macos-softphone.md): Telephone with independent extension
+- [Cisco command line](docs/cli.md): `cisco 212` shows status; `cisco 212 220`
+  calls from line 212 to 220. Includes pickup, speaker toggle, DND, auto-answer,
+  timers, weekday alarms, messages and photos, with private local configuration.
+- [Mac SIP client](docs/macos-softphone.md): compact Zoiper5 with independent extension
   **209**, its own credentials and a single-host access rule.
 - [Telegram, WhatsApp and Viber](docs/messaging-bridges.md): researched voice-bridge
   designs, account requirements and limitations.
@@ -47,15 +50,27 @@ conversion to MPP is not required.
 **The server is deployed in the home k3s cluster:** Asterisk 22.11.0, Home
 Assistant AMI and VoIP integrations, and a telephony dashboard are installed.
 See [live deployment validation](docs/server-validation.md).
-Four physical 7945G phones now run **SIP45.9-4-2SR4-3S** and independently
-register **201-208** over TCP. All four have two numeric line labels,
-LakeDawn wallpaper and verified two-stage SSH access. The first phone passed
-human-audible echo and Russian Assist; additional lines have automated echo,
-RTP and HA hangup checks recorded in the validation log. The phone voice
-profile now uses the existing **Silero Baya** backend. HA-originated Assist
-answer/route/RTP/hangup checks also passed for 203/205/207; human listening
-remains a separate acceptance step.
-Speakerphone, DTMF and calls between phones still need separate acceptance.
+Ten physical 7945G phones have been converted to **SIP45.9-4-2SR4-3S**,
+with two numeric line labels, LakeDawn wallpaper, authenticated CGI and verified
+SSH access. Their 20 configured lines are **201–208 and 210–221**. Online
+availability depends on which phones are plugged in; disconnected devices
+retain their own profiles, credentials and numbers. **209** remains reserved
+for the Mac.
+
+The first phone passed human-audible echo and Russian Assist. The validation
+log records the separate automated echo, RTP and HA call-control results.
+Enabled native phone voice profiles use the existing **Silero Baya** backend. Automated
+media checks do not establish human-audible quality or complete speakerphone,
+DTMF, hold/transfer and inter-phone acceptance.
+
+The Mac's **Zoiper5** client registers independently as **209**. Children's
+radio is deployed on **708 — Toddler music**, **709 — Lullabies** and
+**710 — Children's songs**. All three passed decoding checks on the installed
+server; the operator confirmed audible music on 708. Home Assistant includes
+the named destinations and **290 phone controls**, with timers and weekday
+alarms that are dismissed manually. See the [printable reference](output/pdf/cisco-phone-reference.pdf)
+for numbers and controls, and the validation record for test coverage.
+
 Cisco firmware is not included: obtain an authorized copy and verify the upgrade path.
 The [second-line and wallpaper guide](docs/second-line-and-wallpaper.md) covers
 the independent 202 line and original generated background now installed on the
@@ -72,7 +87,7 @@ SR4-3 copy, byte-level checks, extraction steps and provenance limitations.
 4. [Build images and deploy Asterisk/TFTP to k3s](docs/k3s-deployment.md).
 5. [Test calls, close TFTP and save a backup](docs/operations.md).
 6. [Add further phones in a controlled batch](docs/adding-phones.md) —
-   [four-phone architecture](docs/diagrams/four-phones.svg).
+   [Cisco fleet and Mac architecture](docs/diagrams/fleet-and-mac.svg).
 
 Before physical inventory is complete, [bootstrap the PBX and AMI](docs/pbx-bootstrap.md)
 with `provision.py --pbx-only`. This does not create placeholder phones, Cisco XML
@@ -112,7 +127,8 @@ staging on the node and acceptance checks.
 
 ## Extensions and networking
 
-Example extensions: **201–210**. **600** is echo, **601** is a test tone, and
+The starter template uses example extensions **201–210**; the installed two-line
+fleet uses the allocation above. **600** is echo, **601** is a test tone, and
 **620** rings the group. With HA integration enabled, **630** reaches Home
 Assistant Assist. Optional **640** plays bounded alarm audio, and **701-710**
 select internet radio when enabled. External SIP profiles are disabled by
