@@ -156,8 +156,27 @@ scope. Firmware на узле не удаляется скриптами авт�
 
 ## Пределы проверок этой поставки
 
-Python unit/integration tests и shell syntax checks выполняются локально. В среде
-подготовки Docker daemon отсутствовал; runtime сборка проверяется workflow
-`Validate and build` в GitHub Actions. Успешный workflow не заменяет проверку
-аппаратного Cisco boot, лицензированной firmware, PoE, реальных DHCP/firewall и
-звонка в доме. Кластер и телефоны в рамках подготовки репозитория не менялись.
+На 16 октября 2026 локально прошли Python unit/integration tests и shell syntax
+checks. Оба Docker image реально собраны на **Linux ARM64** в существующем
+локальном Docker runtime: Asterisk 22.11.0 и tftp-hpa 5.2. При сборке обнаружен и
+исправлен конфликт staging `/var/run` с Debian symlink `/var/run -> /run`.
+
+Полный `scripts/smoke-containers.sh` завершился PASS: загрузились синтетический
+endpoint201, оба SIP transport, `chan_pjsip` и dialplan600/601/620; init script
+TFTP выполнился как UID10001 на root-owned fsGroup томе, а TFTP daemon с рабочими
+flags/capabilities действительно отдал файл через RRQ. Сеть теста изолирована;
+настоящие MAC, пароли и firmware в тест не передавались. Временные контейнеры,
+fixture images и тестовая сеть удалены скриптом.
+
+Это подтверждает ARM64 build/runtime. **Linux AMD64** отдельно проверяет workflow
+`Validate and build` в GitHub Actions; актуальный статус смотрите в Actions, не
+приравнивайте ARM64 smoke к испытанию на конкретном домашнем worker. Smoke не
+заменяет Cisco boot, проверку лицензированной firmware, PoE, DHCP/firewall,
+регистрацию физического аппарата и двусторонний звук. Кластер и телефоны в рамках
+подготовки репозитория не менялись.
+
+При `autoload=yes` Asterisk также пытается загрузить необязательные модули и может
+печатать сообщения о недостающих конфигурациях queues/ARI/phoneprov и других
+неиспользуемых функций. В поставке проверяются нужные PJSIP transport/endpoint и
+dialplan; сообщения об ошибках **этих** объектов нельзя игнорировать. Сообщение об
+отсутствии Ethernet для global EID ожидаемо только в изолированном loopback smoke.

@@ -72,6 +72,11 @@ docker image inspect --format '{{join .RepoDigests "\n"}}' \
   192.168.50.20:5050/cisco-home/tftp:bookworm
 ```
 
+Для HTTP registry настройка `registries.yaml` на k3s node не настраивает Docker
+builder. У последнего отдельно требуется точечный `insecure-registries` для
+вашего `HOST:PORT`: [порядок и ограничения](../deploy/README.md#plain-http-registry-prerequisite).
+Не перезаписывайте существующий daemon.json и не перезапускайте чужой builder без окна.
+
 Впишите соответствующие `repository@sha256:…` в `asterisk_image` и `tftp_image`
 файла `.local/site.json`. Если registry требует авторизации, создайте pull Secret
 в namespace `telephony` из отдельного Docker config файла и укажите **имя** в
@@ -85,7 +90,11 @@ bash scripts/smoke-containers.sh 192.168.50.20:5050/cisco-home
 ```
 
 Smoke проверяет загрузку `chan_pjsip`, endpoint 201, UDP/TCP транспорты и dialplan
-600/601/620. Точно эти проверки запускаются в GitHub Actions после сборки двух
+600/601/620; затем выполняет реальный TFTP RRQ и проверяет init script как UID10001
+на root-owned томе с доступом через fsGroup. Asterisk работает без сети, а TFTP —
+в одноразовой Docker internal network без публикации портов. Для совместимости
+с remote Docker context синтетические конфиги передаются в одноразовых fixture images,
+которые удаляются вместе с тестовыми контейнерами и сетью. Точно эти проверки запускаются в GitHub Actions после сборки двух
 образов. Реальную регистрацию Cisco и двусторонний звук проверяют отдельно в LAN.
 
 ## 4. Проверить узел, firewall и DHCP
@@ -197,9 +206,11 @@ kubectl --context home-k3s -n telephony exec deploy/asterisk -- asterisk -rx 'pj
 kubectl --context home-k3s -n telephony exec deploy/asterisk -- asterisk -rx 'pjsip show contacts'
 ```
 
-Контейнер tftpd-hpa не содержит syslog daemon: `kubectl logs` показывает
-ошибки запуска, но не гарантирует журнал отдельных transfers. При диагностике
-используйте краткую запись метаданных UDP на узле, без вывода payload/паролей.
+`tftpd-hpa` отправляет transfer logs в syslog. В минимальном образе syslog daemon
+нет, поэтому `kubectl logs job/cisco-tftp` не является журналом всех RRQ/transfers.
+Для краткой проверки сетевого обмена используйте на выбранном узле `tcpdump`
+с фильтром UDP69/20000–20031 на LAN интерфейсе, без `-A`/`-X` и без сохранения
+полного payload; завершите захват после проверки. Следите также за экраном телефона.
 
 Проверьте один 7945G: корректный SIP load, адрес DHCP, верное время, регистрация.
 Позвоните `600` (эхо), `601` (тестовый тон), затем между двумя аппаратами в обе

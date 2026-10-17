@@ -21,6 +21,8 @@ RUN curl -fL --retry 3 "https://downloads.asterisk.org/pub/telephony/asterisk/as
          --disable-category MENUSELECT_CORE_SOUNDS --disable-category MENUSELECT_MOH menuselect.makeopts \
     && make -j2 \
     && make install DESTDIR=/stage
+# Debian has /var/run -> /run. Runtime directories are created in the final image.
+RUN rm -rf /stage/var/run
 FROM ${DEBIAN_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates libedit2 libssl3 libxml2 libuuid1 libsqlite3-0 libncurses6 \

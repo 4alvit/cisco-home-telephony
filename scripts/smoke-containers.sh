@@ -4,9 +4,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 if [[ $# -ne 1 ]]; then echo "Usage: $0 IMAGE_PREFIX" >&2; exit 2; fi
 prefix=$1
-test_root=$(mktemp -d)
+umask 077
+mkdir -p .local
+# Keep temporary synthetic fixtures inside ignored workspace storage.
+test_root=$(mktemp -d "$PWD/.local/smoke.XXXXXX")
 container="cisco-asterisk-smoke-$$"
 tftp_container="cisco-tftp-smoke-$$"
+asterisk_fixture="cisco-smoke-asterisk:$$"
+tftp_fixture="cisco-smoke-tftp:$$"
+tftp_network="cisco-tftp-smoke-$$"
 cleanup() {
   local status=$?
   if [[ "$status" != 0 ]]; then
@@ -14,6 +20,8 @@ cleanup() {
     docker logs "$tftp_container" 2>/dev/null || true
   fi
   docker rm -f "$container" "$tftp_container" >/dev/null 2>&1 || true
+  docker network rm "$tftp_network" >/dev/null 2>&1 || true
+  docker image rm "$asterisk_fixture" "$tftp_fixture" >/dev/null 2>&1 || true
   rm -rf "$test_root"
   return "$status"
 }
@@ -28,14 +36,21 @@ python3 scripts/provision.py --site "$test_root/site.json" --inventory "$test_ro
 # Only synthetic CI configs become readable by container UID 10001.
 chmod 0755 "$test_root" "$test_root/generated" "$test_root/generated/asterisk"
 chmod 0644 "$test_root/generated/asterisk/"*.conf
+# Copy only synthetic configuration into a disposable image. This also works
+# when a remote/VM Docker daemon has no bind mount access to the host workspace.
+cat > "$test_root/Dockerfile.asterisk" <<'DOCKERFILE'
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+COPY --chown=10001:10001 generated/asterisk/ /etc/asterisk/
+DOCKERFILE
+docker build -q --build-arg "BASE_IMAGE=$prefix/asterisk:22.11.0" -f "$test_root/Dockerfile.asterisk" -t "$asterisk_fixture" "$test_root" >/dev/null
 docker run -d --name "$container" --network none --read-only \
   --tmpfs /run/asterisk:uid=10001,gid=10001 \
   --tmpfs /var/lib/asterisk/db:uid=10001,gid=10001 \
   --tmpfs /var/spool/asterisk:uid=10001,gid=10001 \
   --tmpfs /var/log/asterisk:uid=10001,gid=10001 \
   --tmpfs /tmp:uid=10001,gid=10001 \
-  --mount "type=bind,source=$test_root/generated/asterisk,target=/etc/asterisk,readonly" \
-  "$prefix/asterisk:22.11.0" >/dev/null
+  "$asterisk_fixture" >/dev/null
 ready=0
 for attempt in {1..30}; do
   if docker exec "$container" asterisk -rx 'core show uptime' > /dev/null 2>&1; then ready=1; break; fi
@@ -79,17 +94,25 @@ script=manifest['items'][1]['spec']['template']['spec']['initContainers'][0]['co
 pathlib.Path(sys.argv[1]).write_text(script+'\n test -s /served/root/health.txt && test -s /served/root/dialplan.xml\n')
 PYINIT
 chmod 0644 "$test_root/tftp-init.sh"
+cat > "$test_root/Dockerfile.tftp" <<'DOCKERFILE'
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+COPY tftp/ /srv/tftp/
+COPY tftp/ /firmware/
+COPY generated/tftp/ /config/
+COPY tftp-init.sh /init.sh
+DOCKERFILE
+docker build -q --build-arg "BASE_IMAGE=$prefix/tftp:bookworm" -f "$test_root/Dockerfile.tftp" -t "$tftp_fixture" "$test_root" >/dev/null
 docker run --rm --network none --read-only --user 10001:10001 --cap-drop ALL \
   --tmpfs /served:uid=0,gid=10001,mode=2770 \
-  --mount "type=bind,source=$test_root/tftp,target=/firmware,readonly" \
-  --mount "type=bind,source=$test_root/generated/tftp,target=/config,readonly" \
-  --mount "type=bind,source=$test_root/tftp-init.sh,target=/init.sh,readonly" \
-  --entrypoint /bin/sh "$prefix/tftp:bookworm" -ec 'sh /init.sh'
-docker run -d --name "$tftp_container" --network none --read-only \
+  --entrypoint /bin/sh "$tftp_fixture" -ec 'sh /init.sh'
+# tftpd uses getaddrinfo(AI_ADDRCONFIG): a loopback-only namespace cannot resolve
+# even numeric bind addresses. An internal bridge supplies IPv4 without egress.
+docker network create --internal "$tftp_network" >/dev/null
+docker run -d --name "$tftp_container" --network "$tftp_network" --read-only \
   --cap-drop ALL --cap-add NET_BIND_SERVICE --cap-add SYS_CHROOT --cap-add SETUID --cap-add SETGID \
   --tmpfs /tmp \
-  --mount "type=bind,source=$test_root/tftp,target=/srv/tftp,readonly" \
-  "$prefix/tftp:bookworm" --foreground --user tftp --secure \
+  "$tftp_fixture" --foreground --user tftp --secure \
   --address 127.0.0.1:69 --port-range 20000:20031 --blocksize 1468 /srv/tftp >/dev/null
 sleep 1
 docker exec "$tftp_container" timeout 10 tftp 127.0.0.1 -m binary -c get health.txt /tmp/health.txt
