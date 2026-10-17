@@ -223,6 +223,100 @@ Do not start another flash near the end of the hour. For another window, delete
 the old Job and apply again with `--with-tftp`. Do not delete the Job or
 interrupt power during an active flash.
 
+### Updating an installation with an existing field owner
+
+`scripts/deploy.sh` uses server-side apply with field manager
+`cisco-home-telephony`. In the observed installation, the Deployment's
+`config` volume Secret reference was owned by `kubectl-client-side-apply`.
+An ownership conflict is a reason to inspect `metadata.managedFields`, not to
+add `--force-conflicts` or remove ownership metadata. Keep the established
+workflow unless its owner deliberately reviews a migration; see
+[Kubernetes field ownership](https://kubernetes.io/docs/reference/using-api/server-side-apply/).
+The commands below are an explicit alternative **only for a confirmed existing
+client-side-apply installation**. They do not change the deploy script's default.
+
+For a configuration-only update with the same image, freeze the generated
+manifest in a new private review directory. All examples still use the synthetic
+context and namespace; substitute the verified values from your site file.
+
+```bash
+set -euo pipefail
+umask 077
+bash scripts/deploy.sh --site .local/site.json   # Local validation/render only.
+mkdir .local/apply-review                      # Must be a new review directory.
+cp .local/rendered/core.yaml .local/apply-review/core.yaml
+kubectl --context home-k3s -n telephony get deployment asterisk \
+  --show-managed-fields -o json > .local/apply-review/before.json
+python3 - <<'PY'
+import json
+from pathlib import Path
+r = Path('.local/apply-review')
+items = json.loads((r / 'core.yaml').read_text())['items']
+deployments = [x for x in items if x['kind'] == 'Deployment']
+assert len(deployments) == 1 and deployments[0]['metadata']['name'] == 'asterisk'
+(r / 'deployment.json').write_text(json.dumps(deployments[0]))
+PY
+# Inspect before.json managedFields privately before choosing this apply mode.
+kubectl --context home-k3s apply --dry-run=server \
+  -f .local/apply-review/core.yaml > .local/apply-review/dry-run.log
+kubectl --context home-k3s apply --dry-run=server \
+  -f .local/apply-review/deployment.json -o json > .local/apply-review/predicted.json
+python3 - <<'PY'
+import copy, difflib, hashlib, json
+from pathlib import Path
+r = Path('.local/apply-review')
+before = json.loads((r / 'before.json').read_text())['spec']
+after = json.loads((r / 'predicted.json').read_text())['spec']
+dump = lambda x: json.dumps(x, indent=2, sort_keys=True).splitlines(True)
+(r / 'deployment-spec.diff').write_text(''.join(difflib.unified_diff(dump(before), dump(after))))
+old = copy.deepcopy(before)
+def config_volume(spec):
+    rows = [v for v in spec['template']['spec']['volumes'] if v['name'] == 'config']
+    assert len(rows) == 1
+    return rows[0]
+previous = config_volume(old)['secret']['secretName']
+replacement = config_volume(after)['secret']['secretName']
+assert previous != replacement, 'Expected one configuration Secret replacement'
+config_volume(old)['secret']['secretName'] = replacement
+assert old == after, 'Other Deployment spec fields changed; review separately'
+(r / 'manifest.sha256').write_text(hashlib.sha256((r / 'core.yaml').read_bytes()).hexdigest())
+print('Only the config Secret reference changes; inspect the private diff and manifest.')
+PY
+```
+
+Review `deployment-spec.diff`, the Namespace labels and the new immutable
+Secret's contents privately. Keep the previous manifest and Secret for rollback.
+Do not print Secret data or private configuration in CI logs. Before applying
+the reviewed copy, confirm zero active calls and recheck that the Deployment
+has not changed since the review:
+
+```bash
+kubectl --context home-k3s -n telephony get deployment asterisk \
+  -o json > .local/apply-review/fresh.json
+kubectl --context home-k3s -n telephony exec deployment/asterisk -- \
+  asterisk -rx 'core show channels count' > .local/apply-review/idle.txt
+python3 - <<'PY'
+import hashlib, json
+from pathlib import Path
+r = Path('.local/apply-review')
+before = json.loads((r / 'before.json').read_text())
+fresh = json.loads((r / 'fresh.json').read_text())
+assert before['metadata']['uid'] == fresh['metadata']['uid']
+assert before['spec'] == fresh['spec'], 'Deployment changed after review'
+assert hashlib.sha256((r / 'core.yaml').read_bytes()).hexdigest() == (r / 'manifest.sha256').read_text()
+lines = {line.strip() for line in (r / 'idle.txt').read_text().splitlines()}
+assert {'0 active channels', '0 active calls'} <= lines, 'PBX is not idle'
+PY
+# Use the authorized maintenance window; prevent new test calls during this step.
+kubectl --context home-k3s apply -f .local/apply-review/core.yaml
+kubectl --context home-k3s -n telephony rollout status deployment/asterisk --timeout=180s
+```
+
+This preserves client-side apply for that installation and leaves TFTP alone.
+Recheck the resulting Deployment spec, registrations and required modules after
+rollout. If the review finds an image, security context, network or other spec
+change, this narrow procedure must stop for a review covering that change.
+
 ## 7. Acceptance and closing provisioning
 
 ```bash

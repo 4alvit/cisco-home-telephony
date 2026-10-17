@@ -197,8 +197,9 @@ additional account details through support; no existing ticket or specific
 document request was present. No support message was sent. Stage registration
 only with `target: null`; keep route 801 absent until the provider clears the
 restriction. The [signup FAQ](https://www.callcentric.com/faq/29/213) identifies
-the initial signup password as the initial SIP password; actual SIP authentication
-must still be verified independently.
+the initial signup password as the initial SIP password. The deployed account
+subsequently reached Registered without changing that credential. This does not
+remove the provider's outbound restriction or establish working audio.
 
 Callcentric's [PJSIP configuration guide](https://www.callcentric.com/support/device/asterisk/17_pjsip)
 supplies an Asterisk-compatible contract: registration server
@@ -232,8 +233,10 @@ funding process requires a bank transfer **greater than 20 USD/EUR**. Free signu
 therefore does not provide free arbitrary PSTN minutes. No payment or support
 email was sent.
 
-The account was created and its settings email received on 2026-10-17. This
-confirms signup, not successful SIP registration or two-way audio.
+The account was created and its settings email received on 2026-10-17. The
+deployed Asterisk subsequently reached Registered using the issued bare username
+and domain. The synthetic 802 echo/audio pilot was deferred at the user's request
+before any external call was placed; two-way audio remains unverified.
 
 ### France: Linphone / Belledonne Communications
 
@@ -246,8 +249,8 @@ associated with a virtual telephone number. This is another SIP-to-SIP option,
 not a free PSTN trunk. Use the current account settings supplied after signup and
 verify PJSIP registration and two-way audio before enabling a call route.
 Email activation completed on 2026-10-17 and the account dashboard displays the
-assigned SIP address. No official echo/test URI was verified. Register with a
-null target if desired, leaving route 803 absent until an operator-controlled
+assigned SIP address. The deployed account reached Registered with a null
+target. No official echo/test URI was verified. Leave route 803 absent until an operator-controlled
 or explicitly approved peer is available; do not guess an echo address.
 
 ### How to connect a provider without changing the phones

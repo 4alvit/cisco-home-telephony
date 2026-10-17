@@ -256,9 +256,11 @@ independently pinned host-key checks passed.
 HA now includes all eight line mappings and12 telephony scripts while preserving
 224 pre-existing script/automation entities and67 Recorder exclusions. A first
 630 call discovered the real native207 identity, which was explicitly enabled.
-The older phone voice profile selected a male Chatterbox voice. All four primary
+The captured old selection for phone 201 was **FCC Russian Backup**, using
+`tts.fcc_cloud_speech` with `Chatterbox-Multilingual.ru-RU.Male`. All four primary
 identities **201/203/205/207** now select the existing **Local Russian Home**
-pipeline, whose backend voice is **Silero Baya**. The Echo devices and global
+pipeline: `tts.local_russian_speech`, profile `silero-ru-default`, with the
+running TTS backend set to **silero-ru-baya**. The Echo devices and global
 pipeline definitions were preserved. Selecting the voice is distinct from
 human-audible acceptance of a new call. HA-originated Assist calls on
 **203/205/207** subsequently passed: actual incoming Ringing state, one guarded
@@ -269,6 +271,84 @@ reported loss, and exact-channel HA Hangup. The last check ended at
 The [four-phone diagram](diagrams/four-phones.svg) shows the installed topology.
 The extended radio/control deployment is documented separately and must be
 verified after its new container image is installed.
+
+## Phone-control and radio service expansion
+
+The expanded Asterisk and gateway services run the verified Linux AMD64 image
+built from `60da33d295208d23ee61cee42b67acf087f24447` in
+[the successful native build and smoke run](https://github.com/4alvit/cisco-home-telephony/actions/runs/39064408398).
+The local registry manifest and imported image architecture were verified before
+rollout; the temporary export artifact was then deleted. Firmware, phone
+credentials, numeric line labels and LakeDawn artwork were preserved.
+
+The persistent gateway uses a separate AMI identity, one exact-source callback
+listener per phone and a source-restricted HA API. A required local-node AMI
+exception was added to the raw firewall without broadening it to a subnet.
+The old temporary callback processes and their stale cleanup timers were
+retired after replacement verification. All four authenticated screenshot
+callbacks passed.
+
+The new HA **Cisco phone controls** integration adds **120 entities** across four
+physical-phone devices and four dashboard tabs. Its installation preserved all
+6,468 existing registry identities, 16 native VoIP entities and existing
+scripts/automations. Recorder exclusions increased from 67 to 83, adding only the
+12 volatile text inputs and four countdown sensors. HA returned to `RUNNING`,
+with the new entities available and the expected Recorder filters active.
+
+One pre-existing script was executing when the baseline was captured and was
+idle after restart. That exact runtime transition was recorded separately;
+script activity was not treated as an automation enable/disable flag. Existing
+automation enabled states remained unchanged.
+
+All four phones fetched the new dial template. Two selected PoE ports were
+cycled independently and restored with all eight switch-port configurations
+preserved; the other two phones completed a verified automatic refresh. New
+TFTP requests, HTTP identities, fresh registrations and screenshots of both
+numeric labels established completion. The temporary TFTP Job was deleted,
+UDP69 had no listener, and the ordinary closed-TFTP policy was restored.
+
+The first phone then passed these live gateway checks:
+
+- Selected line **202** dialed **601**, reached `Up`, and sent/received increasing
+  RTP counters with zero reported loss in the observed samples. The screenshot
+  showed line202 connected to601. Exact-channel remote Hangup returned it to idle.
+- PBX DND rejected a gateway-originated call. Opt-in auto-answer changed a real
+  incoming **201 → 640** channel from `Ringing` to `Up`; remote Hangup completed.
+  Both preferences were restored to their original disabled state.
+- An English text notification and a PNG photograph appeared on the physical
+  phone's Services screen. Their Exit softkey was visually verified and pressed
+  using `Key:Soft1`. `SoftKey:Exit` is valid as the page binding, not as an Execute
+  URI; an initial private test-helper mistake was corrected without changing
+  the gateway's valid page XML.
+- **701/Matryoshka** reached `Up` through the production AGI/AudioSocket route,
+  with increasing bidirectional RTP counters, then ended by exact-channel Hangup.
+  Human confirmation of radio audibility is deferred.
+
+All seven broadcaster streams also decoded to nonzero PCM in the running AMD64
+pod, with each test's FFmpeg child reaped. These short samples prove current
+reachability and decoder operation, not long-session reliability or a person's
+hearing of every station. See [radio validation](radio-and-alarms.md#live-network-verification).
+
+### External SIP and deferred acceptance
+
+The outbound-only external SIP guard is installed and enabled as a persistent
+service. Its verified policy admits established reply traffic for the configured
+SIP/RTP paths, retains the existing local sources and IPv6 restrictions, and
+creates no router port forward. TFTP remains closed.
+
+**SIP2SIP, Callcentric and Linphone each reached `Registered`.** Account
+identifiers and credentials are stored only in private local files. Callcentric
+still blocks outbound calls pending its account review, so 801 has no provider
+route. Linphone has no verified peer selected, so 803 also remains unrouted.
+SIP2SIP 802 is configured for its fixed test destination, but external media has
+not been tested. Registration alone does not establish successful external calls.
+
+The operator then requested a pause in phone testing. The pending test timer was
+canceled, its alarm was disabled, original UI settings were restored and the
+helper exited. A direct PBX check confirmed zero active channels. Further
+physical calls, music, timer/alarm acceptance, HA content-service acceptance and
+the external echo pilot are deferred until the operator resumes testing. No
+successful end-to-end schedule test is claimed.
 
 ## Remaining acceptance
 

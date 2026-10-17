@@ -2,19 +2,27 @@
 
 The provisioner supports three **disabled-by-default, SIP-network-only** account
 profiles. Generated configuration alone does not prove provider registration or
-a successful external call. As of **2026-10-17**, a SIP2SIP account has been
-created and its settings email received; live SIP registration and two-way audio
-still require the deployment acceptance below. A Callcentric IP Freedom account
+a successful external call. As of **2026-10-17**, SIP2SIP, Callcentric and Linphone
+all reached **Registered** on the deployed Asterisk. No external test call was
+placed: the SIP2SIP 802 audio pilot was deferred at the user's request to keep
+the phones quiet. Two-way external audio remains unverified. A Callcentric IP Freedom account
 was created at $0, but its provider risk review currently blocks outbound calls
 and account changes. No support ticket was automatically opened and no support
 message has been sent. Linphone email activation is complete; no verified fixed
-test peer has been selected. Both can be staged for registration only, without
-801/803 call routes. A relaunched FWD account was created,
+test peer has been selected. Both are deployed for registration only, without
+801/803 call routes; these numbers reach the existing reject fallback. A relaunched FWD account was created,
 but calling requires identity verification whose next step presented a
 **Verification Fee** checkout; no payment or identity document was supplied, and
 no FWD profile is enabled. Account identifiers and credentials remain private.
 See the [research and current cost boundaries](extended-services-research.md)
 for provider terms and limitations.
+
+SIP2SIP initially showed Rejected/Unregistered around the closed-firewall startup
+and retry window. Its issued settings and official instructions confirmed the
+configured bare username and separate domain. It subsequently registered
+without an authentication or configuration change. Do not treat a transient
+registration state alone as evidence of a wrong password, and do not change
+credentials or broaden firewall rules without diagnostics.
 
 ## Routes and account requirements
 

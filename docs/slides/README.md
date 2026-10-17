@@ -23,6 +23,10 @@ must not run firmware below 9.3(1)SR3. Follow the chosen release's upgrade notes
 The slides distinguish implemented features, verified local call results and
 remaining live acceptance. The status snapshot reflects October 17, 2026.
 Account activation does not establish SIP registration or working external audio.
+All three configured providers reached `Registered`; the SIP2SIP audio pilot was
+deferred at the user's request. Callcentric remains blocked for outbound calls
+pending provider review, and Linphone has no verified call peer. Those two
+profiles are registration-only.
 Successful container/runtime checks do not replace human-audible phone tests.
 See the [dated validation record](../server-validation.md) for detailed results.
 

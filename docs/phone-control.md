@@ -529,6 +529,14 @@ name and LLDP remote identity. A management IP or a plausible power draw alone
 does not identify the correct physical port. Read the mapping again immediately
 before the cycle.
 
+After a profile refresh, the tested phone legitimately changed its LLDP system
+name from `SEP<MAC>.example.internal` to the bare `SEP<MAC>`. A hostname change
+alone does not prove that the device was replaced. Stop an exact-name guard,
+then revalidate the complete MAC, model and firmware, LLDP remote port ID,
+forwarding-table entry, bridge interface and physical port. Update only that
+device's expected name in the private inventory after its boot has completed;
+do not replace exact identity checks with an unrestricted prefix match.
+
 Useful read-only SNMP objects for a GS110TP are:
 
 - `1.3.6.1.2.1.1.1.0`: system description; verify the actual switch model.
@@ -540,6 +548,11 @@ Useful read-only SNMP objects for a GS110TP are:
 - `1.0.8802.1.1.2.1.4.1.1.9.<time-mark>.<local-port>.<remote-index>`:
   LLDP remote system name. The same entry's column `7` is the remote port ID.
   Confirm the expected `SEP...` identity and phone-side port.
+
+SNMP tools may render an IF-MIB enumeration as `INTEGER: up(1)` rather than
+`INTEGER: 1`. Parse the numeric enumeration (or request numeric output) instead
+of comparing the entire display string. Otherwise a healthy link can be
+mistaken for a failed one.
 
 The original GS110TP tested here exposes its PoE objects under NETGEAR's private
 branch, rather than the standard `1.3.6.1.2.1.105` branch:
@@ -581,3 +594,13 @@ and configuration fields against the private before-record. Record the cycle
 and verification timestamps without credentials. Finally verify the phone's
 TFTP requests, firmware identity and SIP registrations; power delivery by itself
 does not prove that the new phone configuration loaded.
+
+Allow the phone to finish booting before continuing. A responding HTTP page or
+an earlier available SIP contact is insufficient: capture a new screenshot
+showing both intended numeric line labels, confirm fresh registrations, and
+correlate the current profile/dialplan requests with the maintenance window.
+During the multi-phone pilot, other phones fetched the updated dialplan
+automatically while one phone was being refreshed. Their fresh TFTP requests,
+correct HTTP identities, new registrations and normal home screens made
+additional PoE cycles unnecessary. Prefer that verified completion over a
+preplanned power interruption.
