@@ -149,6 +149,8 @@ def validate(site, inventory, *, pbx_only=False):
             raise ValueError("phone label must be 1..24 ASCII letters/digits/spaces/_/-")
         if phone.get("transport", "tcp") not in ("udp", "tcp"):
             raise ValueError("transport must be udp or tcp")
+        if type(phone.get("web_access", False)) is not bool:
+            raise ValueError("web_access must be boolean")
         load = phone.get("firmware_load", "")
         if not re.fullmatch(r"SIP45\.[A-Za-z0-9-]+", load):
             raise ValueError("firmware_load must be the exact SIP45.* load ID, without .loads")
@@ -204,7 +206,7 @@ def phone_xml(phone, ip, ntp, password):
     sub(d,"commonProfile")
     sub(d,"loadInformation",phone["firmware_load"])
     vendor=sub(d,"vendorConfig")
-    sub(vendor,"webAccess",1)
+    sub(vendor,"webAccess",0 if phone.get("web_access",False) else 1)
     sub(vendor,"sshAccess",1)
     sub(vendor,"settingsAccess",1)
     sub(d,"deviceSecurityMode",1)

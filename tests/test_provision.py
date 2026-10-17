@@ -68,6 +68,30 @@ class ProvisionTest(unittest.TestCase):
             p.generate(self.site,self.inventory,tmp)
             self.assertFalse((Path(tmp)/'tftp/SEP020000000001.cnf.xml').exists())
 
+    def test_web_access_is_opt_in_per_phone(self):
+        inventory=copy.deepcopy(self.inventory)
+        inventory['phones'].extend([
+            dict(inventory['phones'][0],mac='020000000002',extension='202',web_access=False),
+            dict(inventory['phones'][0],mac='020000000003',extension='203',web_access=True),
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            p.generate(self.site,inventory,tmp)
+            for mac,expected in [('020000000001','1'),('020000000002','1'),('020000000003','0')]:
+                with self.subTest(mac=mac):
+                    x=ET.parse(Path(tmp)/'tftp'/f'SEP{mac}.cnf.xml')
+                    self.assertEqual(x.findtext('./vendorConfig/webAccess'),expected)
+                    self.assertEqual(x.findtext('./vendorConfig/sshAccess'),'1')
+
+    def test_invalid_web_access_is_rejected_before_output(self):
+        for value in ['true','false',0,1,None,[],{}]:
+            with self.subTest(value=value),tempfile.TemporaryDirectory() as tmp:
+                inventory=copy.deepcopy(self.inventory)
+                inventory['phones'][0]['web_access']=value
+                out=Path(tmp)/'not-created'
+                with self.assertRaisesRegex(ValueError,'web_access must be boolean'):
+                    p.generate(self.site,inventory,out)
+                self.assertFalse(out.exists())
+
     def test_no_symlink_write(self):
         with tempfile.TemporaryDirectory() as tmp:
             out=Path(tmp)/'out'

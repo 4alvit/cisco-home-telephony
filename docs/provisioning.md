@@ -25,6 +25,17 @@ file exists in your verified bundle. Do not rename firmware to match the example
 An intermediate SCCP stage requires the separate procedure in the
 [conversion guide](sip-conversion.md); this generator produces the final SIP profile.
 
+Each phone may optionally set `"web_access": true` to keep its HTTP status and
+diagnostic pages available during the pilot. Omit the field or set it to `false`
+to disable the phone's web server. Only JSON booleans are accepted; strings such
+as `"true"`, numbers and `null` are rejected before any output is written.
+This maps to `vendorConfig/webAccess`: **0 enables the web server; 1 disables it**,
+as documented by [USECALLMANAGER](https://usecallmanager.nz/sepmac-cnf-xml.html#webAccess).
+After changing this field, regenerate and deploy the profile, then restart the
+phone so it retrieves the updated configuration. Check its status pages at
+`http://PHONE_IP/` from the management network. The option does not enable SSH
+or change authentication settings.
+
 ## 2. Configure site.json
 
 Use `deploy/site.example.json` as the starting point. `node_ipv4` is the PBX
