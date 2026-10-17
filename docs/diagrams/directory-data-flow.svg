@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 810" role="img" aria-labelledby="title desc">
+  <title id="title">Private directory data flow</title>
+  <desc id="desc">Architecture only. A private inventory is validated and rendered into server configuration. An authenticated gateway exposes scoped directory metadata and current status to the command line. Private names, addresses, physical identifiers and credentials are not included in this diagram.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="#48DDCC"/></marker>
+    <style>
+      text { font-family: Arial, sans-serif; fill: #F5F7FB; }
+      .muted { fill: #ACBBD0; }
+      .teal { fill: #48DDCC; }
+      .gold { fill: #F7CB64; }
+      .card { fill: #172841; stroke: #30465F; stroke-width: 2; }
+    </style>
+  </defs>
+  <rect width="1440" height="810" fill="#101C34"/>
+  <text x="48" y="64" font-size="38" font-weight="700">Private directory data flow</text>
+  <text x="48" y="106" font-size="22" class="muted">Architecture only. Actual device names, locations and numbers remain in private configuration.</text>
+
+  <rect class="card" x="48" y="166" width="294" height="244" rx="16"/>
+  <text x="72" y="211" font-size="25" font-weight="700" class="teal">Private inventory</text>
+  <text x="72" y="258" font-size="21">Device identity</text>
+  <text x="72" y="297" font-size="21">Assigned labels</text>
+  <text x="72" y="336" font-size="21">Stable line mappings</text>
+  <text x="72" y="379" font-size="18" class="muted">Authoritative local source</text>
+
+  <path d="M344,288 H384" fill="none" stroke="#48DDCC" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect class="card" x="398" y="166" width="294" height="244" rx="16"/>
+  <text x="422" y="211" font-size="25" font-weight="700" class="teal">Validate + render</text>
+  <text x="422" y="258" font-size="21">Check exact mappings</text>
+  <text x="422" y="297" font-size="21">Preserve credentials</text>
+  <text x="422" y="336" font-size="21">Review server changes</text>
+  <text x="422" y="379" font-size="18" class="muted">Controlled deployment</text>
+
+  <path d="M694,288 H734" fill="none" stroke="#48DDCC" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect class="card" x="748" y="166" width="294" height="244" rx="16"/>
+  <text x="772" y="211" font-size="25" font-weight="700" class="teal">Authenticated API</text>
+  <text x="772" y="258" font-size="21">Scoped directory data</text>
+  <text x="772" y="297" font-size="21">Fresh service status</text>
+  <text x="772" y="336" font-size="21">Access checks</text>
+  <text x="772" y="379" font-size="18" class="muted">Private gateway boundary</text>
+
+  <path d="M1044,288 H1084" fill="none" stroke="#48DDCC" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect class="card" x="1098" y="166" width="294" height="244" rx="16"/>
+  <text x="1122" y="211" font-size="25" font-weight="700" class="teal">Command line</text>
+  <text x="1122" y="258" font-size="21">Read the directory</text>
+  <text x="1122" y="297" font-size="21">Resolve a selected line</text>
+  <text x="1122" y="336" font-size="21">Use supported actions</text>
+  <text x="1122" y="379" font-size="18" class="muted">No guessed device mapping</text>
+
+  <rect class="card" x="48" y="454" width="650" height="174" rx="16"/>
+  <text x="72" y="495" font-size="25" font-weight="700" class="gold">Keep private</text>
+  <text x="72" y="536" font-size="21">Personal labels, physical identifiers and addresses</text>
+  <text x="72" y="573" font-size="21">Credentials, operational inventory and raw responses</text>
+  <text x="72" y="605" font-size="18" class="muted">Use ignored files and authenticated access.</text>
+
+  <rect class="card" x="722" y="454" width="670" height="174" rx="16"/>
+  <text x="746" y="495" font-size="25" font-weight="700" class="gold">Publish generic material</text>
+  <text x="746" y="536" font-size="21">Source code, schemas and fictional examples</text>
+  <text x="746" y="573" font-size="21">Architecture without a household catalog</text>
+  <text x="746" y="605" font-size="18" class="muted">This diagram contains no individual directory entries.</text>
+
+  <rect x="48" y="674" width="1344" height="92" rx="16" fill="#21334E"/>
+  <text x="72" y="710" font-size="22" font-weight="700">Assigned labels and live availability are separate facts.</text>
+  <text x="72" y="745" font-size="20" class="muted">Directory metadata does not discover physical placement or provision the handset's built-in directory menu.</text>
+</svg>

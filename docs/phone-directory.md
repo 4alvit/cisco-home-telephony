@@ -9,7 +9,7 @@ extensions. Rooms are **operator-assigned destinations**, not locations detected
 from the switch, DHCP, SIP registration or a floor plan. A phone can remain
 registered while it is temporarily sitting in another room.
 
-![Fictional room directory and the shared directory data path](diagrams/phone-directory.svg)
+![Private inventory, validated configuration, authenticated API and command-line data flow](diagrams/directory-data-flow.svg)
 
 ## Example directory
 
