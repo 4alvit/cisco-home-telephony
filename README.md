@@ -1,8 +1,7 @@
 # Cisco 7945G: home telephony with Asterisk and k3s
 
-A complete guide for a batch of **10 × Cisco 7945G** phones bought on eBay.
-The model was confirmed in the delivery email dated **December 1, 2022**.
-See [purchase evidence](docs/purchase-evidence.md).
+A practical guide to converting **Cisco 7945G** phones to SIP and running them
+with Asterisk on k3s, integrated with Home Assistant.
 
 ![Cisco 7945G desk phone with two line buttons](assets/photos/cisco-7945g.jpg)
 

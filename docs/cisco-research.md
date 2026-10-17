@@ -1,9 +1,7 @@
-# Verified facts about the Cisco batch
+# Verified facts about the Cisco 7945G
 
-Reviewed October 16, 2026. Gmail confirmed a batch of **10 × Cisco 7945G** phones
-with handsets and stands, delivered December 1, 2022. This identifies the order's
-model, not the phones' current condition, MACs, hardware revisions or firmware.
-Check each label before a batch rollout.
+Reviewed October 16, 2026. Check each phone's model, condition, MAC address,
+hardware revision and current firmware before a batch rollout.
 
 - **The 7945G has a color display, two line keys, Gigabit Ethernet, SCCP and SIP
   support.** This model does not support a KEM. See the
