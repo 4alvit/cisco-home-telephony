@@ -4,6 +4,15 @@ A complete guide for a batch of **10 × Cisco 7945G** phones bought on eBay.
 The model was confirmed in the delivery email dated **December 1, 2022**.
 See [purchase evidence](docs/purchase-evidence.md).
 
+![Cisco 7945G desk phone with two line buttons](assets/photos/cisco-7945g.jpg)
+
+*Cisco 7945G model reference photo by
+[-stk](https://commons.wikimedia.org/wiki/User:-stk),
+[Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Cisco_IP_Phone_7945_P1110468.jpg),
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+This illustrates the model, not an individual phone in our installation.
+See [photo attribution](assets/photos/README.md).*
+
 **These phones already support IEEE 802.3af PoE.** No hardware modification is
 needed. Use a PoE switch or a compatible active injector, connected to the
 **SW** port. Asterisk uses the native **7945/7965 SIP firmware (SIP45)**;
