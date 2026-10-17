@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate local Cisco 7945G XML and Asterisk PJSIP configuration. Stdlib only."""
+"""Generate Cisco 7945G/PBX configuration, or explicitly bootstrap only the PBX."""
 import argparse
 import ipaddress
 import json
@@ -89,12 +89,16 @@ writetimeout=5000
 """
 
 
-def validate(site, inventory):
+def validate(site, inventory, *, pbx_only=False):
     ha_settings(site)
     ip = ipaddress.IPv4Address(site["node_ipv4"])
     net = ipaddress.IPv4Network(site["lan_cidr"], strict=True)
     if ip not in net or ip in (net.network_address, net.broadcast_address):
         raise ValueError("node_ipv4 must be a usable address in lan_cidr")
+    if pbx_only:
+        if inventory is not None:
+            raise ValueError("PBX-only mode does not accept a phone inventory")
+        return [], None
     ntp = str(ipaddress.IPv4Address(site["ntp_ipv4"]))
     phones = inventory["phones"]
     if not 1 <= len(phones) <= 50:
@@ -184,14 +188,17 @@ def phone_xml(phone, ip, ntp, password):
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(d,encoding="unicode")+'\n'
 
 
-def generate(site, inventory, out):
-    phones,ntp = validate(site,inventory)
+def generate(site, inventory, out, *, pbx_only=False):
+    phones,ntp = validate(site,inventory,pbx_only=pbx_only)
     out=Path(out)
+    if pbx_only and any((out/name).exists() or (out/name).is_symlink()
+                        for name in ("tftp", "secrets.json")):
+        raise ValueError("PBX-only mode requires an output without phone artifacts; use a separate directory")
     out.mkdir(parents=True,exist_ok=True,mode=0o700)
     if out.is_symlink():
         raise ValueError("output root cannot be a symlink")
     out.chmod(0o700)
-    for folder in ("asterisk","tftp"):
+    for folder in (("asterisk",) if pbx_only else ("asterisk","tftp")):
         p=out/folder
         if p.is_symlink():
             raise ValueError("output directories cannot be symlinks")
@@ -203,7 +210,8 @@ def generate(site, inventory, out):
         passwords.setdefault(p["extension"],secrets.token_hex(15))
         if not re.fullmatch(r"[A-Za-z0-9]{24,30}", passwords[p["extension"]]):
             raise ValueError("secret must be 24..30 alphanumeric characters")
-    private_write(secret_path,json.dumps(passwords,indent=2)+'\n')
+    if not pbx_only:
+        private_write(secret_path,json.dumps(passwords,indent=2)+'\n')
     ip=site["node_ipv4"]
     ha=ha_settings(site)
     pjsip=['[global]\ntype=global\nuser_agent=HomePBX\n',f'[transport-udp]\ntype=transport\nprotocol=udp\nbind={ip}:5060\nlocal_net={site["lan_cidr"]}\n',f'[transport-tcp]\ntype=transport\nprotocol=tcp\nbind={ip}:5060\nlocal_net={site["lan_cidr"]}\n']
@@ -255,15 +263,19 @@ qualify_frequency=60
             if old.is_symlink():
                 raise ValueError("refusing stale symlink")
             old.unlink()
-    ring='&'.join('PJSIP/'+p['extension'] for p in phones)
-    dial.append(f'''exten => 600,1,Answer()
+    dial.append('''exten => 600,1,Answer()
  same => n,Echo()
  same => n,Hangup()
 exten => 601,1,Answer()
  same => n,Milliwatt()
  same => n,Hangup()
-exten => 620,1,Dial({ring},25)
+''')
+    if phones:
+        ring='&'.join('PJSIP/'+p['extension'] for p in phones)
+        dial.append(f'''exten => 620,1,Dial({ring},25)
  same => n,Hangup()
+''')
+    dial.append('''
 ; Internal service only. No emergency or PSTN route is configured.
 exten => _X!,1,Hangup(1)
 ''')
@@ -320,23 +332,30 @@ exten => s,1,Hangup(21)
 """
     for name,body in configs.items():
         private_write(out/"asterisk"/name,body)
-    assist_template = '  <TEMPLATE MATCH="630" Timeout="0"/>\n' if assist else ''
-    private_write(out/"tftp"/"dialplan.xml",'<DIALTEMPLATE>\n  <TEMPLATE MATCH="2.." Timeout="0"/>\n  <TEMPLATE MATCH="600" Timeout="0"/>\n  <TEMPLATE MATCH="601" Timeout="0"/>\n  <TEMPLATE MATCH="620" Timeout="0"/>\n'+assist_template+'</DIALTEMPLATE>\n')
+    if not pbx_only:
+        assist_template = '  <TEMPLATE MATCH="630" Timeout="0"/>\n' if assist else ''
+        private_write(out/"tftp"/"dialplan.xml",'<DIALTEMPLATE>\n  <TEMPLATE MATCH="2.." Timeout="0"/>\n  <TEMPLATE MATCH="600" Timeout="0"/>\n  <TEMPLATE MATCH="601" Timeout="0"/>\n  <TEMPLATE MATCH="620" Timeout="0"/>\n'+assist_template+'</DIALTEMPLATE>\n')
     return len(phones)
 
 
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--site',default='.local/site.json')
-    ap.add_argument('--inventory',default='.local/phones.json')
+    mode=ap.add_mutually_exclusive_group()
+    mode.add_argument('--inventory',help='verified phone inventory (default: .local/phones.json)')
+    mode.add_argument('--pbx-only',action='store_true',help='bootstrap PBX without phones, Cisco XML or TFTP')
     ap.add_argument('--out',default='.local')
     args=ap.parse_args()
     os.umask(0o077)
     try:
-        count=generate(read_json(args.site),read_json(args.inventory),args.out)
+        inventory = None if args.pbx_only else read_json(args.inventory or '.local/phones.json')
+        count=generate(read_json(args.site),inventory,args.out,pbx_only=args.pbx_only)
     except (ValueError,KeyError,OSError,TypeError) as e:
         sys.exit(f'Provisioning stopped: {e}')
-    print(f'Generated {count} phone profiles and PBX configuration in {args.out}; secrets omitted from output.')
+    if args.pbx_only:
+        print(f'Generated PBX-only configuration in {args.out}; no phone profiles or TFTP files; secrets omitted from output.')
+    else:
+        print(f'Generated {count} phone profiles and PBX configuration in {args.out}; secrets omitted from output.')
 
 
 if __name__=='__main__':

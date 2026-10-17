@@ -18,16 +18,25 @@ const S={
  power:'https://www.cisco.com/c/en/us/support/docs/voice-unified-communications/unified-ip-phone-7900-series/97869-poe-requirement-faq.html',
  pjsip:'https://docs.asterisk.org/Configuration/Channel-Drivers/SIP/Configuring-res_pjsip/res_pjsip-Configuration-Examples/',
  k3s:'https://docs.k3s.io/installation/requirements',
- kube:'https://kubernetes.io/docs/concepts/workloads/controllers/deployment/'
+ kube:'https://kubernetes.io/docs/concepts/workloads/controllers/deployment/',
+ ha:'https://github.com/ha-homelab/asterisk-telephony',
+ voip:'https://www.home-assistant.io/integrations/voip/',
+ upstream:'https://github.com/TECH7Fox/asterisk-hass-integration/tree/65ea9d637a58d6edb3b2bc9e8a6f90de896a9b3e',
+ opus:'https://github.com/wazo-platform/wazo-codec-opus-open-source/tree/591b6cd9b75e2b9b6d815ef364a385fccee595a7'
 };
 await Promise.all([out,diagramOut,build].map(p=>fs.mkdir(p,{recursive:true})));
 const rect=(id,x,y,w,h,label,accent=C.teal)=>({id,x,y,w,h,label,accent});
-const edge=(from,to,label='',color=C.teal,fromSide='right',toSide='left')=>({from,to,label,color,fromSide,toSide});
+const edge=(from,to,label='',color=C.teal,fromSide='right',toSide='left',both=false,labelAt=null)=>({from,to,label,color,fromSide,toSide,both,labelAt});
 const diagrams={
- 'architecture':{title:'Cisco 7945G в домашней сети',description:'Телефоны подключаются к одному LAN-адресу k3s-узла. Существующий маршрутизатор раздаёт DHCP. TFTP работает только при provisioning.',
- nodes:[rect('phones',50,290,245,120,'10 × Cisco 7945G\nPoE 802.3af'),rect('switch',350,290,265,120,'Коммутатор PoE\nVoice LAN / VLAN'),rect('router',350,120,265,100,'Маршрутизатор\nDHCP option 150',C.yellow),rect('ast',830,235,365,130,'Asterisk / PJSIP\nSIP TCP+UDP 5060\nRTP UDP 10000–10199'),rect('tftp',830,445,365,105,'TFTP временно\nUDP 69 + 20000–20031',C.coral)],
- edges:[edge('phones','switch'),edge('router','switch','DHCP',C.yellow,'bottom','top'),edge('switch','ast','SIP + RTP'),edge('switch','tftp','загрузка',C.coral)],
- extras:[{x:820,y:180,w:390,h:390,label:'k3s: фиксированный LAN-узел',color:C.muted}], footer:'hostNetwork · одна реплика Asterisk · постоянный LAN IP · без Ingress для SIP/RTP'},
+ 'architecture':{title:'Cisco, Asterisk и Home Assistant',description:'Телефоны питаются через PoE и звонят через Asterisk. Home Assistant подключается к AMI, а Assist принимает SIP/RTP от Asterisk. Существующий DHCP остаётся, TFTP включается временно.',
+ nodes:[rect('phones',45,185,265,120,'10 × Cisco 7945G\nPoE 802.3af'),rect('switch',455,185,290,120,'PoE-коммутатор\nVoice LAN / VLAN'),rect('ast',900,185,330,120,'Asterisk / PJSIP\nфиксированный IP'),rect('router',455,440,290,110,'Маршрутизатор\nDHCP option 150',C.yellow),rect('tftp',45,440,265,110,'TFTP временно\nпрошивка и XML',C.coral),rect('ha',900,440,330,110,'Home Assistant\nAMI + VoIP / Assist',C.yellow)],
+ edges:[edge('phones','switch','Ethernet',C.teal,'right','left',true),edge('switch','ast','SIP / RTP',C.teal,'right','left',true),edge('router','switch','DHCP',C.yellow,'top','bottom',false,[665,382]),edge('tftp','phones','загрузка',C.coral,'top','bottom',false,[235,382]),edge('ast','ha','AMI\nSIP / RTP',C.yellow,'bottom','top',true,[1160,360])],
+ footer:'Asterisk: hostNetwork и одна реплика. HA открывает AMI-соединение к PBX.\nTFTP доступен только при provisioning. SIP, RTP и AMI остаются в LAN / VPN.'},
+ 'assist':{title:'630: голосовой помощник в телефоне',description:'Asterisk преобразует G.711 Cisco в Opus для встроенной VoIP интеграции Home Assistant. AMI не передаёт голос. Реальный звук и распознавание проверяют на пилотном телефоне.',
+ nodes:[rect('cisco',45,210,280,140,'Cisco 7945G\nномер 201\nG.711'),rect('codec',480,210,315,140,'Asterisk\nG.711 ↔ Opus\nномер 630',C.coral),rect('assist',950,210,285,140,'Home Assistant\nVoIP / Assist\nOpus',C.yellow)],
+ edges:[edge('cisco','codec','SIP TCP\nRTP',C.teal,'right','left',true,[402,180]),edge('codec','assist','SIP UDP\nRTP',C.yellow,'right','left',true,[873,180])],
+ annotations:[{x:45,y:435,w:1190,h:85,text:'Первый вызов: Allow calls и выбор pipeline в HA.\nЗатем проверка распознавания, ответа TTS и завершения.',size:28,color:C.white}],
+ footer:'SIP From сохраняет номер телефона. На HA RTP / RTCP используют динамические UDP-порты.\nНастоящий разговор подтверждает пилот с телефоном, а не только readiness Pod.'},
  'commissioning':{title:'Один телефон до всей партии',description:'Обновление проходит ступенчато, если это требуется исходной прошивкой. Загрузка подтверждается на экране телефона.',
  nodes:[rect('inventory',45,195,290,120,'Инвентарь\nPID / HW / Load',C.yellow),rect('firmware',480,195,290,120,'Цепочка версий\nSCCP → SIP',C.coral),rect('tftp',915,195,290,120,'TFTP готов\nпакет + SEP XML'),rect('pilot',915,430,290,120,'Один телефон\nстабильное питание'),rect('accept',480,430,290,120,'Тесты звонков\nзвук / DTMF / reboot'),rect('fleet',45,430,290,120,'Вся партия\nпо одному',C.yellow)],
  edges:[edge('inventory','firmware'),edge('firmware','tftp'),edge('tftp','pilot','',C.teal,'bottom','top'),edge('pilot','accept','',C.teal,'left','right'),edge('accept','fleet','',C.yellow,'left','right')],
@@ -40,10 +49,11 @@ const diagrams={
 const esc=s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
 function port(n,side){return side==='right'?[n.x+n.w,n.y+n.h/2]:side==='left'?[n.x,n.y+n.h/2]:side==='top'?[n.x+n.w/2,n.y]:[n.x+n.w/2,n.y+n.h];}
 function svgText(text,x,y,size,color,anchor='start',weight=400){return `<text x="${x}" y="${y}" font-family="Arial, sans-serif" font-size="${size}" fill="${color}" font-weight="${weight}" text-anchor="${anchor}">${String(text).split('\n').map((v,i)=>`<tspan x="${x}" dy="${i?size*1.3:0}">${esc(v)}</tspan>`).join('')}</text>`;}
-function diagramSvg(d){let s=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc"><title id="title">${esc(d.title)}</title><desc id="desc">${esc(d.description)}</desc><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8" fill="context-stroke"/></marker></defs><rect width="1280" height="720" fill="${C.navy}"/>${svgText(d.title,45,55,34,C.white,'start',700)}`;
+function diagramSvg(d){let s=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc"><title id="title">${esc(d.title)}</title><desc id="desc">${esc(d.description)}</desc><defs>${[C.teal,C.coral,C.yellow].map(c=>`<marker id="arrow-${c.slice(1)}" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8" fill="${c}"/></marker>`).join('')}</defs><rect width="1280" height="720" fill="${C.navy}"/>${svgText(d.title,45,55,34,C.white,'start',700)}`;
  for(const e of d.extras??[])s+=`<rect x="${e.x}" y="${e.y}" width="${e.w}" height="${e.h}" rx="12" fill="none" stroke="${e.color}" stroke-dasharray="7 7"/>${svgText(e.label,e.x+16,e.y+32,20,e.color)}`;
- for(const e of d.edges){const a=port(d.nodes.find(n=>n.id===e.from),e.fromSide),b=port(d.nodes.find(n=>n.id===e.to),e.toSide),mid=(a[0]+b[0])/2;const dpath=a[1]===b[1]||a[0]===b[0]?`M${a} L${b}`:`M${a} H${mid} V${b[1]} H${b[0]}`;s+=`<path d="${dpath}" fill="none" stroke="${e.color}" stroke-width="3" marker-end="url(#arrow)"/>`;if(e.label){const lp=d===diagrams.architecture?(e.from==='router'?[540,260]:e.to==='ast'?[735,263]:[760,425]):[mid,(a[1]+b[1])/2-16];s+=svgText(e.label,lp[0],lp[1],19,e.color,'middle');}}
+ for(const e of d.edges){const a=port(d.nodes.find(n=>n.id===e.from),e.fromSide),b=port(d.nodes.find(n=>n.id===e.to),e.toSide),mid=(a[0]+b[0])/2;const dpath=a[1]===b[1]||a[0]===b[0]?`M${a} L${b}`:`M${a} H${mid} V${b[1]} H${b[0]}`;s+=`<path d="${dpath}" fill="none" stroke="${e.color}" stroke-width="3" ${e.both?`marker-start="url(#arrow-${e.color.slice(1)})"`:''} marker-end="url(#arrow-${e.color.slice(1)})"/>`;if(e.label){const lp=e.labelAt??[mid,(a[1]+b[1])/2-16];s+=svgText(e.label,lp[0],lp[1],19,e.color,'middle');}}
  for(const n of d.nodes)s+=`<rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="10" fill="${C.ink}" stroke="${n.accent}" stroke-width="2"/>${svgText(n.label,n.x+n.w/2,n.y+n.h/2-(n.label.split('\n').length-1)*16+8,24,C.white,'middle',600)}`;
+ for(const a of d.annotations??[])s+=svgText(a.text,a.x,a.y+a.size,a.size,a.color);
  s+=svgText(d.footer,45,660,19,C.muted);return s+'</svg>\n';}
 for(const [name,d] of Object.entries(diagrams))await fs.writeFile(path.join(diagramOut,name+'.svg'),diagramSvg(d));
 if(process.argv.includes('--svg-only')){console.log('SVG diagrams written to docs/diagrams');process.exit(0);}
@@ -63,12 +73,13 @@ function foot(sl,t){text(sl,t,60,625,1070,48,19,C.muted);}
 function diagramSlide(name,notes){const d=diagrams[name],sl=base(d.title,notes);const shapes=new Map();const sc=name==='architecture'?.90:.90,dx=64,dy=35;
  for(const e of d.extras??[]){sl.shapes.add({geometry:'roundRect',position:{left:e.x*sc+dx,top:e.y*sc+dy,width:e.w*sc,height:e.h*sc},fill:'none',line:{fill:e.color,width:1,style:'dashed'}});text(sl,e.label,e.x*sc+dx+14,e.y*sc+dy+13,e.w*sc-20,35,20,e.color);}
  for(const n of d.nodes)shapes.set(n.id,box(sl,n,sc,dx,dy));
- for(const e of d.edges){sl.shapes.connect(shapes.get(e.from),shapes.get(e.to),{kind: (['power','commissioning'].includes(name)?'straight':'elbow'),fromSide:e.fromSide,toSide:e.toSide,line:{fill:e.color,width:3},tail:{type:'triangle',width:'sm',length:'sm'}});if(e.label){const a=port(d.nodes.find(n=>n.id===e.from),e.fromSide),b=port(d.nodes.find(n=>n.id===e.to),e.toSide);const lp=name==='architecture'?(e.from==='router'?[518,244,100]:e.to==='ast'?[644,263,170]:[722,390,150]):[(a[0]+b[0])/2*sc+dx-108,(a[1]+b[1])/2*sc+dy-35,216];text(sl,e.label,lp[0],lp[1],lp[2],32,18,e.color,false,'center');}}
+ for(const e of d.edges){sl.shapes.connect(shapes.get(e.from),shapes.get(e.to),{kind:'straight',fromSide:e.fromSide,toSide:e.toSide,line:{fill:e.color,width:3},...(e.both?{head:{type:'triangle',width:'sm',length:'sm'}}:{}),tail:{type:'triangle',width:'sm',length:'sm'}});if(e.label){const a=port(d.nodes.find(n=>n.id===e.from),e.fromSide),b=port(d.nodes.find(n=>n.id===e.to),e.toSide);const lp=e.labelAt??[(a[0]+b[0])/2,(a[1]+b[1])/2-16];text(sl,e.label,lp[0]*sc+dx-95,lp[1]*sc+dy-22,190,60,18,e.color,false,'center');}}
+ for(const a of d.annotations??[])text(sl,a.text,a.x*sc+dx,a.y*sc+dy,a.w*sc,a.h*sc,a.size*sc,a.color);
  foot(sl,d.footer.replaceAll(' · ','  /  '));return sl;}
 // 01: Minimal title, editable typography.
 {
- const sl=base('', 'Партия: 10 × Cisco 7945G. Модель подтверждена письмом eBay о доставке от 1 декабря 2022 года. Адрес доставки и платёжные данные в репозиторий не включены. Состояние и прошивка каждого сохранившегося аппарата требуют инвентаризации. Дата подготовки: 16 октября 2026 года.');
- text(sl,'Cisco 7945G',60,135,1160,115,80,C.teal,true);text(sl,'Домашняя телефония',60,265,1160,105,61,C.white,true);text(sl,'SIP и Asterisk в k3s',60,400,1100,75,41,C.coral);text(sl,'10 аппаратов с цветным экраном',60,540,1100,60,29,C.muted);}
+ const sl=base('', 'Партия: 10 × Cisco 7945G. Модель подтверждена письмом eBay о доставке от 1 декабря 2022 года. Адрес доставки и платёжные данные в репозиторий не включены. Состояние и прошивка каждого сохранившегося аппарата требуют инвентаризации. Обновлено: 17 октября 2026 года. Слайды описывают план и архитектуру, а не подтверждают установку в доме.');
+ text(sl,'Cisco 7945G',60,135,1160,115,80,C.teal,true);text(sl,'Домашняя телефония',60,265,1160,105,61,C.white,true);text(sl,'Asterisk в k3s + Home Assistant',60,400,1100,75,41,C.coral);text(sl,'10 аппаратов с цветным экраном',60,540,1100,60,29,C.muted);}
 // 02: Inventory facts, not a generic product comparison.
 {
  const sl=base('Наша партия: 10 × Cisco 7945G',`Модель и количество подтверждены письмом eBay о доставке 01.12.2022. Cisco firmware family 7945_7965: ${S.firmware}\nPoE: ${S.power}\nПоддержка SIP подтверждает наличие прошивки. Совместимость функций с Asterisk проверяется в пилоте.`);
@@ -77,13 +88,13 @@ function diagramSlide(name,notes){const d=diagrams[name],sl=base(d.title,notes);
  label(sl,'Перед работой',385,465,790,C.yellow,28);para(sl,'С каждого телефона: PID, VID/HW, MAC,\nApp Load, Boot Load, IP и TFTP.',385,520,805,27,C.white,100);
 }
 // 03: Architecture.
-diagramSlide('architecture',`Проектное решение: одна реплика Asterisk на закреплённом LAN-узле, hostNetwork, постоянный LAN IP. Router DHCP сохраняется существующим. TFTP включается по необходимости. RTP-диапазон является локально выбранным, не универсальным стандартом. Kubernetes: ${S.kube}\nPJSIP: ${S.pjsip}\nСм. docs/k3s-deployment.md и deployment manifests.`);
+diagramSlide('architecture',`Проектное решение: одна реплика Asterisk на закреплённом LAN-узле, hostNetwork, постоянный LAN IP. Существующий router DHCP сохраняется. TFTP включается по необходимости. HA открывает TCP AMI к Asterisk. Для Assist Asterisk открывает SIP к HA VoIP, голос идёт в обе стороны. Home Assistant может работать на отдельном LAN-узле или через существующий VPN, HTTP Ingress не передаёт эти протоколы. Kubernetes: ${S.kube}\nPJSIP: ${S.pjsip}\nHA: ${S.ha}\nVoIP: ${S.voip}\nСм. docs/k3s-deployment.md и docs/home-assistant.md.`);
 // 04: Ports as flat typographic rows.
 {
- const sl=base('Сеть для сигнализации и голоса',`Проектная конфигурация портов: SIP TCP и UDP 5060, RTP UDP 10000–10199. Для tftpd-hpa резервируется UDP 69 и диапазон передачи UDP 20000–20031. Разрешить доступ только нужной LAN/VLAN через host firewall: NetworkPolicy не является единственной защитой для hostNetwork. Для SIP/RTP HTTP Ingress не используется. ${S.pjsip}`);
- const rows=[['5060','TCP + UDP','SIP / регистрация',C.teal],['10000–10199','UDP','RTP / голос',C.teal],['69 + 20000–20031','UDP','TFTP / временно',C.coral]];
- rows.forEach((r,i)=>{const y=180+i*130;text(sl,r[0],60,y,495,60,r[0].length>11?36:43,r[3],true);text(sl,r[1],580,y+7,210,45,28,C.white);text(sl,r[2],805,y+7,410,60,28,C.muted);});
- foot(sl,'Host firewall разрешает телефонную LAN/VLAN. SIP и TFTP не публикуются в интернет.');
+ const sl=base('Сеть для сигнализации и голоса',`Проектные порты на PBX: SIP TCP5060 по умолчанию, UDP5060 opt-in, RTP UDP10000–10199. Для tftpd-hpa UDP69 и UDP20000–20031. AMI TCP5038 только от фактического HA IP/32. HA VoIP слушает SIP UDP5060 либо выбранный порт и динамические RTP/RTCP UDP-порты, доступные только от PBX. Cisco RTP: UDP16384–16482. Firewall должен учитывать обе стороны потока. NetworkPolicy не является единственной защитой hostNetwork. PJSIP: ${S.pjsip}\nVoIP: ${S.voip}\nСм. docs/home-assistant.md.`);
+ const rows=[['5060','TCP / UDP','SIP: Cisco TCP, HA UDP',C.teal],['10000–10199','UDP на PBX','RTP / голос',C.teal],['5038','TCP на PBX','AMI, только HA IP /32',C.yellow],['69 + 20000–20031','UDP на PBX','TFTP / временно',C.coral]];
+ rows.forEach((r,i)=>{const y=170+i*102;text(sl,r[0],60,y,490,60,r[0].length>11?33:41,r[3],true);text(sl,r[1],570,y+7,225,45,26,C.white);text(sl,r[2],805,y+7,420,60,25,C.muted);});
+ foot(sl,'На HA RTP / RTCP динамические. Разрешения firewall ограничивают нужными IP.');
 }
 // 05: Native editable power diagram.
 diagramSlide('power',`Cisco 7945G поддерживает IEEE 802.3af: ${S.power}\nЕсли существующий коммутатор без PoE, нужен активный IEEE 802.3af injector или PoE switch, аппаратная переделка телефона не требуется. Подключать в сетевой порт SW/Network. Проверять бюджет порта и суммарный бюджет коммутатора. Для питания при отключении электроэнергии нужен UPS всей цепочке.`);
@@ -98,49 +109,62 @@ diagramSlide('commissioning',`Универсальной команды factory 
 }
 // 08: Local SIP config.
 {
- const sl=base('Asterisk: свой номер для каждого телефона',`PJSIP examples: ${S.pjsip}\nПроектный baseline: endpoint/auth/aor на каждый аппарат, уникальный пароль, transport согласован с phone XML. TCP+UDP слушатели поддерживают проверку аппаратов. Кодеки G.711 ulaw/alaw, direct_media=no удерживает RTP через Asterisk. NAT-настройки не добавляют без необходимости в плоской LAN. Стартовый сценарий ограничен внутренними звонками без PSTN/SIP trunk.`);
+ const sl=base('Asterisk: свой номер для каждого телефона',`PJSIP examples: ${S.pjsip}\nПроектный baseline: endpoint/auth/aor на каждый аппарат, уникальный пароль, transport согласован с phone XML. TCP по умолчанию, UDP для телефонов включают явно. Кодеки G.711 ulaw/alaw, direct_media=no удерживает RTP через Asterisk. NAT-настройки не добавляют без необходимости в плоской LAN. Стартовый сценарий ограничен внутренними звонками без PSTN/SIP trunk. Тестовые номера 600 echo, 601 tone, 620 ring group, 630 Assist при включённой HA-интеграции.`);
  text(sl,'201',60,195,310,100,74,C.teal,true);text(sl,'202',470,195,310,100,74,C.coral,true);text(sl,'…210',880,195,335,100,74,C.yellow,true);
  para(sl,'TCP, отдельные endpoint, auth и AOR\nУникальный пароль на каждом аппарате',60,355,1100,31,C.white,100);
  para(sl,'G.711 ulaw / alaw\ndirect_media=no для RTP через Asterisk',60,495,1100,29,C.muted,100);
- foot(sl,'Первый этап: внутренние звонки в доме. Внешний SIP trunk настраивается отдельно.');
+ foot(sl,'600 echo, 601 tone, 620 группа. Номер 630 доступен при включённом Assist.');
 }
-// 09: Deployment phases, names synchronized to runbook before final handoff.
+// 09: AMI monitoring and call control are separate from voice transport.
 {
- const sl=base('Развёртывание в домашнем k3s',`См. README.md, docs/k3s-deployment.md, scripts/ и deploy/. namespace: telephony. Команды: python3 scripts/provision.py --site .local/site.json --inventory .local/phones.json; python3 scripts/verify_firmware.py --directory .local/firmware --manifest .local/firmware-manifest.json; scripts/build-images.sh; scripts/deploy.sh (dry-run по умолчанию), scripts/deploy.sh --apply (явное применение). Здесь этапы, а точные команды находятся в runbook. k3s requirements: ${S.k3s}\nЗакрепление узла предотвращает незаметную смену LAN IP телефонии. Одна реплика и Recreate предотвращают одновременную попытку занять hostNetwork-порты. Private registry и imagePullSecret при необходимости.`);
- const steps=[['01','LAN IP + k3s-узел','Фиксированный LAN-узел, проверка свободных портов'],['02','Локальный render','Инвентарь, конфиги, секреты и image digest'],['03','Asterisk','Одна реплика, постоянные данные, health check'],['04','TFTP + пилот','Временный provisioning, затем тесты звонков']];
+ const sl=base('AMI: состояния и управление вызовами',`Установка и пакет HA: ${S.ha}\nПроверенная TECH7Fox Asterisk integration v1.0.5, commit: ${S.upstream}\nHA открывает обычное TCP5038 к PBX, без TLS. Разрешён только фактический адрес источника /32 через LAN или VPN. Отдельные секреты .local/ha-ami-secret.json не входят в Git и phone XML. read=call,dtmf; write=system плюс originate только при allow_originate:true. system нужен upstream для discovery, но также разрешает Hangup и другие административные действия, поэтому это не read-only доступ. Один глобальный service asterisk.send_action на HA, без выбора нескольких PBX. DTMF timestamp-state и атрибут Digit; направления Sent/Received относятся к Asterisk. Registered вычисляется из DeviceState, не заменяет pjsip show contacts. Нужны реальные entity IDs и проверка на двух аппаратах.`);
+ label(sl,'Home Assistant подключается к PBX:5038',60,175,1110,C.teal,34);
+ para(sl,'Статус, связанная линия и DTMF\nФактические entity IDs из вашего HA',60,238,1110,29,C.white,100);
+ label(sl,'Вызов и завершение конкретного канала',60,385,1110,C.yellow,33);
+ para(sl,'asterisk.send_action: Originate / Hangup\nDTMF-пример отправляет безопасное уведомление',60,451,1110,28,C.white,110);
+ foot(sl,'Отдельный секрет и ACL /32. Право system даёт административные действия.');
+}
+// 10: Native editable voice path, also exported as standalone SVG.
+diagramSlide('assist',`Официальная VoIP-интеграция HA: ${S.voip}\nУстановка и приёмка: ${S.ha}\nЗакреплённый Opus transcoder: ${S.opus}\nCisco 7945G использует G.711, проверенная HA 2026.10.2 VoIP требует Opus. Asterisk транскодирует звук в обе стороны через модуль, собранный из исходников Wazo. Проверки translation paths и контейнерные smoke подтверждают серверную часть, не разговор с домашним аппаратом. SIP к Cisco по умолчанию TCP5060, к HA UDP5060 либо явно выбранный порт. PBX RTP10000–10199, у HA динамические RTP/RTCP UDP-порты. Allow calls и выбор pipeline включают для обнаруженного VoIP device. SIP From сохраняет внутренний номер, в том числе при Originate из HA. Проверить STT, ответ TTS, завершение и повторный вызов. AMI передаёт события и команды, голос не передаёт.`);
+// 11: Deployment stages do not claim a completed household installation.
+{
+ const sl=base('Этапы развёртывания и подключения',`См. README.md, docs/pbx-bootstrap.md, docs/k3s-deployment.md, docs/home-assistant.md, scripts/ и deploy/. namespace: telephony. Bootstrap означает подготовку серверной части, образов и сетевых правил до подключения проверенного телефона, а не завершённый звонок. Для него существует явный provision.py --pbx-only, без фиктивных MAC, телефонных endpoint и TFTP. Начальные allow_originate:false и assist.enabled:false сохраняются до проверки условий подключения. Локальные site/inventory и секреты не коммитятся. Перед TFTP нужен фактический инвентарь аппарата и подходящий проверенный firmware. Точные команды генерации и применения брать из актуального runbook. Одна реплика Asterisk и Recreate предотвращают конфликт hostNetwork-портов. HA-компонент сначала staging, затем отдельное окно установки в существующий HA. k3s: ${S.k3s}\nHA: ${S.ha}`);
+ const steps=[['01','Bootstrap сервера','Образы, постоянный IP, firewall, Asterisk и Opus'],['02','Проверенный телефон','PID / HW / Load / MAC, SIP-профиль, временный TFTP'],['03','Подключение Home Assistant','AMI /32, секрет, реальные entity IDs и VoIP pipeline'],['04','Приёмка и расширение','Два аппарата, вызов 630, затем остальные телефоны']];
  steps.forEach((a,i)=>{let y=165+i*111;text(sl,a[0],60,y,80,60,40,[C.teal,C.coral,C.yellow,C.teal][i],true);text(sl,a[1],180,y,1000,48,32,C.white,true);text(sl,a[2],180,y+49,1000,45,25,C.muted);});
 }
-// 10: Acceptance tests.
+// 12: Physical phone acceptance remains explicit.
 {
- const sl=base('Критерии готовности пилота',`Критерии интеграционного тестирования проекта, а не заявление о проведённых проверках реального оборудования. Нужны два телефона. Проверить регистрацию, вызовы 201→202 и 202→201, голос в обе стороны, DTMF/echo test, hold и transfer, корректное время, перезагрузку телефона и контролируемый restart pod. Симуляция или static validation не заменяют проверку на аппаратах.`);
- label(sl,'Регистрация и два направления вызова',60,180,1110,C.teal,34);para(sl,'201 вызывает 202, затем 202 вызывает 201.\nВ каждом вызове слышны оба участника.',60,245,1110,29,C.white,100);
- label(sl,'Поведение после изменений',60,400,1110,C.yellow,34);para(sl,'DTMF, удержание и перевод\nПерезапуск телефона и Asterisk, повторная регистрация',60,465,1110,29,C.white,105);
- foot(sl,'Успешный deploy сам по себе не подтверждает, что голос проходит в обе стороны.');
+ const sl=base('Приёмка с реальными аппаратами',`Критерии проекта, а не заявление о завершённой установке в доме. Нужны два физических аппарата с проверенным инвентарём. Проверить регистрацию pjsip show contacts, вызовы 201→202 и 202→201, звук в обе стороны, DTMF/echo, hold/transfer и время. Затем состояния HA, Originate, Hangup фактического активного Channel и безопасный DTMF notification. DTMF Sent/Received определить на пилоте. Номер 630: Allow calls, pipeline, корректная отдельная идентичность каждого телефона, STT, TTS и завершение. Повторить после cold boot телефона и контролируемого restart PBX/HA. Автоматические runtime/smoke проверки не заменяют физическую приёмку. ${S.ha}/blob/main/docs/acceptance.md`);
+ const steps=[['Телефония','201 и 202: регистрация, двусторонний звук, hold / transfer',C.teal],['Home Assistant','Состояния, Originate, Hangup нужного Channel, DTMF',C.yellow],['Assist 630','Распознавание, ответ голосом и завершение разговора',C.coral]];
+ steps.forEach((a,i)=>{const y=177+i*139;label(sl,a[0],60,y,1110,a[2],34);para(sl,a[1],60,y+61,1110,27,C.white,63);});
+ foot(sl,'Повторить после перезапусков телефона, PBX и HA. Readiness не подтверждает звук.');
 }
-// 11: Operations.
+// 13: Operations.
 {
- const sl=base('Эксплуатация и восстановление',`Проектные эксплуатационные требования. Поддерживается один узел для телефонии, это не высокая доступность. Резервная копия должна включать inventory, секреты, конфиги, persistent Asterisk data и provenance firmware, при необходимости voicemail. Проверять restore на отдельной тестовой среде. При смене LAN IP обновляют provisioning и сетевые правила. Не публиковать SIP-пароли и firmware binaries в Git.`);
- label(sl,'Резервная копия вне Git',60,185,1110,C.teal,34);para(sl,'Инвентарь, секреты, конфиги и данные Asterisk\nВерсия образа и происхождение firmware',60,250,1110,29,C.white,100);
+ const sl=base('Эксплуатация и восстановление',`Проектные эксплуатационные требования. Поддерживается один узел для телефонии, это не высокая доступность. Backup включает inventory, SIP/AMI секреты, конфиги, persistent Asterisk data, provenance firmware, HA config/.storage и entity mapping. Проверять restore отдельно. Не публиковать SIP/AMI пароли и firmware binaries. В HA исключить сырые DTMF/call sensors из Recorder, исключения не удаляют старую историю. Откат home_assistant.enabled:false отключает AMI и маршрут630 после генерации и применения, базовые внутренние звонки остаются. См. docs/operations.md и ${S.ha}/blob/main/docs/privacy.md`);
+ label(sl,'Резервная копия вне Git',60,185,1110,C.teal,34);para(sl,'Инвентарь, SIP / AMI секреты и данные Asterisk\nHA config / .storage, entity mapping, версии образов',60,250,1110,29,C.white,100);
  label(sl,'Один узел означает одну точку отказа',60,410,1110,C.coral,34);para(sl,'UPS для сетевого оборудования и k3s-узла\nПлан восстановления с тем же LAN IP',60,475,1110,29,C.white,100);
- foot(sl,'Секреты и бинарные прошивки хранятся локально или в закрытом хранилище.');
+ foot(sl,'Raw DTMF и связанные линии исключают из Recorder. Старую историю проверяют отдельно.');
 }
-// 12: End with a concrete rollout.
+// 14: End with an explicit distinction between preparation and acceptance.
 {
- const sl=base('Запуск партии по шагам', 'План запуска, реальные телефоны ещё не прошиты и кластер не изменён. Начать с одного аппарата, затем проверить пару, затем подключить остальные. Фактическое количество сохранившихся устройств, App Load, адрес LAN-узла, DHCP router и питание требуют локальной инвентаризации. Репозиторий содержит инструкции, сценарии, SVG и редактируемую презентацию.');
- text(sl,'1',60,185,230,150,105,C.teal,true);text(sl,'2',470,185,230,150,105,C.coral,true);text(sl,'10',880,185,290,150,105,C.yellow,true);
- label(sl,'Один аппарат',60,370,320,C.white,29);label(sl,'Два участника',470,370,340,C.white,29);label(sl,'Вся партия',880,370,310,C.white,29);
- para(sl,'Прошивка\nи регистрация',60,442,330,28,C.muted,100);para(sl,'Двусторонний\nзвонок и DTMF',470,442,330,28,C.muted,100);para(sl,'Последовательное\nподключение',880,442,330,28,C.muted,100);
- foot(sl,'В репозитории: runbook, scripts, manifests, SVG и эта редактируемая презентация.');
+ const sl=base('Готовность сервера и готовность телефонии', 'Состояние реального оборудования фиксируется отдельно в локальном журнале приёмки. Слайды не утверждают, что сервер уже установлен в доме или первый звонок завершён. Фактическое количество сохранившихся устройств, PID/HW/MAC, App Load, сетевые адреса и питание требуют инвентаризации. Успешные автоматические тесты подтверждают компоненты и конфигурацию. Физическая приёмка включает голос, HA call control, DTMF и Assist на реальных телефонах. После пилота подключать оставшуюся партию по одному.');
+ label(sl,'Сервер можно подготовить первым',60,180,1110,C.teal,36);
+ para(sl,'Образы, конфигурация, AMI и Opus\nПроверки подтверждают серверные компоненты',60,248,1110,29,C.white,100);
+ label(sl,'Телефонию подтверждает пилот',60,398,1110,C.coral,36);
+ para(sl,'Инвентарь аппарата, звонок двух участников и Assist\nПосле приёмки подключаются остальные телефоны',60,466,1110,29,C.white,100);
+ foot(sl,'Физическая приёмка остаётся отдельным этапом. Результаты заносятся в локальный журнал.');
 }
 const candidate=path.join(build,'candidate.pptx');await (await PresentationFile.exportPptx(p)).save(candidate);
 const final=path.join(out,'cisco-home-telephony.pptx');
 if(process.env.PRESENTATION_SKILL_DIR){
  const sd=process.env.PRESENTATION_SKILL_DIR;const {finalizePresentation}=await import(pathToFileURL(path.join(sd,'container_tools/artifact_tool_utils.mjs')).href);const validatedDir=path.join(build,'finalized'); await fs.mkdir(validatedDir,{recursive:true}); const validated=path.join(validatedDir,`validated-${Date.now()}.pptx`);
- const result=await finalizePresentation({workspaceDir:root,candidatePath:candidate,finalPath:validated,pythonExecutable:process.env.RUNTIME_PYTHON??'python3',integrityValidatorPath:path.join(sd,'container_tools/inspect_presentation_package_integrity.py'),layoutValidatorPath:path.join(sd,'container_tools/inspect_presentation_layout_geometry.py'),layoutArgs:['--expected-slide-size-emu','12192000,6858000','--validate-bullet-geometry','--validate-heading-fit'],explicitTotalSlideCount:12,requiredNativeTableOwnerSlides:[],requiredNativeChartOwnerSlides:[],fontPolicy:{basis:'design',families:[FONT]},verifyArtifactToolImport:true,receiptPath:path.join(build,`validation-${Date.now()}.json`)});
+ const result=await finalizePresentation({workspaceDir:root,candidatePath:candidate,finalPath:validated,pythonExecutable:process.env.RUNTIME_PYTHON??'python3',integrityValidatorPath:path.join(sd,'container_tools/inspect_presentation_package_integrity.py'),layoutValidatorPath:path.join(sd,'container_tools/inspect_presentation_layout_geometry.py'),layoutArgs:['--expected-slide-size-emu','12192000,6858000','--validate-bullet-geometry','--validate-heading-fit'],explicitTotalSlideCount:14,requiredNativeTableOwnerSlides:[],requiredNativeChartOwnerSlides:[],fontPolicy:{basis:'design',families:[FONT]},verifyArtifactToolImport:true,receiptPath:path.join(build,`validation-${Date.now()}.json`)});
  await fs.copyFile(validated,final);console.log('PPTX structural validation and import passed.');
 }else await fs.copyFile(candidate,final);
 for(const [i,sl] of p.slides.items.entries())await bytes(path.join(build,`slide-${String(i+1).padStart(2,'0')}.png`),await p.export({slide:sl,format:'png',scale:1}));
 await bytes(path.join(build,'montage.webp'),await p.export({format:'webp',montage:true,scale:.5}));
+await fs.copyFile(path.join(build,'montage.webp'),path.join(out,'preview.webp'));
 try {
  await bytes(path.join(out,'cisco-home-telephony.pdf'),await p.export({format:'pdf'}));
 } catch (err) {
@@ -152,4 +176,4 @@ try {
  } catch (pdfErr) { throw new Error('PPTX created. PDF export needs a working LibreOffice: set SOFFICE to its executable.',{cause:pdfErr}); }
 }
 await fs.writeFile(path.join(build,'content.ndjson'),(await p.inspect({kind:'slide,textbox,shape,notes',maxChars:2000000})).ndjson);
-console.log('Created 12-slide PPTX + PDF and 3 editable SVG diagrams.');
+console.log('Created 14-slide PPTX + PDF and 4 editable SVG diagrams.');

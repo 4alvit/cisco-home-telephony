@@ -34,6 +34,9 @@
 4. [Собрать образы и развернуть Asterisk/TFTP в k3s](docs/k3s-deployment.md).
 5. [Проверить звонки, закрыть TFTP, сохранить резервную копию](docs/operations.md).
 
+До физической инвентаризации можно отдельно [подготовить PBX и AMI](docs/pbx-bootstrap.md)
+через `provision.py --pbx-only`: без выдуманных телефонов, Cisco XML и TFTP.
+
 **Перед reset/flash:** для 7945G аппаратной версии **13.0 и новее** нельзя
 откатываться ниже **9.3(1)SR3**. Популярная инструкция «всем сначала 8.5(2)» опасна
 для этих ревизий. Текущую прошивку и hardware revision смотрят на каждом телефоне.
@@ -111,7 +114,7 @@ artifact uploads или увеличенные cache quotas. Бесплатно�
 записью, ACL на один IP и внутренний маршрут к Assist. HA-пакеты, панель, установка
 проверенной версии существующей интеграции и SVG-схемы находятся в публичном
 [ha-homelab/asterisk-telephony](https://github.com/ha-homelab/asterisk-telephony).
-Новый репозиторий создаётся через существующий Terraform организации.
+Репозиторий создан через существующий [Terraform организации](https://github.com/4alvit/terraform-github-ha-homelab/blob/main/asterisk-telephony.tf).
 
 Для Assist образ содержит собранный из исходников Opus transcoder: Cisco использует
 G.711, а встроенный VoIP Home Assistant — Opus. AMI выключен по умолчанию;
