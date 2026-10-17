@@ -10,7 +10,7 @@ import sys
 import xml.etree.ElementTree as ET
 from render_k3s import load_site, read_files, read_wallpaper, render_core, render_tftp
 from verify_firmware import verify as verify_firmware
-from provision import ha_settings, phone_networks, local_networks, radio_settings, service_dialplan, gateway_settings, external_sip, alert_dialplan, softphones
+from provision import ha_settings, phone_networks, local_networks, radio_settings, service_dialplan, gateway_settings, external_sip, alert_dialplan, intercom_dialplan, softphones
 
 
 def check_service_config(site, configs):
@@ -36,6 +36,14 @@ def check_service_config(site, configs):
         raise ValueError('Stale or duplicate alert context; rerun provision.py')
     if re.search(r'^\s*include\s*=>\s*cisco-alert\b', dialplan, re.M | re.I):
         raise ValueError('Alert context must not be reachable through a dialplan include')
+    intercom = intercom_dialplan(site, extensions)
+    intercom_contexts = re.findall(r'^\[cisco-intercom\][^\n]*\n.*?(?=^\[|\Z)', dialplan, re.M | re.S | re.I)
+    if intercom and (len(intercom_contexts) != 1 or intercom_contexts[0].strip() != intercom.strip()):
+        raise ValueError('Intercom helper differs from inventoried endpoints; rerun provision.py')
+    if not intercom and intercom_contexts:
+        raise ValueError('Stale or duplicate intercom context; rerun provision.py')
+    if re.search(r'^\s*include\s*=>\s*cisco-intercom\b', dialplan, re.M | re.I):
+        raise ValueError('Intercom context must not be reachable through a dialplan include')
 
 
 def check_phone_config(site, configs):

@@ -101,6 +101,21 @@ exten => s,1,Set(GOSUB_RESULT=ABORT)
     return ''.join(parts)
 
 
+def intercom_dialplan(site, extensions):
+    """AMI-only source legs: never follow a phone's SIP redirect."""
+    if not gateway_settings(site) or not extensions:
+        return ''
+    extensions = sorted(set(extensions))
+    if any(not isinstance(ext, str) or not re.fullmatch(r'2[0-9]{2}', ext) for ext in extensions):
+        raise ValueError('intercom sources must be inventoried Cisco extensions')
+    parts = ['\n[cisco-intercom]\n']
+    for extension in extensions:
+        parts.append(f'''exten => {extension},1,Dial(PJSIP/{extension},8,i)
+ same => n,Hangup()
+''')
+    return ''.join(parts)
+
+
 def read_json(path):
     return json.loads(Path(path).read_text())
 
@@ -664,6 +679,8 @@ exten => s,1,Hangup(21)
 """
     configs["pjsip.conf"] += external["pjsip"]
     configs["extensions.conf"] += external["dialplan"]
+    configs["extensions.conf"] += intercom_dialplan(
+        site, [line["extension"] for phone in phones for line in phone_lines(phone)])
     configs["extensions.conf"] += alert_dialplan(
         site, [line["extension"] for phone in phones for line in phone_lines(phone)])
     service_numbers += external["numbers"]

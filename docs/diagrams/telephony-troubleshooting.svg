@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1150" viewBox="0 0 1440 1150" role="img" aria-labelledby="title desc">
+  <title id="title">Troubleshoot Cisco calling by layer</title>
+  <desc id="desc">Start with read-only CLI status and the current directory. Diagnose four separate layers: CLI-to-gateway authentication and transport, SIP registration with Asterisk, call signaling and policies, then RTP audio. Separate call control problems use phone web access, authenticated Execute callbacks and AMI state. An accepted action is not proof of connection; a connected bridge is not proof that audio was heard. Do not blindly retry an uncertain mutation.</desc>
+  <defs>
+    <style>
+      text { font-family: Arial, Helvetica, sans-serif; fill: #f3f7ff; }
+      .muted { fill: #b9c8dd; }
+      .teal { fill: #54e1ce; }
+      .gold { fill: #ffda7a; }
+      .purple { fill: #c1acff; }
+      .blue { fill: #86c9ff; }
+      .mono { font-family: 'Courier New', monospace; }
+      .card { fill: #172b47; stroke: #324b6c; stroke-width: 2; }
+    </style>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#b9c8dd"/></marker>
+  </defs>
+  <rect width="1440" height="1150" rx="20" fill="#0e1b31"/>
+  <rect x="48" y="45" width="64" height="6" rx="3" fill="#86c9ff"/>
+  <text x="48" y="100" font-size="40" font-weight="700">Find the failing layer before changing settings</text>
+  <text x="48" y="143" font-size="23" class="muted">Registration, call signaling, audio and phone control are different paths.</text>
+  <rect x="48" y="180" width="1344" height="90" rx="16" fill="#173e43"/>
+  <text x="74" y="216" font-size="22" class="teal" font-weight="700">START READ-ONLY</text>
+  <text x="74" y="250" font-size="21" class="mono">cisco 213</text>
+  <text x="345" y="250" font-size="21" class="mono">cisco directory</text>
+  <text x="742" y="250" font-size="20">Confirm the selected line, host phone and current state.</text>
+
+  <rect class="card" x="48" y="316" width="300" height="367" rx="18" style="stroke:#86c9ff"/>
+  <text x="70" y="357" font-size="22" class="blue" font-weight="700">1 · API ACCESS</text>
+  <text x="70" y="396" font-size="23" font-weight="700">CLI cannot read status</text>
+  <path d="M70 420H326" stroke="#324b6c"/>
+  <text x="70" y="456" font-size="20" class="muted">Config + token permissions</text>
+  <text x="70" y="490" font-size="20" class="muted">Private gateway address</text>
+  <text x="70" y="524" font-size="20" class="muted">Allowed source + firewall</text>
+  <text x="70" y="568" font-size="20" class="blue">For Kubernetes:</text>
+  <text x="70" y="602" font-size="20" class="muted">One matching Ready pod</text>
+  <text x="70" y="636" font-size="20" class="muted">Python 3 + list / exec RBAC</text>
+
+  <path d="M352 492H384" stroke="#b9c8dd" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect class="card" x="396" y="316" width="300" height="367" rx="18" style="stroke:#54e1ce"/>
+  <text x="418" y="357" font-size="22" class="teal" font-weight="700">2 · REGISTRATION</text>
+  <text x="418" y="396" font-size="23" font-weight="700">Phone is unavailable</text>
+  <path d="M418 420H674" stroke="#324b6c"/>
+  <text x="418" y="456" font-size="20" class="muted">PoE, link and phone address</text>
+  <text x="418" y="490" font-size="20" class="muted">SIP firmware + line config</text>
+  <text x="418" y="524" font-size="20" class="muted">Server, user and password</text>
+  <text x="418" y="568" font-size="20" class="teal">Inspect in Asterisk:</text>
+  <text x="418" y="602" font-size="18" class="mono">pjsip show endpoints</text>
+  <text x="418" y="636" font-size="18" class="mono">pjsip show contacts</text>
+
+  <path d="M700 492H732" stroke="#b9c8dd" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect class="card" x="744" y="316" width="300" height="367" rx="18" style="stroke:#c1acff"/>
+  <text x="766" y="357" font-size="22" class="purple" font-weight="700">3 · SIGNALING</text>
+  <text x="766" y="396" font-size="23" font-weight="700">Call does not connect</text>
+  <path d="M766 420H1022" stroke="#324b6c"/>
+  <text x="766" y="456" font-size="20" class="muted">Destination is allowed</text>
+  <text x="766" y="490" font-size="20" class="muted">DND + busy sibling lines</text>
+  <text x="766" y="524" font-size="20" class="muted">Dialplan route + SIP reply</text>
+  <text x="766" y="568" font-size="20" class="purple">Inspect in Asterisk:</text>
+  <text x="766" y="602" font-size="18" class="mono">core show channels</text>
+  <text x="766" y="636" font-size="18" class="mono">dialplan show home</text>
+
+  <path d="M1048 492H1080" stroke="#b9c8dd" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect class="card" x="1092" y="316" width="300" height="367" rx="18" style="stroke:#ffda7a"/>
+  <text x="1114" y="357" font-size="22" class="gold" font-weight="700">4 · AUDIO</text>
+  <text x="1114" y="396" font-size="23" font-weight="700">Connected, but silent</text>
+  <path d="M1114 420H1370" stroke="#324b6c"/>
+  <text x="1114" y="456" font-size="20" class="muted">Speaker / headset volume</text>
+  <text x="1114" y="490" font-size="20" class="muted">Microphone permission</text>
+  <text x="1114" y="524" font-size="20" class="muted">SDP address + RTP route</text>
+  <text x="1114" y="558" font-size="20" class="muted">Firewall + common codec</text>
+  <text x="1114" y="602" font-size="20" class="gold">When a test is appropriate:</text>
+  <text x="1114" y="636" font-size="20" class="mono">cisco 213 call 600</text>
+
+  <text x="48" y="742" font-size="27" font-weight="700">If calls work but remote controls fail</text>
+  <rect class="card" x="48" y="770" width="660" height="172" rx="16"/>
+  <text x="74" y="811" font-size="22" class="blue" font-weight="700">PHONE CONTROL PATH</text>
+  <text x="74" y="849" font-size="20" class="muted">Gateway → phone web Execute → authentication callback</text>
+  <text x="74" y="883" font-size="20" class="muted">Check web access, control credentials and callback reachability.</text>
+  <text x="74" y="917" font-size="20" class="muted">A reachable web status page alone does not prove control works.</text>
+  <rect class="card" x="732" y="770" width="660" height="172" rx="16"/>
+  <text x="758" y="811" font-size="22" class="purple" font-weight="700">EXACT CALL STATE</text>
+  <text x="758" y="849" font-size="20" class="muted">Answer / Hangup need one fresh, unambiguous selected-line call.</text>
+  <text x="758" y="883" font-size="20" class="muted">Intercom needs two idle Cisco phones, DND off and no alerts.</text>
+  <text x="758" y="917" font-size="20" class="muted">Read current state again if another line or user action intervenes.</text>
+
+  <rect x="48" y="976" width="1344" height="111" rx="16" fill="#253046" stroke="#695a38" stroke-width="2"/>
+  <text x="74" y="1014" font-size="22" class="gold" font-weight="700">TIMEOUT OR UNKNOWN RESULT: INSPECT BEFORE RETRYING</text>
+  <text x="74" y="1051" font-size="20">An accepted action may still be in progress. Preserve its action ID; do not create an automatic redial or alert loop.</text>
+  <text x="48" y="1123" font-size="18" class="muted">Keep real inventory, endpoint addresses, logs and credentials private. Redact diagnostics before sharing them.</text>
+</svg>

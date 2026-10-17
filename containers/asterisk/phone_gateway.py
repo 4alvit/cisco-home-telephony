@@ -330,10 +330,12 @@ class Gateway:
 
     @staticmethod
     def intercom_channels(root, channels):
-        return [item for item in channels if root in (item.get('Uniqueid'), item.get('Linkedid'))]
+        roots = {root, root + '-b'}
+        return [item for item in channels if roots.intersection((item.get('Uniqueid'), item.get('Linkedid')))]
 
     def is_intercom_channel(self, channel):
-        return any(self.db.execute('SELECT 1 FROM intercoms WHERE root=?', (identity,)).fetchone()
+        return any(self.db.execute('SELECT 1 FROM intercoms WHERE root=? OR root || ? = ?',
+                                   (identity, '-b', identity)).fetchone()
                    for identity in (channel.get('Uniqueid'), channel.get('Linkedid')) if identity)
 
     def stop_intercom(self, ami, root):
@@ -376,9 +378,12 @@ class Gateway:
         self.db.execute('INSERT INTO intercoms VALUES (?, ?, ?)', (root, 'starting', time.time()))
         self.db.commit()
         try:
-            # Direct, allowlisted Cisco peer only; ignore call forwarding. The
-            # supplied ChannelId ties both legs to this one operation, not to CID.
-            ami.action('Originate', Channel='PJSIP/' + line, ChannelId=root,
+            # Both source and destination use Dial(...,i). A direct PJSIP
+            # Originate can follow a source redirect and discard its assigned ID.
+            # Allow Local optimization so the final physical legs share a bridge;
+            # their Linkedid retains one of these explicit operation identities.
+            ami.action('Originate', Channel='Local/' + line + '@cisco-intercom',
+                       ChannelId=root, OtherChannelId=root + '-b',
                        Application='Dial', Data='PJSIP/' + destination + ',8,i',
                        CallerID=(phone.get('room') or line) + ' <' + line + '>',
                        Timeout='8000', Async='true')

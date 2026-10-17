@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1150" viewBox="0 0 1440 1150" role="img" aria-labelledby="title desc">
+  <title id="title">Cisco intercom: exact lines, speaker answer and one confirmed bridge</title>
+  <desc id="desc">The example command cisco 213 intercom 220 connects two distinct Cisco phones. Both phones must be idle and available, with DND disabled and no active alerts. The gateway originates from exact line 213 to allowed line 220 and requests Speaker once on each isolated incoming call. Success requires both owned channels to be Up in the same Asterisk bridge. Persistent auto-answer preferences are unchanged. Uncertain or failed setup requires a status check before any retry.</desc>
+  <defs>
+    <style>
+      text { font-family: Arial, Helvetica, sans-serif; fill: #f3f7ff; }
+      .muted { fill: #b9c8dd; }
+      .teal { fill: #54e1ce; }
+      .gold { fill: #ffda7a; }
+      .purple { fill: #c1acff; }
+      .mono { font-family: 'Courier New', monospace; }
+      .card { fill: #172b47; stroke: #324b6c; stroke-width: 2; }
+    </style>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0 0 8 4 0 8Z" fill="#54e1ce"/></marker>
+  </defs>
+  <rect width="1440" height="1150" rx="20" fill="#0e1b31"/>
+  <rect x="48" y="45" width="64" height="6" rx="3" fill="#c1acff"/>
+  <text x="48" y="100" font-size="40" font-weight="700">Intercom: connect both phones on speaker</text>
+  <text x="48" y="143" font-size="23" class="muted">No manual acceptance. Exact selected lines. Persistent auto-answer stays unchanged.</text>
+  <rect x="48" y="183" width="1344" height="92" rx="16" fill="#252744" stroke="#66588b" stroke-width="2"/>
+  <text x="76" y="238" font-size="31" class="mono purple">cisco 213 intercom 220</text>
+  <text x="916" y="237" font-size="21" class="muted">Alias: cisco 213 drop-in 220</text>
+
+  <rect x="48" y="304" width="432" height="88" rx="14" fill="#173e43"/>
+  <text x="70" y="341" font-size="22" class="teal" font-weight="700">Two distinct Cisco phones</text>
+  <text x="70" y="373" font-size="19">Destination line is in the dial allowlist.</text>
+  <rect x="504" y="304" width="432" height="88" rx="14" fill="#173e43"/>
+  <text x="526" y="341" font-size="22" class="teal" font-weight="700">Both available and idle</text>
+  <text x="526" y="373" font-size="19">No active calls or alerts on either phone.</text>
+  <rect x="960" y="304" width="432" height="88" rx="14" fill="#173e43"/>
+  <text x="982" y="341" font-size="22" class="teal" font-weight="700">DND off · handsets on-hook</text>
+  <text x="982" y="373" font-size="19">A brief ring can precede speaker answer.</text>
+
+  <rect class="card" x="48" y="439" width="358" height="268" rx="18" style="stroke:#54e1ce"/>
+  <text x="74" y="480" font-size="20" class="teal" font-weight="700">PHONE A · SELECTED SOURCE</text>
+  <text x="74" y="526" font-size="30" class="mono">Line 213</text>
+  <rect x="74" y="551" width="306" height="57" rx="10" fill="#0e1b31"/>
+  <text x="227" y="588" text-anchor="middle" font-size="23">Incoming leg → Speaker</text>
+  <text x="74" y="648" font-size="20" class="muted">Owned channel: Up</text>
+  <text x="74" y="679" font-size="20" class="muted">Keep exact line identity.</text>
+
+  <path d="M418 569H482" stroke="#54e1ce" stroke-width="3" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <rect class="card" x="500" y="439" width="440" height="268" rx="18" style="stroke:#c1acff"/>
+  <text x="720" y="480" text-anchor="middle" font-size="22" class="purple" font-weight="700">ASTERISK</text>
+  <text x="720" y="526" text-anchor="middle" font-size="29" font-weight="700">One two-way bridge</text>
+  <rect x="524" y="551" width="392" height="57" rx="10" fill="#0e1b31"/>
+  <text x="720" y="588" text-anchor="middle" font-size="23" class="mono">BridgeId A = BridgeId B</text>
+  <text x="720" y="648" text-anchor="middle" font-size="20" class="muted">Gateway checks both channel identities.</text>
+  <text x="720" y="679" text-anchor="middle" font-size="20" class="teal">Then reports: connected</text>
+
+  <path d="M952 569H1016" stroke="#54e1ce" stroke-width="3" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <rect class="card" x="1034" y="439" width="358" height="268" rx="18" style="stroke:#54e1ce"/>
+  <text x="1060" y="480" font-size="20" class="teal" font-weight="700">PHONE B · DESTINATION</text>
+  <text x="1060" y="526" font-size="30" class="mono">Line 220</text>
+  <rect x="1060" y="551" width="306" height="57" rx="10" fill="#0e1b31"/>
+  <text x="1213" y="588" text-anchor="middle" font-size="23">Incoming leg → Speaker</text>
+  <text x="1060" y="648" font-size="20" class="muted">Owned channel: Up</text>
+  <text x="1060" y="679" font-size="20" class="muted">Call forwarding is ignored.</text>
+
+  <text x="48" y="765" font-size="27" font-weight="700">The gateway manages this operation only</text>
+  <rect class="card" x="48" y="792" width="432" height="158" rx="16"/>
+  <text x="70" y="829" font-size="22" class="purple" font-weight="700">One operation identity</text>
+  <text x="70" y="863" font-size="20" class="muted">Unique AMI ChannelId links both legs.</text>
+  <text x="70" y="896" font-size="20" class="muted">Caller ID alone is never trusted.</text>
+  <text x="70" y="929" font-size="20" class="muted">No softphone or external targets.</text>
+  <rect class="card" x="504" y="792" width="432" height="158" rx="16"/>
+  <text x="526" y="829" font-size="22" class="purple" font-weight="700">Fresh checks before control</text>
+  <text x="526" y="863" font-size="20" class="muted">Speaker once per isolated ringing leg.</text>
+  <text x="526" y="896" font-size="20" class="muted">A concurrent call aborts setup.</text>
+  <text x="526" y="929" font-size="20" class="muted">No persistent preference is changed.</text>
+  <rect class="card" x="960" y="792" width="432" height="158" rx="16"/>
+  <text x="982" y="829" font-size="22" class="purple" font-weight="700">Finish or inspect</text>
+  <text x="982" y="863" font-size="20" class="mono">cisco 213 hangup</text>
+  <text x="982" y="896" font-size="20" class="muted">Failed setup cleans up its own legs.</text>
+  <text x="982" y="929" font-size="20" class="muted">Unknown result? Read status first.</text>
+
+  <rect x="48" y="982" width="1344" height="106" rx="16" fill="#253046" stroke="#695a38" stroke-width="2"/>
+  <text x="74" y="1020" font-size="21" class="gold" font-weight="700">CONNECTED IS A SIGNALING RESULT</text>
+  <text x="74" y="1057" font-size="20">The gateway cannot read speaker volume or prove that audio was heard. User actions may change the audio output.</text>
+  <text x="48" y="1123" font-size="18" class="muted">Example phones and extensions only. This local intercom feature does not connect to Google or Alexa.</text>
+</svg>

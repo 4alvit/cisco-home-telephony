@@ -5,7 +5,7 @@
 The optional gateway connects HA to the existing local Cisco phones. It supports
 numeric dialing, answering a selected ringing line, exact-channel hangup,
 explicit speaker-button toggling, PBX Do Not Disturb, opt-in auto-answer, text
-pages and photographs. The separate `cisco_phone_control` HA integration supplies
+pages, photographs and one-time speaker intercom calls. The separate `cisco_phone_control` HA integration supplies
 entities and recurring alarms/timers. Scheduled alerts keep the phone ringing
 until a person answers, rejects the call or presses **Stop alert**. They never
 auto-answer and play no audio after an answer. A button press is not evidence
@@ -140,6 +140,41 @@ busy, DND or stale/ambiguous ownership; an unavailable dependency returns503.
 An ambiguous network outcome is never retried automatically. Reusing a completed
 idempotency key returns its recorded result; a pending key returns a conflict.
 Retain keys for one logical timer/alarm occurrence, not across different events.
+
+### Intercom deployment and call ownership
+
+Intercom requires a coordinated update of **the gateway image and the generated
+Asterisk configuration**. Regenerate the private configuration with the matching
+`scripts/provision.py` and preserve the existing phone, AMI and gateway secrets.
+The deployed dialplan must contain the private `cisco-intercom` helper. Updating
+only the CLI or only the gateway does not install that helper. Use the
+[Asterisk operations guide](asterisk-operations.md) to validate and deploy the
+generated configuration.
+
+The gateway originates `Local/<selected-line>@cisco-intercom` for the selected
+source line. With the gateway enabled, provisioning generates exact helper
+entries only for configured physical Cisco lines, each using
+`Dial(PJSIP/<line>,8,i)` followed by `Hangup`. The `i` option ignores call
+forwarding. The destination leg also uses `Dial` with `i`. Both legs therefore
+stay on the two selected endpoints; a forwarded source must not become an
+unintended external call. The helper is private and must not be included in
+the normal `home` context.
+
+Keep normal Local-channel optimization enabled for this path: do not append
+`/n` as the separate alert path does. After both Cisco legs answer, optimization
+allows them to share the bridge that the gateway verifies. The gateway tracks
+the two explicit Local-channel identities and their linked legs, using fresh
+AMI channel state to answer each isolated ringing leg with one Speaker command. It confirms success
+only when the two exact Cisco lines are `Up` in the same bridge. Caller ID is
+display metadata, not proof that a channel belongs to this operation.
+
+DND, busy phones, active alerts, a sibling-line call, or an unexpected channel
+prevent setup. Persistent auto-answer preferences are unchanged. A failed or
+interrupted setup is recorded for cleanup of only its own channels; restart
+does not resume auto-answer. `speaker_requested` records whether both Speaker
+commands were issued, not measured audio output or volume. See the
+[CLI reference](cli.md#intercom--drop-in) for commands and recovery after an
+unknown result.
 
 ### Alert identity and manual stop
 

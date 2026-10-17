@@ -19,6 +19,19 @@ conversion to MPP is not required.
 
 ![Home telephony architecture](docs/diagrams/architecture.svg)
 
+## Start here
+
+- **Use an existing PBX:** [install and configure the Cisco CLI](docs/cli-installation.md),
+  check the directory, then place an ordinary call or an intercom call.
+- **Set up the server:** [Asterisk installation, connections and operations](docs/asterisk-operations.md)
+  walks through private configuration, k3s deployment, phone registration and acceptance checks.
+- **Diagnose a problem:** follow the [Asterisk operations guide](docs/asterisk-operations.md)
+  to separate power/provisioning, SIP registration, call routing, RTP audio and remote control.
+- **Look up a command:** the [CLI reference](docs/cli.md) covers calls, one-time speaker
+  intercom, DND, timers, weekday alarms, text and images.
+
+![CLI setup and first-use flow](docs/diagrams/cli-setup-flow.svg)
+
 ## What is included
 
 - Per-phone `SEP<MAC>.cnf.xml`, dialplan and Asterisk PJSIP configuration generator.

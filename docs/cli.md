@@ -1,5 +1,10 @@
 # Cisco command line
 
+New installation? Follow the [CLI setup and troubleshooting guide](cli-installation.md)
+for macOS/Linux prerequisites, private configuration, direct or Kubernetes
+connections and optional Home Assistant scheduling. Server preparation is in
+[Asterisk setup and operations](asterisk-operations.md).
+
 `cisco LINE` reads live status and shows commands and concrete examples. When HA scheduling is configured, it also shows the current timer/alarm slots, their owning lines and HA timezone. A second numeric argument places a call **from the selected line**:
 
 ```bash
@@ -32,6 +37,9 @@ for a fictional ten-room example, caller-ID behavior and safe inventory updates.
 
 ## Install and private configuration
 
+The [step-by-step installation guide](cli-installation.md) expands this quick
+reference and includes first-connection checks and fixes for common errors.
+
 Use Python 3.10 or later on macOS or Linux; there are no extra Python dependencies. From the repository root:
 
 ```bash
@@ -58,7 +66,7 @@ Edit the copied example with your actual gateway address and Kubernetes target. 
 Choose the transport explicitly:
 
 - **Direct:** start from [cisco-cli.example.json](../deploy/cisco-cli.example.json). The CLI host must already be allowed by the gateway's `api_clients` and firewall. SIP access for a Mac does not grant gateway API access.
-- **Kubernetes:** start from [cisco-cli.kubectl.example.json](../deploy/cisco-cli.kubectl.example.json). The configured context, namespace, label selector and container must identify exactly one Running, Ready pod whose source is already allowed by the gateway, such as an existing Home Assistant pod. The CLI requires existing `get pods` and `pods/exec` permission and Python 3 in that container. It does not create RBAC, modify a pod, install software, or widen firewall rules. It sends the fixed HTTP worker to `python3 -c` and sends the token and request body on stdin. A rollout with two matching Ready pods is refused; try status again after the rollout finishes.
+- **Kubernetes:** start from [cisco-cli.kubectl.example.json](../deploy/cisco-cli.kubectl.example.json). The configured context, namespace, label selector and container must identify exactly one Running, Ready pod whose source is already allowed by the gateway, such as an existing Home Assistant pod. The CLI requires existing pod-list and `pods/exec` permissions and Python 3 in that container. It does not create RBAC, modify a pod, install software, or widen firewall rules. It sends the fixed HTTP worker to `python3 -c` and sends the token and request body on stdin. A rollout with two matching Ready pods is refused; try status again after the rollout finishes.
 
 Both transports require an explicit RFC1918 IPv4 gateway literal and disable HTTP proxies and redirects. HTTPS uses normal certificate verification. HTTP is for the existing trusted private network. There is no automatic transport fallback and no direct AMI, CGI, SSH or phone-reboot fallback.
 
@@ -99,6 +107,8 @@ Answer and Hangup send both the exact fresh channel name and its unique ID. They
 
 ### Intercom / Drop In
 
+![A one-time speaker connection between two exact Cisco lines](diagrams/intercom-flow.svg)
+
 `cisco 213 intercom 220` (also `cisco 213 drop-in 220`) creates a two-way call
 between the exact selected lines and requests speaker answer on both phones.
 Neither person needs to accept it. Use two distinct, idle Cisco phones with
@@ -119,6 +129,14 @@ proof of ownership. Each speaker key is sent at most once. A concurrent call,
 missing leg or failed setup aborts the attempt; cleanup targets only channels
 with the operation's identity. A gateway restart cancels incomplete setup and
 retains cleanup records for delayed calls instead of resuming auto-answer.
+
+Intercom requires both the updated gateway and the matching generated private
+`cisco-intercom` context in Asterisk. The source goes through a Local-channel
+helper, and both source and destination use `Dial` with forwarding ignored.
+This prevents a forwarded source from making an unintended external call.
+Keep that context separate from the normal phone dialplan. Updating only the
+CLI or only the gateway is not a complete deployment; see the
+[intercom deployment details](phone-gateway.md#intercom-deployment-and-call-ownership).
 
 Success reports `connection_state: "connected"` only after both exact lines
 are `Up` in the same Asterisk bridge. `speaker_requested` reports whether both

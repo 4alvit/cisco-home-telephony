@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1050" viewBox="0 0 1440 1050" role="img" aria-labelledby="title desc">
+  <title id="title">Install the Cisco CLI and connect it to your private phone gateway</title>
+  <desc id="desc">Four steps: install the Python CLI with its HTTP helper, create owner-only private configuration and token files, explicitly choose direct or Kubernetes transport, then inspect status and the live directory before calling. Ordinary calls ring the destination; intercom requests speaker answer on two idle Cisco phones. Optional Home Assistant configuration adds countdown timers and recurring alarms with a separate token.</desc>
+  <defs>
+    <style>
+      text { font-family: Arial, Helvetica, sans-serif; fill: #f3f7ff; }
+      .muted { fill: #b9c8dd; }
+      .teal { fill: #54e1ce; }
+      .gold { fill: #ffda7a; }
+      .purple { fill: #c1acff; }
+      .mono { font-family: 'Courier New', monospace; }
+      .card { fill: #172b47; stroke: #324b6c; stroke-width: 2; }
+      .small { font-size: 20px; }
+    </style>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#54e1ce"/></marker>
+  </defs>
+  <rect width="1440" height="1050" rx="20" fill="#0e1b31"/>
+  <rect x="48" y="45" width="64" height="6" rx="3" fill="#54e1ce"/>
+  <text x="48" y="100" font-size="40" font-weight="700">From checkout to your first call</text>
+  <text x="48" y="142" font-size="23" class="muted">Install once. Keep secrets local. Select the exact line you want to use.</text>
+
+  <rect class="card" x="48" y="190" width="300" height="345" rx="18"/>
+  <circle cx="82" cy="225" r="18" fill="#54e1ce"/><text x="82" y="232" text-anchor="middle" font-size="21" font-weight="700" style="fill:#102439">1</text>
+  <text x="112" y="233" font-size="24" font-weight="700">Install</text>
+  <text x="70" y="280" class="small teal" font-weight="700">Python 3.10 or later</text>
+  <text x="70" y="318" class="small muted">Keep both scripts together:</text>
+  <text x="70" y="351" class="small mono">scripts/cisco.py</text>
+  <text x="70" y="380" class="small mono">scripts/cisco_http.py</text>
+  <text x="70" y="426" class="small muted">Link cisco into your PATH.</text>
+  <rect x="70" y="452" width="256" height="51" rx="9" fill="#0e1b31"/>
+  <text x="84" y="485" class="small mono teal">cisco --help</text>
+
+  <path d="M352 360H384" stroke="#54e1ce" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect class="card" x="396" y="190" width="300" height="345" rx="18"/>
+  <circle cx="430" cy="225" r="18" fill="#54e1ce"/><text x="430" y="232" text-anchor="middle" font-size="21" font-weight="700" style="fill:#102439">2</text>
+  <text x="460" y="233" font-size="24" font-weight="700">Private config</text>
+  <text x="418" y="280" class="small teal" font-weight="700">Copy an example locally</text>
+  <text x="418" y="318" font-size="18" class="mono">~/.config/cisco-home/</text>
+  <text x="418" y="351" class="small mono">cli.json</text>
+  <text x="418" y="388" class="small muted">Use your existing gateway</text>
+  <text x="418" y="417" class="small muted">token in a separate file.</text>
+  <text x="418" y="464" class="small gold">Owner-only files: 0600</text>
+  <text x="418" y="495" class="small muted">No secrets in Git or argv.</text>
+
+  <path d="M700 360H732" stroke="#54e1ce" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect class="card" x="744" y="190" width="300" height="345" rx="18"/>
+  <circle cx="778" cy="225" r="18" fill="#54e1ce"/><text x="778" y="232" text-anchor="middle" font-size="21" font-weight="700" style="fill:#102439">3</text>
+  <text x="808" y="233" font-size="24" font-weight="700">Transport</text>
+  <text x="766" y="280" class="small teal" font-weight="700">Choose one explicitly</text>
+  <text x="766" y="321" class="small" font-weight="700">Direct HTTP(S)</text>
+  <text x="766" y="351" class="small muted">Allowed client + firewall</text>
+  <path d="M766 374H1022" stroke="#324b6c"/>
+  <text x="766" y="411" class="small" font-weight="700">Kubernetes exec</text>
+  <text x="766" y="442" class="small muted">One Ready pod + Python 3</text>
+  <text x="766" y="473" class="small muted">Existing list / exec access</text>
+  <text x="766" y="504" font-size="18" class="gold">No automatic fallback</text>
+
+  <path d="M1048 360H1080" stroke="#54e1ce" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect class="card" x="1092" y="190" width="300" height="345" rx="18"/>
+  <circle cx="1126" cy="225" r="18" fill="#54e1ce"/><text x="1126" y="232" text-anchor="middle" font-size="21" font-weight="700" style="fill:#102439">4</text>
+  <text x="1156" y="233" font-size="24" font-weight="700">Inspect first</text>
+  <text x="1114" y="280" class="small teal" font-weight="700">Read-only checks</text>
+  <text x="1114" y="324" class="small mono">cisco 213</text>
+  <text x="1114" y="357" class="small mono">cisco directory</text>
+  <text x="1114" y="400" class="small muted">Live status + examples</text>
+  <text x="1114" y="432" class="small muted">Line → physical phone</text>
+  <text x="1114" y="464" class="small muted">DND + active channels</text>
+  <text x="1114" y="496" class="small muted">Current capabilities</text>
+
+  <text x="48" y="595" font-size="27" font-weight="700">Choose how the destination answers</text>
+  <rect class="card" x="48" y="621" width="660" height="188" rx="18" style="stroke:#54e1ce"/>
+  <text x="74" y="660" font-size="22" class="teal" font-weight="700">CALL</text>
+  <text x="74" y="703" font-size="26" class="mono">cisco 213 220</text>
+  <text x="74" y="740" class="small muted">Ordinary call from line 213; destination 220 rings.</text>
+  <text x="74" y="774" class="small muted">Aliases: cisco 213 call 220 · cisco 213 dial 220</text>
+  <rect class="card" x="732" y="621" width="660" height="188" rx="18" style="stroke:#c1acff"/>
+  <text x="758" y="660" font-size="22" class="purple" font-weight="700">INTERCOM</text>
+  <text x="758" y="703" font-size="26" class="mono">cisco 213 intercom 220</text>
+  <text x="758" y="740" class="small muted">Request speaker answer on both idle Cisco phones.</text>
+  <text x="758" y="774" class="small muted">Alias: drop-in · DND must be off on both phones.</text>
+
+  <rect x="48" y="844" width="1344" height="135" rx="18" fill="#253046" stroke="#695a38" stroke-width="2"/>
+  <text x="74" y="882" font-size="22" class="gold" font-weight="700">OPTIONAL: HOME ASSISTANT SCHEDULES</text>
+  <text x="74" y="919" class="small">Add a separate HA token, integration entry ID and explicit transport to the private configuration.</text>
+  <text x="74" y="952" class="small muted">One countdown + one recurring alarm per phone. Check cisco 213 schedule for owners and the HA timezone.</text>
+  <text x="48" y="1019" font-size="18" class="muted">Example extensions only. Your private inventory defines device membership, room labels and allowed destinations.</text>
+</svg>
