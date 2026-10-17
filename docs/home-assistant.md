@@ -1,27 +1,27 @@
-# Home Assistant и Cisco 7945G
+# Home Assistant and Cisco 7945G
 
-Полный HA-комплект: [ha-homelab/asterisk-telephony](https://github.com/ha-homelab/asterisk-telephony).
-Он содержит установку, генератор HA package/dashboard, автоматизации, SVG и приёмку.
-Этот документ отвечает за сторону Asterisk/k3s. [Исследование версий и API](home-assistant-research.md)
-фиксирует ограничения существующей интеграции.
+The full HA toolkit is in [ha-homelab/asterisk-telephony](https://github.com/ha-homelab/asterisk-telephony):
+installation, package/dashboard generator, automations, SVG diagrams and acceptance.
+This document covers Asterisk/k3s. The [version and API research](home-assistant-research.md)
+records limitations of the existing integration.
 
-## Возможности и границы
+## Features and scope
 
-Используется существующая **TECH7Fox Asterisk integration**, без копирования её
-исходников в наш репозиторий. Она показывает PJSIP devices, состояние линии,
-связанную линию и DTMF и предоставляет `asterisk.send_action`. Пакет HA даёт
-вызов между внутренними аппаратами, вызов Assist и завершение конкретного канала.
-Пример DTMF создаёт уведомление, а не открывает дверь и не управляет отоплением.
+This project uses the existing **TECH7Fox Asterisk integration** without copying
+its source into our repository. It exposes PJSIP devices, line state, connected
+line and DTMF, and provides `asterisk.send_action`. The HA package supports calls
+between internal phones, Assist calls and hanging up a specific channel. The
+DTMF example creates a notification; it does not unlock doors or control heating.
 
-У upstream один глобальный сервис, поэтому поддерживается **одна АТС на HA**.
-Сенсор registered отражает DeviceState, а не независимое доказательство SIP
-регистрации; для диагностики смотрите также `pjsip show contacts`. DTMF приходит
-через state/attributes сенсора, а не через отдельный HA event bus event.
-Доступность конфигурации ещё не доказывает двусторонний звук физического телефона.
+Upstream has one global service, so this setup supports **one PBX per HA instance**.
+The registered sensor reflects DeviceState, not independent proof of SIP
+registration; also inspect `pjsip show contacts`. DTMF arrives through sensor
+state/attributes, not a dedicated HA event-bus event. Available configuration
+does not establish two-way audio on a physical phone.
 
-## 1. Включить AMI в локальной конфигурации
+## 1. Enable AMI in local configuration
 
-Добавьте в свой `.local/site.json` следующие поля, заменив адреса:
+Add these fields to `.local/site.json`, replacing the example addresses:
 
 ```json
 "home_assistant": {
@@ -36,98 +36,100 @@
 }
 ```
 
-Полный образец: [`site.ha.example.json`](../deploy/site.ha.example.json).
-`ami_client_ipv4` — **адрес источника, который видит PBX после маршрутизации/NAT**,
-не обязательно IP Pod или веб-интерфейса HA. `host_ipv4` — достижимый адрес
-VoIP listener HA. Для удалённого HA используйте существующую доверенную VPN;
-управление и Assist тогда идут через неё, обычные звонки между телефонами
-остаются внутри LAN. Не публикуйте SIP, AMI или TFTP на WAN.
+Complete example: [`site.ha.example.json`](../deploy/site.ha.example.json).
+`ami_client_ipv4` is **the source address observed by the PBX after routing/NAT**,
+not necessarily the Pod IP or HA web-interface address. `host_ipv4` is the reachable
+address of HA's VoIP listener. Use an existing trusted VPN for remote HA. Management
+and Assist then use that VPN; ordinary phone-to-phone calls stay in the LAN.
+Do not expose SIP, AMI or TFTP on the WAN.
 
 ```bash
 python3 scripts/provision.py --site .local/site.json --inventory .local/phones.json
 bash scripts/deploy.sh
 ```
 
-Генератор создаёт `.local/ha-ami-secret.json` с пользователем `homeassistant` и
-случайным отдельным паролем. Файл имеет mode0600, исключён из Git и повторно
-используется при генерации. Он не попадает в Cisco XML. Просмотрите его приватно
-для настройки интеграции HA. `.local/secrets.json` по-прежнему содержит только
-телефонные пароли. Резервируйте оба файла.
+The generator creates `.local/ha-ami-secret.json` with username `homeassistant`
+and a separate random password. This Git-ignored file uses mode0600 and is reused
+on subsequent runs. It is not included in Cisco XML. Read it privately when
+configuring HA. `.local/secrets.json` continues to hold only phone passwords.
+Back up both files.
 
-AMI слушает **IP выбранного PBX-узла:5038/TCP**, разрешает ровно один client /32,
-HTTP manager отключён. Права: `read=call,dtmf`, `write=system,originate`.
-`allow_originate:false` убирает только `originate`. **Это не read-only account**:
-нужная для обнаружения PJSIP группа `system` также допускает Hangup и другие
-административные AMI actions. Защищайте HA и эту учётную запись как управление АТС.
-Права `command`, `config`, `all` не выдаются, CLI через AMI запрещён.
+AMI listens on **the selected PBX node's IP:5038/TCP**, permits exactly one client
+/32 and disables the HTTP manager. Permissions are `read=call,dtmf` and
+`write=system,originate`. `allow_originate:false` removes only `originate`.
+**This is not a read-only account:** the `system` class needed for PJSIP discovery
+also permits Hangup and other administrative AMI actions. Protect HA and this
+account as PBX management access. `command`, `config` and `all` are not granted;
+AMI CLI access is denied.
 
-Интеграция использует обычный TCP AMI без TLS. Ограничьте firewall точным IP,
-как в [шаблоне](../deploy/firewall.nft.example); ACL не шифрует соединение.
+The integration uses plain AMI TCP without TLS. Restrict the firewall to the exact
+source IP, as in the [template](../deploy/firewall.nft.example); an ACL does not
+encrypt the connection.
 
-## 2. Подготовить Assist и сеть
+## 2. Prepare Assist and networking
 
-В HA добавьте **Voice over IP**, проверьте SIP UDP port и настройте Assist pipeline
-с работающими STT, conversation agent и TTS. Облачный LLM/STT не обязателен:
-можно использовать локальные сервисы. Учтите их ресурсы и язык распознавания.
+Add **Voice over IP** in HA, check its SIP UDP port and configure an Assist
+pipeline with working STT, conversation agent and TTS. Cloud LLM/STT is optional;
+local services can be used. Account for their resources and recognition language.
 
-На HA должен быть достижим **UDP5060** или выбранный порт. Если HA запущен в k3s,
-проверьте фактическую сеть Pod и маршрутизируемость объявленного в SDP адреса.
-Простой HTTP Ingress HA не передаёт SIP/RTP. Обычно выбирают hostNetwork либо
-отдельную маршрутизируемую сеть; не меняйте сеть существующего HA автоматически.
+HA must be reachable on **UDP5060** or the selected port. For HA in k3s, verify
+actual Pod networking and routability of the address advertised in SDP. An HTTP
+Ingress does not carry SIP/RTP. Typical options are hostNetwork or a separate
+routable network; do not automatically change an existing HA installation's network.
 
-VoIP HA выбирает динамический UDP-порт RTP и соседний RTCP, фиксированного
-настраиваемого RTP range у проверенной версии нет. Проверьте ephemeral range
-ядра HA-host и разрешите его **только от IP PBX**. На стороне PBX разрешите от HA
-UDP5060 и RTP10000–10199. SIP OPTIONS qualify здесь не используется: HA VoIP
-не отвечает на него как обычная SIP-АТС. Входящих маршрутов из HA к телефонам нет;
-управление вызовами идёт через AMI.
+HA VoIP chooses a dynamic UDP RTP port and the adjacent RTCP port; the reviewed
+version has no configurable fixed RTP range. Check the HA host kernel's ephemeral
+range and allow it **only from the PBX IP**. On the PBX, allow HA UDP5060 and
+RTP10000–10199. SIP OPTIONS qualify is not used here because HA VoIP does not
+answer it like a conventional SIP PBX. No incoming routes from HA to phones are
+configured; call control uses AMI.
 
-## 3. Собрать и развернуть обновлённый PBX
+## 3. Build and deploy the updated PBX
 
-Следуйте [основному runbook](k3s-deployment.md): соберите оба образа, прогоните
-smoke, выполните push в свой registry и обновите immutable digest в site.json.
-Старый image без Opus не подходит для Assist.
+Follow the [main runbook](k3s-deployment.md): build both images, run smoke tests,
+push to your registry and update immutable digests in site.json. An old image
+without Opus cannot provide Assist transcoding.
 
 ```bash
 bash scripts/build-images.sh YOUR_REGISTRY/cisco-home
 bash scripts/smoke-containers.sh YOUR_REGISTRY/cisco-home
-# После push, записи digest, проверки firewall и окна обслуживания:
+# After pushing, recording digests and reviewing firewall/maintenance timing:
 bash scripts/deploy.sh --apply --firewall-reviewed
 ```
 
-Opus построен из GPL-2.0 исходников Wazo, закреплённых commit+SHA256. Исходный
-архив, LICENSE и README хранятся в образе под
-`/usr/share/doc/asterisk-opus-open-source/`. Это transcoding G.711↔Opus, не только
-объявление кодека в SDP. Readiness с включённым Assist требует работающего модуля.
+Opus is built from Wazo GPL-2.0 source pinned by commit and SHA256. The source
+archive, LICENSE and README are included under
+`/usr/share/doc/asterisk-opus-open-source/` in the image. This provides G.711↔Opus
+transcoding, not just an SDP codec advertisement. With Assist enabled, readiness
+requires the module to be running.
 
-Генерация добавляет **630** в Cisco dialplan. Обновите TFTP-профили и дайте
-телефону загрузить новый dialplan в отдельное окно по исходной инструкции.
-Переустанавливать firmware ради изменения номера не требуется.
+Generation adds **630** to the Cisco dialplan. Update TFTP profiles and let phones
+load the new dialplan during a separate provisioning window. Changing an
+extension does not require reinstalling firmware.
 
-## 4. Подключить интеграцию и проверить
+## 4. Connect the integration and test
 
-Установите проверенную upstream версию через инструкции companion-репозитория,
-перезапустите HA в согласованное окно, затем добавьте Asterisk через UI:
-IP PBX, TCP5038, `homeassistant`, пароль из локального файла.
-После обнаружения устройств впишите **реальные entity IDs** в локальный inventory
-генератора HA package/dashboard. Не ожидайте, что автоматически созданные IDs
-точно совпадут с примерами.
+Install the reviewed upstream version using the companion repository, restart HA
+in an agreed maintenance window, then add Asterisk through the UI: PBX IP,
+TCP5038, `homeassistant`, and the locally stored password. After device discovery,
+enter **actual entity IDs** into the HA package/dashboard generator's local
+inventory. Automatically generated IDs may differ from examples.
 
-1. Проверьте `pjsip show contacts`, состояние устройств в HA и отсутствие ошибок AMI.
-2. Выполните внутренний вызов двух аппаратов и проверьте изменение состояния.
-3. Выполните вызов через HA script; завершите только его фактический Channel.
-4. Проверьте DTMF на тестовом звонке и безопасное уведомление HA.
-5. Наберите630. При первом обнаружении устройства в HA включите **Allow calls**
-   и выберите pipeline; затем повторите вызов. SIP From сохраняет номер телефона,
-   поэтому устройства разных аппаратов не должны сливаться в один identity.
-6. Проверьте STT, ответ TTS, двусторонний звук и завершение; повторите после
-   перезапуска PBX/HA и cold boot телефона. Начинайте с одного аппарата.
+1. Check `pjsip show contacts`, HA device states and absence of AMI errors.
+2. Make an internal call between two phones and verify state changes.
+3. Place a call through the HA script; hang up only its actual Channel.
+4. Test DTMF during a test call and verify the harmless HA notification.
+5. Dial 630. After the first device discovery in HA, enable **Allow calls** and
+   select a pipeline, then call again. SIP From preserves the phone's extension,
+   so different phones should have distinct device identities.
+6. Verify STT, TTS response, two-way audio and hangup. Repeat after PBX/HA restart
+   and phone cold boot. Start with one phone.
 
-## Откат
+## Rollback
 
-Удалите/отключите HA package, затем задайте `home_assistant.enabled:false`,
-повторите генерацию и стандартный deployment. Это закрывает AMI в Asterisk и
-удаляет маршрут630 из новых конфигов. Уберите HA firewall allowances и обновите
-телефонный dialplan при следующем TFTP-окне. Для полного восстановления используйте
-старый immutable image/config Secret по [runbook отката](operations.md).
-Не удаляйте существующие HA `.storage`, HACS, секреты, записи устройств или базы.
+Remove/disable the HA package, set `home_assistant.enabled:false`, regenerate and
+perform the normal deployment. This disables AMI in Asterisk and removes route
+630 from newly generated configuration. Remove HA firewall allowances and update
+the phone dialplan in the next TFTP window. For full restoration, use the previous
+immutable image/config Secret following the [rollback runbook](operations.md).
+Do not delete existing HA `.storage`, HACS, secrets, device entries or databases.

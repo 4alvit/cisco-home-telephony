@@ -1,78 +1,74 @@
-# Home Assistant: проверенные возможности и контракт интеграции
+# Home Assistant: verified capabilities and integration contract
 
-Проверено 16 октября 2026 года (Pacific). Здесь различаются проверка исходного
-кода, испытание контейнера и ещё не выполненная приёмка физических телефонов.
+Reviewed October 16, 2026 (Pacific). This record distinguishes source review,
+container tests and physical-phone acceptance, which remains incomplete.
 
-## Выбор компонентов
+## Component selection
 
-Для управления PBX используем существующую
-[TECH7Fox/asterisk-hass-integration](https://github.com/TECH7Fox/asterisk-hass-integration),
-а для разговора с Assist — встроенную
+PBX management uses the existing
+[TECH7Fox/asterisk-hass-integration](https://github.com/TECH7Fox/asterisk-hass-integration);
+Assist conversations use native
 [Home Assistant Voice over IP](https://www.home-assistant.io/integrations/voip/).
-Это разные соединения: HA подключается к AMI Asterisk по TCP; Asterisk отправляет
-вызов Assist на SIP/UDP HA. Cisco регистрируются только на Asterisk и продолжают
-использовать SIP/TCP и G.711. Новая пользовательская HA-интеграция для этих
-базовых функций не требуется.
+These are separate connections: HA connects to Asterisk AMI over TCP, while
+Asterisk sends Assist calls to HA over SIP/UDP. Cisco phones register only with
+Asterisk and continue using SIP/TCP and G.711. These baseline features do not
+require a new custom HA integration.
 
-Проверенная версия TECH7Fox — `v1.0.5`, commit
-`65ea9d637a58d6edb3b2bc9e8a6f90de896a9b3e`. Tag указывает именно на этот commit;
+The reviewed TECH7Fox version is `v1.0.5`, commit
+`65ea9d637a58d6edb3b2bc9e8a6f90de896a9b3e`. The tag points to that commit; its
 [release](https://github.com/TECH7Fox/asterisk-hass-integration/releases/tag/v1.0.5)
-опубликован 15 апреля 2026. Обнаружение endpoint, обработчики датчиков и service
-проверены по коду, а не только по списку возможностей на сайте.
+was published April 15, 2026. Endpoint discovery, sensor handlers and the service
+were checked in source, not only against a website feature list.
 
-Архив для воспроизводимой установки:
+Archive for reproducible installation:
 
 ```text
 https://github.com/TECH7Fox/asterisk-hass-integration/archive/65ea9d637a58d6edb3b2bc9e8a6f90de896a9b3e.zip
 SHA-256: 697792a522eb90db62672ff57bc0b03bec4caba45c0748583bdd32768e6dcad1
 ```
 
-Обычная установка описана через HACS. В проверенном дереве upstream нет LICENSE;
-его исходники не следует копировать в наш публичный companion-репозиторий как
-собственную распространяемую интеграцию. Инсталлятор может получать выбранный
-архив непосредственно из upstream. Зависимость `asterisk-ami>=0.1.7` у upstream
-не закреплена точной версией; pin исходников интеграции не закрепляет её транзитивные
-Python-зависимости.
+Normal installation is documented through HACS. The reviewed upstream tree has
+no LICENSE; do not copy its source into our public companion repository as our
+own redistributable integration. The installer can retrieve the chosen archive
+directly from upstream. Upstream's `asterisk-ami>=0.1.7` dependency is not pinned
+to an exact version; pinning integration source does not pin transitive Python
+dependencies.
 
-## Что действительно предоставляет TECH7Fox
+## What TECH7Fox provides
 
-- Автоматически обнаруживает PJSIP endpoint через `PJSIPShowEndpoints`.
-  Отсутствие устаревшего `chan_sip` допустимо: ошибка `SIPpeers` обработана.
-- Серверный binary sensor `AMI Connected` отражает связь с AMI.
-- Для каждого endpoint есть `Registered`, `State`, `Connected Line`,
-  `DTMF Sent`, `DTMF Received`.
-- `Registered` вычисляется из DeviceState, а не из SIP ContactStatus или
-  отдельного подтверждения регистрации. `State` показывает использование линии,
-  звонок, удержание и недоступность.
-- `Connected Line` содержит номер и атрибуты `Channel`, `ChannelState`,
+- Automatic PJSIP endpoint discovery using `PJSIPShowEndpoints`. Missing legacy
+  `chan_sip` is supported because `SIPpeers` errors are handled.
+- A server binary sensor, `AMI Connected`, for the AMI connection.
+- Per-endpoint `Registered`, `State`, `Connected Line`, `DTMF Sent` and `DTMF Received`.
+- `Registered` derived from DeviceState, not SIP ContactStatus or a separate
+  registration confirmation. `State` represents line use, ringing, hold and unavailability.
+- `Connected Line` includes a number and attributes `Channel`, `ChannelState`,
   `ChannelStateDesc`, `CallerIDNum`, `CallerIDName`, `ConnectedLineNum`,
-  `ConnectedLineName`, `Exten`, `Context`; после Hangup добавляются причина и код.
-  Это последний обработанный канал, не полный журнал или счётчик всех звонков.
-- `asterisk.send_action` отправляет произвольный AMI action с параметрами.
-  Отдельных services `asterisk.originate` и `asterisk.hangup` нет.
+  `ConnectedLineName`, `Exten` and `Context`; hangup adds cause and code. This is
+  the last processed channel, not a complete call log or count.
+- `asterisk.send_action` sends an arbitrary AMI action with parameters. There are
+  no separate `asterisk.originate` or `asterisk.hangup` services.
 
-Источники:
-[setup и send_action](https://github.com/TECH7Fox/asterisk-hass-integration/blob/65ea9d637a58d6edb3b2bc9e8a6f90de896a9b3e/custom_components/asterisk/__init__.py),
-[датчики](https://github.com/TECH7Fox/asterisk-hass-integration/blob/65ea9d637a58d6edb3b2bc9e8a6f90de896a9b3e/custom_components/asterisk/sensor.py),
+Sources: [setup and send_action](https://github.com/TECH7Fox/asterisk-hass-integration/blob/65ea9d637a58d6edb3b2bc9e8a6f90de896a9b3e/custom_components/asterisk/__init__.py),
+[sensors](https://github.com/TECH7Fox/asterisk-hass-integration/blob/65ea9d637a58d6edb3b2bc9e8a6f90de896a9b3e/custom_components/asterisk/sensor.py),
 [binary sensors](https://github.com/TECH7Fox/asterisk-hass-integration/blob/65ea9d637a58d6edb3b2bc9e8a6f90de896a9b3e/custom_components/asterisk/binary_sensor.py).
 
-Схема предназначена для **одного AMI server**. Service регистрируется глобально,
-не имеет выбора config entry и при нескольких серверах может обращаться к
-последнему зарегистрированному клиенту. После добавления endpoint в Asterisk
-перезагрузить интеграцию для повторного discovery. После потери AMI связи нельзя
-считать сохранённое значение endpoint доказательством его текущего состояния:
-проверять также `AMI Connected`. Upstream не восстанавливает полную историю
-событий за время разрыва. Совместимость именно с установленной версией HA требует
-локальной приёмки; upstream выполняет синхронные AMI операции из async setup.
+This design supports **one AMI server**. The globally registered service has no
+config-entry selector and may target the last registered client if multiple
+servers exist. Reload the integration after adding Asterisk endpoints to rerun
+discovery. After an AMI outage, a retained endpoint value is not evidence of its
+current state; also check `AMI Connected`. Upstream does not reconstruct every
+event missed during a disconnect. Verify compatibility with the installed HA
+version locally; upstream runs synchronous AMI operations from async setup.
 
-## AMI: минимальные классы прав для выбранных функций
+## AMI permission classes for these features
 
-Поля config flow: `host`, `port` (по умолчанию `5038`), `username`, `password`.
-В этой версии поля TLS нет. Использовать отдельную учётную запись, доступ только
-от фактического IP процесса HA, закрытую домашнюю сеть, firewall и AMI ACL.
-Не открывать AMI всему phone LAN или публичному Интернету.
+Config-flow fields are `host`, `port` (default `5038`), `username` and `password`.
+This version has no TLS field. Use a dedicated account, the HA process's actual
+source IP, a private network, host firewall and AMI ACL. Do not expose AMI to the
+whole phone LAN or the Internet.
 
-Минимум для discovery, датчиков, Originate и Hangup на Asterisk 22.11.0:
+Minimum classes for discovery, sensors, Originate and Hangup on Asterisk 22.11.0:
 
 ```ini
 [general]
@@ -89,29 +85,28 @@ read = call,dtmf
 write = system,originate
 ```
 
-Это шаблон: заменить оба IP и secret; не публиковать получившийся файл.
-`PJSIPShowEndpoints` требует `system`; `CoreSettings` допускает `system` или
-`reporting`; `Hangup` допускает `system` или `call`; `Originate` требует
-`originate`. AMI проверяет наличие хотя бы одного разрешённого бита, поэтому
-добавлять `reporting` и `call` к write ради этих операций не нужно.
-`DeviceStateChange`, события канала и завершения вызова относятся к read `call`,
-`DTMFBegin` — к `dtmf`. Нужен загруженный `res_manager_devicestate.so`.
+Replace both IPs and the secret; do not publish the resulting file.
+`PJSIPShowEndpoints` requires `system`; `CoreSettings` allows `system` or
+`reporting`; `Hangup` allows `system` or `call`; `Originate` requires `originate`.
+AMI checks for at least one allowed bit, so these operations do not require adding
+`reporting` and `call` to write permissions. `DeviceStateChange`, channel and hangup
+events belong to read `call`; `DTMFBegin` belongs to `dtmf`.
+`res_manager_devicestate.so` must be loaded.
 
-`system` — широкий класс: он разрешает больше одного discovery action, включая
-некоторые операции с модулями и чтение конфигурации. Это минимальные **классы** для
-неизменённого upstream, не allowlist из четырёх безопасных команд. `read=all`,
-`write=all`, `command` и `config` для описанного сценария не требуются. Для Redirect
-или Setvar отдельно понадобится `write=call`; здесь они не используются.
+`system` is broad: beyond discovery it permits some module operations and
+configuration reads. These are minimum **classes** for unchanged upstream, not
+an allowlist of four harmless commands. `read=all`, `write=all`, `command` and
+`config` are unnecessary here. Redirect or Setvar would additionally need
+`write=call`; this project does not use them.
 
-Проверено по
-[регистрации и проверке AMI actions](https://github.com/asterisk/asterisk/blob/22.11.0/main/manager.c),
-[PJSIP action registration](https://github.com/asterisk/asterisk/blob/22.11.0/res/res_pjsip/pjsip_configuration.c),
+Verified against [AMI action registration and checks](https://github.com/asterisk/asterisk/blob/22.11.0/main/manager.c),
+[PJSIP registration](https://github.com/asterisk/asterisk/blob/22.11.0/res/res_pjsip/pjsip_configuration.c),
 [DeviceStateChange](https://github.com/asterisk/asterisk/blob/22.11.0/main/devicestate.c),
-[DTMF и канальным событиям](https://github.com/asterisk/asterisk/blob/22.11.0/main/manager_channels.c).
+and [DTMF/channel events](https://github.com/asterisk/asterisk/blob/22.11.0/main/manager_channels.c).
 
-## Точная схема HA action
+## Exact HA action schema
 
-Позвонить телефону 201; после ответа подключить к существующему echo 600:
+Call phone 201 and, after answer, connect it to existing echo extension 600:
 
 ```yaml
 action: asterisk.send_action
@@ -127,7 +122,7 @@ data:
     Async: "true"
 ```
 
-Завершить конкретный существующий канал, полученный из текущего состояния PBX:
+Hang up a specific existing channel obtained from current PBX state:
 
 ```yaml
 action: asterisk.send_action
@@ -137,104 +132,102 @@ data:
     Channel: "PJSIP/201-00000001"
 ```
 
-Второй пример иллюстрирует формат; канал динамический. Нельзя захардкодить suffix
-или передавать пустой/устаревший Channel. HA script должен сначала убедиться, что
-AMI подключён, строка Channel соответствует нужному endpoint и его текущее
-состояние означает активный звонок. `send_action` не возвращает структурированный
-результат в HA response variable: успешный вызов service не доказывает ответ
-телефона. Контроль результата — события/датчики и фактический звонок.
+The second example illustrates the format; channel names are dynamic. Do not
+hardcode the suffix or pass an empty/stale Channel. The HA script must first check
+that AMI is connected, the Channel matches the intended endpoint and its current
+state indicates an active call. `send_action` does not return structured results
+in an HA response variable: service success does not prove the phone answered.
+Verify outcomes through events/sensors and the actual call.
 
-Источники: [services.yaml](https://github.com/TECH7Fox/asterisk-hass-integration/blob/65ea9d637a58d6edb3b2bc9e8a6f90de896a9b3e/custom_components/asterisk/services.yaml),
-[официальный Originate](https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/AMI_Actions/Originate/).
+Sources: [services.yaml](https://github.com/TECH7Fox/asterisk-hass-integration/blob/65ea9d637a58d6edb3b2bc9e8a6f90de896a9b3e/custom_components/asterisk/services.yaml),
+[official Originate reference](https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/AMI_Actions/Originate/).
 
-## DTMF: автоматика через изменение датчика
+## DTMF automation through sensor changes
 
-Значение DTMF sensor — timestamp последнего события, цифра находится в атрибуте
-`Digit`. Другие атрибуты: `Channel`, `ConnectedLineNum`, `ConnectedLineName`,
-`Context`; у Sent также есть `CallerIDNum`/`CallerIDName`. Native HA event вроде
-`asterisk_dtmf` upstream не публикует. Для повторных одинаковых цифр использовать
-изменение timestamp, не только атрибута Digit.
+A DTMF sensor's state is the latest event timestamp; the digit is in its `Digit`
+attribute. Other attributes are `Channel`, `ConnectedLineNum`, `ConnectedLineName`
+and `Context`; Sent also has `CallerIDNum`/`CallerIDName`. Upstream does not publish
+a native HA event such as `asterisk_dtmf`. Trigger on timestamp changes to handle
+repeated identical digits, rather than watching only `Digit`.
 
-Оба обработчика фильтруют AMI `DTMFBegin` по `ConnectedLineNum == extension`;
-Sent/Received — направление на стороне Asterisk. Не считать автоматически, что
-датчик `201 DTMF Received` означает клавиатуру именно 201. При первом испытании
-смотреть оба конца звонка и Channel. Имена сущностей формируются HA и могут
-получить suffix или быть переименованы. Все примеры `sensor.201_...` требуется
-сопоставить с реальным entity registry, затем проверить цифры 1/1/# во время звонка.
-Для RFC4733 Asterisk должен действительно получать аудио: `direct_media=no`.
+Both handlers filter AMI `DTMFBegin` by `ConnectedLineNum == extension`.
+Sent/Received describe directions from Asterisk's perspective. Do not assume
+`201 DTMF Received` necessarily means the keypad on phone 201. During initial
+testing, inspect both call legs and Channel. HA-generated entity IDs may gain
+suffixes or be renamed. Map every `sensor.201_...` example to the actual registry,
+then test digits 1/1/# during a call. For RFC4733, Asterisk must receive the media:
+keep `direct_media=no`.
 
-## Assist по номеру 630
+## Assist on extension 630
 
-Проверены HA Core `2026.10.2` и его зависимость `voip-utils==0.5.0`.
-Встроенный VoIP слушает **UDP 5060**; порт меняется через options `sip_port`.
-Он не является сервером регистрации телефонов. Настраивается исходящий
-PJSIP endpoint `ha-assist` с UDP transport, `disallow=all`, `allow=opus`,
-`direct_media=no`, явным LAN-адресом HA и без outbound auth/registration.
-Маршрут из `home`:
+HA Core `2026.10.2` and dependency `voip-utils==0.5.0` were reviewed. Native VoIP
+listens on **UDP 5060**; options field `sip_port` changes it. It is not a phone
+registration server. Configure outbound PJSIP endpoint `ha-assist` with UDP
+transport, `disallow=all`, `allow=opus`, `direct_media=no`, an explicit HA LAN
+address, and no outbound authentication or registration. Route from `home`:
 
 ```asterisk
 exten => 630,1,Dial(PJSIP/ha-assist/sip:630@HA_LAN_IP:5060,30)
  same => n,Hangup()
 ```
 
-`qualify_frequency=0` для этого AOR: в проверенном `voip-utils` нет обработчика
-OPTIONS, поэтому SIP qualify не является достоверным health check HA и может
-запретить рабочий маршрут. Не задавать общий `from_user`: HA идентифицирует
-устройство по SIP From URI. Сохранённый CallerID каждого внутреннего номера даёт
-разные устройства HA, даже когда трафик приходит с одного IP Asterisk.
+Use `qualify_frequency=0` for this AOR. The reviewed `voip-utils` has no OPTIONS
+handler, so SIP qualify is not a reliable HA health check and can disable an
+otherwise working route. Do not set a shared `from_user`: HA identifies devices
+by SIP From URI. Preserving each extension's CallerID produces distinct HA
+devices even though traffic comes from one Asterisk IP.
 
-После первого вызова новое устройство появится в HA. Включить для него
-**Allow calls**, выбрать Assist pipeline с рабочими STT и TTS и позвонить снова.
-Без разрешения HA воспроизводит сообщение о ненастроенном устройстве. Без STT/TTS
-pipeline — сообщение о проблеме конфигурации. Встроенные outgoing announcements
-HA требуют отдельной настройки обратного SIP маршрута; один исходящий endpoint
-к Assist не предоставляет их автоматически.
+After the first call, a new device appears in HA. Enable **Allow calls**, choose
+an Assist pipeline with working STT/TTS, then call again. Without permission, HA
+plays an unconfigured-device message. Without an STT/TTS pipeline, it reports a
+configuration issue. Native HA outgoing announcements require a separately
+configured reverse SIP route; an outbound Assist endpoint does not provide them
+automatically.
 
-Источники:
-[HA setup/UDP](https://github.com/home-assistant/core/blob/2026.10.2/homeassistant/components/voip/__init__.py),
-[проверка pipeline](https://github.com/home-assistant/core/blob/2026.10.2/homeassistant/components/voip/voip.py),
-[идентификация и Allow calls](https://github.com/home-assistant/core/blob/2026.10.2/homeassistant/components/voip/devices.py),
-[SIP реализация](https://github.com/home-assistant-libs/voip-utils/blob/a6d93d0c50c8d005d030bd11ce99a57934b4e5b2/voip_utils/sip.py).
+Sources: [HA setup/UDP](https://github.com/home-assistant/core/blob/2026.10.2/homeassistant/components/voip/__init__.py),
+[pipeline checks](https://github.com/home-assistant/core/blob/2026.10.2/homeassistant/components/voip/voip.py),
+[device identity and Allow calls](https://github.com/home-assistant/core/blob/2026.10.2/homeassistant/components/voip/devices.py),
+[SIP implementation](https://github.com/home-assistant-libs/voip-utils/blob/a6d93d0c50c8d005d030bd11ce99a57934b4e5b2/voip_utils/sip.py).
 
-## Аудио и firewall
+## Audio and firewall
 
-HA VoIP возвращает SDP `opus/48000/2`, `ptime:20`. Преобразование в mono 16 kHz
-происходит уже внутри HA перед STT. Одного Asterisk Opus passthrough недостаточно:
-7945G требует **G.711 ↔ Opus transcoding**. Поэтому Dockerfile собирает
-`codec_opus_open_source.so` из
+HA VoIP returns SDP `opus/48000/2`, `ptime:20`. Conversion to mono 16 kHz happens
+inside HA before STT. Asterisk Opus passthrough alone is insufficient: the 7945G
+needs **G.711 ↔ Opus transcoding**. The Dockerfile therefore builds
+`codec_opus_open_source.so` from
 [Wazo commit 591b6cd](https://github.com/wazo-platform/wazo-codec-opus-open-source/tree/591b6cd9b75e2b9b6d815ef364a385fccee595a7)
-с `libopus-dev` и сохраняет родной `res_format_attr_opus` из Asterisk. Это открытый
-GPL-2.0 модуль; закрытый бинарный codec_opus не загружается. License, README и
-соответствующий исходный архив находятся в контейнере:
+with `libopus-dev`, retaining Asterisk's native `res_format_attr_opus`. This is an
+open GPL-2.0 module; no proprietary codec_opus binary is downloaded. Its license,
+README and corresponding source archive are in the container at
 `/usr/share/doc/asterisk-opus-open-source/`.
 
-На стороне Asterisk сохраняется диапазон RTP `10000–10199`. На стороне HA
-`voip-utils` выделяет динамический порт через `bind(..., 0)` и RTCP на следующем
-порту; чётность RTP не гарантируется и настройки фиксированного диапазона в
-интеграции нет. Правила HA firewall должны учитывать фактический ephemeral range
-его ОС плюс соседний RTCP порт **только от IP PBX**. Настроить прямую маршрутизацию
-до HA; простой Docker publish только 5060/UDP не публикует все динамические RTP
-порты. На PBX разрешить SIP/RTP к HA и обратный поток; AMI открыть только HA→PBX.
+Asterisk retains RTP range `10000–10199`. On HA, `voip-utils` allocates a dynamic
+port using `bind(..., 0)` and the next port for RTCP. RTP is not guaranteed to be
+even-numbered, and the integration has no fixed-range setting. HA firewall rules
+must account for its OS's actual ephemeral range and adjacent RTCP port, **only
+from the PBX IP**. Provide direct routing to HA; publishing only Docker 5060/UDP
+does not publish all dynamic RTP ports. Permit SIP/RTP and return traffic between
+PBX and HA; allow AMI only from HA to PBX.
 
-Источник аудио и выбора портов:
+Audio/port-selection source:
 [voip-utils 0.5.0 RTP server](https://github.com/home-assistant-libs/voip-utils/blob/a6d93d0c50c8d005d030bd11ce99a57934b4e5b2/voip_utils/voip.py).
 
-## Выполненная проверка и оставшаяся приёмка
+## Completed checks and remaining acceptance
 
-В изолированном ARM64 Docker-контейнере с Asterisk 22.11.0 и синтетической
-конфигурацией проверено: открытый Opus module собирается, загружается как Running,
-`core show translation recalc 1` завершается, PBX продолжает работать. Команды
-`core show translation paths ulaw` и `... paths opus` показывают соответственно:
+An isolated ARM64 Docker container running Asterisk 22.11.0 with synthetic
+configuration verified that the open Opus module builds, loads as Running,
+completes `core show translation recalc 1`, and leaves the PBX running.
+`core show translation paths ulaw` and `... paths opus` report:
 
 ```text
 (ulaw@8000)->(slin@8000)->(opus@48000)
 (opus@48000)->(slin@8000)->(ulaw@8000)
 ```
 
-Это проверка реального transcoder в контейнере, не испытание Cisco или живого HA.
-Перед включением для семьи необходимы: установка upstream в фактический HA,
-AMI discovery и reconnect, регистрация/отключение одного телефона, входящий и
-исходящий звонок, hold/hangup, повторный DTMF, затем двусторонний разговор с Assist
-через 630. Проверить STT русского языка, TTS, выполнение разрешённой безопасной
-команды и освобождение всех каналов после завершения. По отдельности проверить
-обычный звонок после рестарта Asterisk, HA и телефона.
+This tests a real transcoder in a container, not a Cisco or a live HA call. Before
+family use, verify upstream installation in actual HA, AMI discovery/reconnect,
+one phone's registration/disconnection, incoming/outgoing calls, hold/hangup,
+repeated DTMF, then a two-way Assist conversation through 630. Check Russian STT,
+TTS, a permitted harmless command, and release of all channels after hangup.
+Separately verify ordinary calls after Asterisk, HA and phone restarts. Later
+home deployment results are recorded in [live validation](server-validation.md).

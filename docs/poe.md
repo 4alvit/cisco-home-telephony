@@ -1,44 +1,70 @@
-# Питание десяти Cisco 7945G
+# Powering ten Cisco 7945G phones
 
-**У 7945G поддержка PoE встроена. Пайка и внутренняя переделка не нужны.** Это IEEE 802.3af, а не только старое фирменное питание Cisco. [Cisco PoE FAQ](https://www.cisco.com/c/en/us/support/docs/voice-unified-communications/unified-ip-phone-7900-series/97869-poe-requirement-faq.html).
+**The 7945G has built-in PoE. No soldering or internal modification is needed.**
+It supports IEEE 802.3af, not only legacy proprietary Cisco power.
+See the [Cisco PoE FAQ](https://www.cisco.com/c/en/us/support/docs/voice-unified-communications/unified-ip-phone-7900-series/97869-poe-requirement-faq.html).
 
-![Варианты питания](diagrams/power.svg)
+![Power options](diagrams/power.svg)
 
-## Подключение
+## Connection
 
-Для всей партии удобен управляемый PoE-коммутатор с voice-сетью:
+A managed PoE switch with a voice network is convenient for the full batch:
 
-1. Подключить коммутатор к маршрутизатору и UPS.
-2. Провести исправный Cat5e/Cat6 от PoE-порта к `10/100/1000 SW` / `Network` телефона.
-3. Дождаться DHCP и регистрации. Проверить мощность и отсутствие PoE fault в коммутаторе.
-4. Порт `PC` предназначен для компьютера, не для подачи питания.
+1. Connect the switch to the router and UPS.
+2. Run a known-good Cat5e/Cat6 cable from a PoE port to the phone's
+   `10/100/1000 SW` / `Network` port.
+3. Wait for DHCP and registration. Check power draw and PoE faults on the switch.
+4. The `PC` port connects a computer; it is not the power input.
 
-Если существующий коммутатор без PoE, добавить **активный IEEE 802.3af/at-инжектор**: `LAN → Data In → Data+Power Out → SW телефона`. Для гигабитной линии выбрать гигабитный инжектор. Splitter не нужен: телефон сам принимает PoE.
+If your switch lacks PoE, add an **active IEEE 802.3af/at injector**:
+`LAN → Data In → Data+Power Out → phone SW port`. Choose a gigabit injector for a
+gigabit link. A splitter is unnecessary because the phone accepts PoE directly.
 
-Возможен штатный внешний адаптер. Для серии 7900 Cisco указывает `CP-PWR-CUBE-3`, вместе с подходящим сетевым шнуром. Случайный адаптер с похожим штекером не является заменой. [Cisco Unified Communications SRND 8.x, IP Telephony Endpoints](https://www.cisco.com/c/en/us/td/docs/voice_ip_comm/cucm/srnd/8x/uc8x/endpnts.pdf).
+An approved external adapter is another option. Cisco lists `CP-PWR-CUBE-3`
+with the appropriate mains cord for the 7900 series. A random adapter with a
+similar plug is not a substitute.
+See [Cisco Unified Communications SRND 8.x, IP Telephony Endpoints](https://www.cisco.com/c/en/us/td/docs/voice_ip_comm/cucm/srnd/8x/uc8x/endpnts.pdf).
 
-## Бюджет
+## Power budget
 
-7945G — **Class 3**. Консервативное резервирование 802.3af на стороне источника — до **15.4 W на порт**. Для десяти аппаратов это **154 W**; с инженерным запасом 25% — около **193 W**. Практический ориентир — PoE-бюджет **от 200 W для телефонов**, плюс питание остальных потребителей. Это резерв для подбора источника, не утверждение о постоянном потреблении 154 W. [Cisco: класс телефонов](https://www.cisco.com/c/en/us/td/docs/voice_ip_comm/cvd/G2srsmbrnt/G2srsmbrnt_Book/FeatServ.html), [Cisco: распределение PoE](https://www.cisco.com/c/en/us/support/docs/voice-unified-communications/unified-ip-phone-7900-series/97869-poe-requirement-faq.html).
+The 7945G is **Class 3**. Conservative 802.3af allocation at the source is up to
+**15.4 W per port**: **154 W** for ten phones, or about **193 W** with 25% headroom.
+Plan for **at least 200 W dedicated to phones**, plus other powered devices.
+This is a source-sizing allowance, not a claim of continuous 154 W consumption.
+Sources: [Cisco phone classes](https://www.cisco.com/c/en/us/td/docs/voice_ip_comm/cvd/G2srsmbrnt/G2srsmbrnt_Book/FeatServ.html),
+[Cisco PoE allocation](https://www.cisco.com/c/en/us/support/docs/voice-unified-communications/unified-ip-phone-7900-series/97869-poe-requirement-faq.html).
 
-Проверять отдельно число PoE-портов, лимит порта и суммарный бюджет. Надпись «24 порта» не гарантирует питание 24 телефонов. Источника на 120 W может не хватить при полном резервировании Class 3, даже если среднее фактическое потребление ниже. Камеры и точки доступа требуют дополнительного бюджета.
+Check the number of PoE ports, each port's limit and the total budget separately.
+A 24-port switch does not necessarily power 24 phones. A 120 W supply may be
+insufficient when Class 3 power is fully reserved, even if average consumption is
+lower. Cameras and access points need additional allowance.
 
-PoE+ 802.3at подходит как источник для 802.3af-телефона. 802.3bt ради одного 7945G не требуется. Для непрерывной работы питание коммутатора, маршрутизатора и PBX резервируют вместе.
+A PoE+ 802.3at source supports an 802.3af phone. 802.3bt is unnecessary for one
+7945G. Back up the switch, router and PBX power together for continued service.
 
-## Если не включается
+## If the phone does not power on
 
-1. Проверить порт `SW`, наличие PoE и его включение в конфигурации коммутатора.
-2. Тем же кабелем/портом запитать исправный телефон; подозрительный аппарат проверить на другом исправном порту.
-3. Исключить исчерпанный бюджет, port fault, расписание отключения и низкий лимит мощности.
-4. Проверить пары и разъёмы, исключить неподходящие промежуточные устройства.
-5. Проверить аппарат со штатным адаптером. Если он работает от адаптера, но не от нескольких исправных PoE-источников, вероятна неисправность PoE-входа.
+1. Check the `SW` port and verify that PoE is supported and enabled on the switch.
+2. Test a working phone with the same cable/port, and test the suspect phone on
+   another working PoE port.
+3. Check budget exhaustion, port faults, shutdown schedules and low power limits.
+4. Check cable pairs and connectors; remove incompatible intermediate devices.
+5. Test with the approved adapter. If the phone works with the adapter but not
+   with several working PoE sources, its PoE input may be faulty.
 
-Не использовать пассивный 24 V-инжектор и не подавать DC прямо на пары Ethernet. Неисправное PoE-питание у поддерживающего его аппарата требует диагностики, а не универсальной переделки.
+Do not use a passive 24 V injector or apply DC directly to Ethernet pairs.
+A faulty PoE input requires diagnosis, not a generic hardware conversion.
 
-## Если в коробке окажется другая модель без PoE
+## If the batch includes a different model without PoE
 
-Сначала установить точную модель: этот комплект рассчитан на 7945G. Для действительно неподдерживающего PoE аппарата возможен внешний **активный IEEE PoE splitter**, выдающий питание в штатный DC-разъём. Необходимы совпадение напряжения, полярности, размеров разъёма, достаточная мощность и нужная скорость Ethernet. Без паспорта конкретной модели выбирать splitter нельзя. Для найденных 7945G он не нужен.
+Identify the exact model first; this project targets the 7945G. A phone that
+truly lacks PoE may use an external **active IEEE PoE splitter** feeding its
+normal DC input. Voltage, polarity, connector size, power capacity and Ethernet
+speed must all match. Select a splitter only from that model's specifications.
+The identified 7945G phones do not need one.
 
 ## UPS
 
-UPS должен питать коммутатор, PBX-ноду, маршрутизатор и, при внешнем SIP-провайдере, оборудование интернет-доступа. Время автономности рассчитывать по измеренной суммарной нагрузке и характеристикам батареи. Сам PoE резервным источником не является.
+Power the switch, PBX node, router and, when using an external SIP provider,
+Internet access equipment from the UPS. Estimate runtime from measured total
+load and battery specifications. PoE itself is not a backup power source.

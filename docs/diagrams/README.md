@@ -1,19 +1,19 @@
-# Редактируемые схемы
+# Editable diagrams
 
-- [architecture.svg](architecture.svg): существующий DHCP-маршрутизатор,
-  телефоны, PoE-коммутатор, Asterisk на фиксированном LAN-узле, временный TFTP
-  и Home Assistant. HA открывает AMI-соединение, голос Assist проходит по SIP/RTP.
-- [assist.svg](assist.svg): номер 630, двустороннее преобразование G.711 ↔ Opus,
-  встроенная VoIP-интеграция HA и проверка pipeline на реальном телефоне.
-- [commissioning.svg](commissioning.svg): инвентаризация, выбор цепочки прошивок,
-  готовность TFTP, один телефон, проверка звонков и подключение остальной партии.
-- [power.svg](power.svg): встроенный 802.3af у 7945G, питание от PoE-коммутатора
-  или активного инжектора при обычном коммутаторе.
+- [architecture.svg](architecture.svg): existing DHCP router, phones, PoE switch,
+  Asterisk on a fixed LAN node, temporary TFTP and Home Assistant. HA initiates
+  the AMI connection; Assist audio uses SIP/RTP.
+- [assist.svg](assist.svg): extension 630, bidirectional G.711 ↔ Opus conversion,
+  native HA VoIP and pipeline acceptance on a physical phone.
+- [commissioning.svg](commissioning.svg): inventory, firmware-path selection,
+  TFTP readiness, pilot phone, call checks and rollout to the remaining batch.
+- [power.svg](power.svg): built-in 802.3af support, powered by a PoE switch or an
+  active injector connected to an ordinary switch.
 
-Каждый файл является самостоятельным SVG с текстом и векторными объектами.
-Файлы не содержат MAC-адресов, паролей или адреса доставки. Источник схем и
-команда пересборки описаны в [руководстве презентации](../slides/README.md).
-Полные технические инструкции, ограничения и источники находятся в документах
-на уровень выше. Порты проекта перечислены в [инструкции k3s](../k3s-deployment.md)
-и [руководстве HA](../home-assistant.md). Схемы показывают архитектуру,
-но не подтверждают завершённую установку дома или физическую приёмку.
+Each file is a standalone SVG containing editable text and vector objects.
+There are no MAC addresses, passwords or delivery details. Diagram sources and
+rebuild instructions are in the [presentation guide](../slides/README.md).
+The parent documentation contains full procedures, limitations and sources.
+Project ports are listed in the [k3s runbook](../k3s-deployment.md) and
+[HA guide](../home-assistant.md). Diagrams describe the architecture; they do not
+establish that home deployment or physical acceptance has been completed.

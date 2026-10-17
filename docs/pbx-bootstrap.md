@@ -1,27 +1,26 @@
-# Подготовка PBX до подключения телефонов
+# Bootstrap the PBX before connecting phones
 
-Если физические MAC-адреса и прошивки ещё не проверены, можно подготовить
-сервер без фиктивного inventory. Явный режим `--pbx-only` создаёт только
-Asterisk-конфигурацию, а при `home_assistant.enabled: true` — AMI и его отдельный
-локальный пароль. Никаких телефонных endpoint/auth, Cisco XML, `secrets.json`
-для SIP-телефонов и каталога TFTP он не создаёт. NTP нужен телефонам, поэтому
-в этом режиме `ntp_ipv4` не требуется.
+If physical MAC addresses and firmware have not yet been verified, prepare the
+server without a placeholder inventory. Explicit `--pbx-only` mode generates only
+Asterisk configuration and, when `home_assistant.enabled: true`, AMI configuration
+with its own local password. It creates no phone endpoint/auth entries, Cisco XML,
+phone `secrets.json` or TFTP directory. Phones need NTP, so `ntp_ipv4` is not
+required in this mode.
 
-Используйте отдельный приватный каталог, например `.local/pbx-bootstrap`.
-Генератор откажется работать поверх `tftp` или `secrets.json`, оставшихся от
-телефонного provisioning: он не удаляет их и не выдаёт старые профили за новую
-конфигурацию. Повторный запуск в том же bootstrap-каталоге сохраняет пароль AMI.
+Use a separate private directory, such as `.local/pbx-bootstrap`. The generator
+refuses to run over `tftp` or `secrets.json` left by phone provisioning. It neither
+deletes them nor presents old profiles as newly generated configuration.
+Rerunning in the same bootstrap directory preserves the AMI password.
 
-1. Создайте в нём `site.json` с реальными параметрами кластера и сети по
-   [инструкции deployment](k3s-deployment.md). `asterisk_image` должен содержать
-   проверенный digest образа для архитектуры выбранного узла. TFTP-образ и
-   прошивка для запуска PBX не нужны.
-2. Если нужна интеграция HA, задайте блок `home_assistant` по
-   [инструкции AMI](home-assistant.md). `ami_client_ipv4` — наблюдаемый на PBX
-   адрес клиента, а не предположение по Pod CIDR. Начните с
-   `allow_originate: false` и `assist: {"enabled": false}`; включайте команды
-   звонков и Assist после отдельной проверки необходимых условий.
-3. Сгенерируйте и проверьте конфигурацию:
+1. Create `site.json` with actual cluster and network parameters using the
+   [deployment guide](k3s-deployment.md). `asterisk_image` must contain a verified
+   image digest for the selected node's architecture. PBX startup does not
+   require a TFTP image or Cisco firmware.
+2. For HA integration, add `home_assistant` using the [AMI guide](home-assistant.md).
+   `ami_client_ipv4` is the source observed by the PBX, not an assumed Pod CIDR
+   address. Start with `allow_originate: false` and `assist: {"enabled": false}`;
+   enable call control and Assist after checking their prerequisites separately.
+3. Generate and validate the configuration:
 
 ```bash
 umask 077
@@ -29,43 +28,46 @@ python3 scripts/provision.py --pbx-only \
   --site .local/pbx-bootstrap/site.json --out .local/pbx-bootstrap
 python3 scripts/preflight.py --site .local/pbx-bootstrap/site.json --cluster
 ./scripts/deploy.sh --site .local/pbx-bootstrap/site.json
-# Изучите private rendered/core.yaml, firewall и выбранный context/node.
-# Применяйте только после этой проверки:
+# Review private rendered/core.yaml, the firewall and selected context/node.
+# Apply only after completing that review:
 ./scripts/deploy.sh --site .local/pbx-bootstrap/site.json --apply --firewall-reviewed
 ```
 
-Без `--apply` deployment лишь готовит файлы. **Не добавляйте `--with-tftp`**:
-bootstrap не содержит ни телефонных профилей, ни проверенной firmware.
-Существующий host firewall сохраняется; AMI TCP5038 разрешается только с
-адреса HA. Ни AMI, ни SIP/RTP не публикуются в интернет.
+Without `--apply`, deployment only prepares files. **Do not add `--with-tftp`:**
+bootstrap has neither phone profiles nor verified firmware. Preserve the existing
+host firewall and allow AMI TCP5038 only from HA. Do not expose AMI or SIP/RTP to
+the Internet.
 
-В bootstrap доступны внутренние приложения **600 — Echo** и **601 —
-Milliwatt**. Группы 620 и телефонных номеров 2xx нет. При явном включении
-Assist добавляется только маршрут 630 к проверенному VoIP listener HA.
-Без зарегистрированного телефона приложения можно проверить контролируемым
-локальным/AMI-вызовом; такая проверка не доказывает звук на физическом Cisco.
-После запуска проверяйте SIP transports и AMI login, а не наличие телефонных
-entities: их до подключения аппаратов не ожидается.
+Bootstrap provides **600 — Echo** and **601 — Milliwatt**. There is no group 620
+or phone extension 2xx. Explicitly enabling Assist adds only route 630 to the
+verified HA VoIP listener. A controlled local/AMI call can test these applications
+without a registered phone, but cannot prove audio on a physical Cisco. After
+startup, verify SIP transports and AMI login; phone entities are not expected
+until phones are configured.
 
-При включённом Assist upstream также обнаруживает служебный endpoint
-`ha-assist`. Его производный `Registered` может быть выключен, а `State` —
-`Unavailable`: этот endpoint набирается по явному SIP URI и не регистрируется
-на HA. Это не физический Cisco и не проверка доступности Assist. Серверный
-`AMI Connected` и отдельный [AMI-пробник](https://github.com/ha-homelab/asterisk-telephony/blob/main/docs/ami-verification.md)
-проверяют управление АТС; работу аудио подтверждает отдельный звонок.
+With Assist enabled, upstream also discovers service endpoint `ha-assist`.
+Its derived `Registered` may be off and its `State` may be `Unavailable`: this
+endpoint is dialed through an explicit SIP URI and does not register with HA.
+It is not a physical Cisco or an Assist health check. The server's `AMI Connected`
+entity and the [AMI probe](https://github.com/ha-homelab/asterisk-telephony/blob/main/docs/ami-verification.md)
+check PBX management; audio requires a separate call.
 
-## Добавление проверенных аппаратов
+## Add verified phones
 
-После физической проверки создайте настоящий `phones.json`, добавьте NTP и
-выполните обычный generator в **том же** каталоге, сохранив AMI-пароль:
+After physical verification, create a real `phones.json`, add NTP and run the
+normal generator in the **same directory** to preserve the AMI password.
+
+If a phone is outside the PBX `lan_cidr`, add its `/32` to `phone_cidrs` and
+review a matching narrow host firewall rule as described in the
+[provisioning guide](provisioning.md). You do not need to widen the source ACL
+to a common supernet. Preserve the separately verified AMI client address.
 
 ```bash
 python3 scripts/provision.py --site .local/pbx-bootstrap/site.json \
   --inventory .local/pbx-bootstrap/phones.json --out .local/pbx-bootstrap
 ```
 
-Обычный режим по-прежнему требует 1–50 физически проверенных CP-7945G. Он
-создаёт телефонные auth/XML и группу 620; эхо и тестовый тон сохраняют номера
-600 и 601. Далее выполните
-отдельную проверку firmware, preflight и deployment по основному runbook.
-Файлы из `.local`, пароли, MAC и private rendered manifests не коммитятся.
+Normal mode still requires 1–50 physically verified CP-7945G phones. It creates
+phone authentication/XML and group 620; echo and the test tone keep extensions
+600 and 601. Then validate firmware, run preflight and deploy using the main
+runbook. Do not commit `.local`, passwords, MACs or private rendered manifests.

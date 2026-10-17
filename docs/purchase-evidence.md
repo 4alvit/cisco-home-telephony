@@ -1,13 +1,14 @@
-# Идентификация партии
+# Identifying the purchased batch
 
-В Gmail найдено подтверждение покупки на eBay партии **10 × Cisco 7945G** с подставками и
-трубками. Основание — тело письма о доставке от **1 декабря 2022 года**;
-проверено через авторизованный доступ к Gmail 16 октября 2026 года.
+Gmail contains confirmation of an eBay purchase of **10 × Cisco 7945G** phones
+with stands and handsets. The evidence is the body of the delivery email dated
+**December 1, 2022**, reviewed through authorized Gmail access on October 16, 2026.
 
-В публичный репозиторий не включены письмо, ссылка на него, идентификатор заказа,
-сумма, адрес доставки и трекинг. Модель из тела письма важнее автоматической
-карточки почтового клиента, которая могла показывать другой товар из заказа.
+The public repository excludes the email, its link, order ID, amount, delivery
+address and tracking information. The model in the email body takes precedence
+over an automatically generated mail-client card, which could show another item
+from the order.
 
-Это подтверждает модель купленного лота, но не сегодняшнее количество исправных
-аппаратов. Серийные номера, MAC, аппаратные ревизии и текущие прошивки нужно снять
-с каждого телефона и хранить в игнорируемой Git директории `.local/`.
+This confirms the model purchased, not the number of working phones today.
+Record each phone's serial number, MAC, hardware revision and current firmware
+in the Git-ignored `.local/` directory.

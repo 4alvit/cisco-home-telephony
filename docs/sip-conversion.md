@@ -1,53 +1,94 @@
 # Cisco 7945G → SIP → Asterisk
 
-Партия — десять приобретённых 7945G, но первая итерация включает **один** телефон. Это Enterprise SIP, не MPP. Бинарные прошивки не включены: права на архив и совместимость с ревизией проверяют до записи flash.
+The purchased batch contains ten 7945G phones, but start with **one**. This is
+Enterprise SIP, not MPP. Firmware binaries are not included: verify archive
+usage rights and hardware compatibility before writing flash.
 
-## 1. Снять инвентаризацию
+## 1. Record the inventory
 
-Для каждого экземпляра записать модель с этикетки (`CP-7945G`), MAC, hardware revision/VID, App Load, Boot Load, надписи `Must use … or above`, текущие IP/VLAN/TFTP. Проверить трубку, дисплей, клавиши и Ethernet. Сохранить фотографии и доступную старую конфигурацию вне Git.
+For each phone, record its label model (`CP-7945G`), MAC, hardware revision/VID,
+App Load, Boot Load, any `Must use … or above` label, and current IP/VLAN/TFTP
+settings. Check the handset, display, keys and Ethernet. Save photographs and
+available old configuration outside Git.
 
-MAC доступен на этикетке или в `Settings → Network Configuration`, версия — в Model Information. Если web-доступ уже разрешён, страницу Device Information можно использовать для чтения состояния. [Cisco: Remote Monitoring](https://www.cisco.com/c/en/us/td/docs/voice_ip_comm/cuipph/7975G_7971g-ge_7970g_7965g_7945g/9_0/english/admin_guide/P747_BK_W06BD6D9_00_adminguide_7945-7965-7970-7971-7975/P747_BK_W06BD6D9_00_adminguide_7945-7965-7970-7971-7975_chapter_01000.html).
+The MAC is on the label or under `Settings → Network Configuration`; versions
+are in Model Information. If web access is enabled, Device Information provides
+read-only status. See [Cisco Remote Monitoring](https://www.cisco.com/c/en/us/td/docs/voice_ip_comm/cuipph/7975G_7971g-ge_7970g_7965g_7945g/9_0/english/admin_guide/P747_BK_W06BD6D9_00_adminguide_7945-7965-7970-7971-7975/P747_BK_W06BD6D9_00_adminguide_7945-7965-7970-7971-7975_chapter_01000.html).
 
-Не ставить `verified: true` по названию eBay-лота: сверить конкретную этикетку. Назначить номера 201–210 и подписи по комнатам.
+Do not set `verified: true` based only on the eBay listing. Check each label,
+then assign extensions 201–210 and room labels.
 
-## 2. Выбрать путь firmware
+## 2. Select the firmware path
 
-Последний обнаруженный в проверенных официальных материалах пакет — **7945_7965 SIP 9.4(2)SR4-3**. [Cisco device pack сентября 2025](https://www.cisco.com/c/en/us/td/docs/voice_ip_comm/cucm/device_packs/1401-devpack-for-sep-2025.html). Ожидаемый load-файл — `SIP45.9-4-2SR4-3S.loads`; окончательное имя обязательно сверить с реально полученным ZIP. Linux различает регистр `SIP45` и `sip45`.
+The latest package found in the reviewed official material is **7945_7965 SIP
+9.4(2)SR4-3**. See the [September 2025 Cisco device pack](https://www.cisco.com/c/en/us/td/docs/voice_ip_comm/cucm/device_packs/1401-devpack-for-sep-2025.html).
+The expected load file is `SIP45.9-4-2SR4-3S.loads`; verify the exact name against
+the archive actually obtained. Linux distinguishes `SIP45` from `sip45`.
 
-Путь выбирается по данным аппарата:
+Choose the path from the phone's actual state:
 
-1. Уже установлен нужный SIP — оставить firmware, перейти к provisioning.
-2. **Hardware 13.0+ — не понижать до 8.x.** В [Cisco 9.3(1)SR4 release notes](https://www.cisco.com/en/US/docs/voice_ip_comm/cuipph/7900_series/firmware/9_3_1SR4/english/release_notes/P790_BK_RF3660D6_00_rn-9_3_1sr4-7900-series_chapter_00.pdf), раздел Hardware Updates, минимум — **9.3(1)SR3**. Учитывать также этикетку и release notes выбранного пакета.
-3. Старая ревизия с App Load **ниже 8.3(3)** — нужна промежуточная **8.3(3)–8.5(2)** перед 9.3(1)+ по тому же документу. Практический документированный вариант для старого SCCP — **SCCP 8.5(2)**, затем допустимый SIP. [Cisco CCA 3.0(1), Resolving Cisco Model 79xx Phone Upgrade Issues](https://www.cisco.com/c/en/us/td/docs/net_mgmt/cisco_configuration_assistant/version3_0_1/release/Notes/cca_3_0_1_relnotes.html).
-4. Старая ревизия с 8.3(3)+ — сверить требования целевого пакета. Не добавлять промежуточный downgrade автоматически.
-5. Неизвестная версия или противоречивая этикетка — сначала восстановить сведения. Не угадывать load ID и не обходить `Load Rejected HC`.
+1. If the required SIP version is already installed, keep it and proceed to provisioning.
+2. **Hardware 13.0+ must not be downgraded to 8.x.** The Hardware Updates section
+   of the [Cisco 9.3(1)SR4 release notes](https://www.cisco.com/en/US/docs/voice_ip_comm/cuipph/7900_series/firmware/9_3_1SR4/english/release_notes/P790_BK_RF3660D6_00_rn-9_3_1sr4-7900-series_chapter_00.pdf)
+   sets the minimum to **9.3(1)SR3**. Also check the label and target release notes.
+3. An older hardware revision with App Load **below 8.3(3)** needs an intermediate
+   **8.3(3)–8.5(2)** before 9.3(1)+, according to the same document. A documented
+   path for old SCCP is **SCCP 8.5(2)** followed by a compatible SIP release.
+   See [Cisco CCA 3.0(1), Resolving Cisco Model 79xx Phone Upgrade Issues](https://www.cisco.com/c/en/us/td/docs/net_mgmt/cisco_configuration_assistant/version3_0_1/release/Notes/cca_3_0_1_relnotes.html).
+4. For older hardware already running 8.3(3)+, check the target package requirements;
+   do not automatically add an intermediate downgrade.
+5. If the version is unknown or labels disagree, resolve the discrepancy first.
+   Do not guess a load ID or bypass `Load Rejected HC`.
 
-Минимальная версия hardware — не рекомендация откатиться к ней. Intermediate нужен только действительно старому телефону. Нет необходимого разрешённого архива — эта ветка ещё не готова к прошивке.
+A hardware minimum is not a recommendation to downgrade to it. Intermediate
+firmware is needed only for genuinely old loads. If the required authorized
+archive is unavailable, that upgrade path is not ready to run.
 
-## 3. Получить полный пакет
+## 3. Obtain the complete package
 
-Использовать Cisco Software Download или уже имеющийся разрешённый архив с известным происхождением. Проверить модель, SIP/SCCP и опубликованную контрольную сумму. Сохранить источник, дату и SHA-256 локально. Собственный SHA-256 фиксирует файл, но не доказывает его происхождение.
+Use Cisco Software Download or an existing authorized archive with known
+provenance. Check the model, SIP/SCCP protocol and published checksum. Record
+source, date and SHA-256 privately. Your own SHA-256 identifies the file's bytes
+but does not prove their origin.
 
 ```bash
 unzip -l /absolute/path/to/cisco-firmware.zip
 shasum -a 256 /absolute/path/to/cisco-firmware.zip
 ```
 
-Cisco прямо описывает ZIP как вариант размещения на TFTP без установки CUCM. Подписанные файлы нельзя заменять самодельными образами. [Официальный README](https://www.cisco.com/web/software/282074288/128566/cmterm-7945_7965-sip.9-4-2SR2-2-readme.html).
+Cisco explicitly documents ZIP distribution for TFTP installation without CUCM.
+Do not replace signed components with homemade images.
+See the [official README](https://www.cisco.com/web/software/282074288/128566/cmterm-7945_7965-sip.9-4-2SR2-2-readme.html).
 
-Для каждого релиза держать отдельную копию. В активном TFTP-каталоге — один полный комплект, включая `term45.default.loads`, если он поставляется. `term75.default.loads` принадлежит 7975, не 7945. Не смешивать части двух релизов. Использовать описанный в главном README импорт firmware; рабочий каталог `.local/tftp` и файлы с паролями не коммитить.
+Keep each release separately. The active TFTP directory must contain one complete
+bundle, including `term45.default.loads` if supplied. `term75.default.loads` is
+for the 7975, not the 7945. Do not mix components from different releases. Follow
+the firmware import procedure in the main README; never commit `.local/tftp`
+or files containing passwords.
 
-## 4. Подготовить инфраструктуру до перезапуска
+## 4. Prepare infrastructure before restarting
 
-Развернуть Asterisk/TFTP по [инструкции k3s](../deploy/README.md). Нужны постоянный LAN IPv4 ноды, DHCP, доступный NTP и маршрутизация между телефоном и PBX. Для пилота не использовать NAT между ними.
+Deploy Asterisk/TFTP using the [k3s guide](../deploy/README.md). You need a fixed
+node LAN IPv4 address, DHCP, reachable NTP and routing between phone and PBX.
+Do not place NAT between them for the pilot.
 
-В DHCP voice-сети задать option 150 — **IPv4 TFTP-ноды**, не URL, ClusterIP или pod IP. Без изменения DHCP можно выбрать на телефоне `Alternate TFTP = Yes`, `TFTP Server 1 = <LAN IPv4 ноды>`. Для изменения защищённых параметров открыть Settings и набрать `**#`, затем сохранить правки. Factory recovery требует DHCP с option 150/66: полный сброс удаляет ручные настройки.
+Set DHCP option 150 in the voice scope to the **TFTP node's IPv4 address**, not a
+URL, ClusterIP or Pod IP. Alternatively, set `Alternate TFTP = Yes` and
+`TFTP Server 1 = <node LAN IPv4>` on the phone. Unlock protected settings by
+opening Settings and entering `**#`, then save changes. Factory recovery needs
+DHCP option 150/66 because a full reset removes manual settings.
 
-Разрешить UDP 69 и диапазон передач TFTP, заданный сервером, TCP 5060 для SIP, UDP 10000–10199 на стороне Asterisk. UDP 16384–16482 — выбранные генератором RTP-порты **телефона**, это другой конец соединения. Между VLAN учитывать оба направления. Не запускать второй DHCP на общей домашней сети.
+Allow UDP 69 and the server's TFTP transfer range, TCP 5060 for SIP, and UDP
+10000–10199 on Asterisk. UDP 16384–16482 is the generator's **phone-side** RTP
+range, at the other end of the connection. Account for both directions across
+VLANs. Do not start a second DHCP server on the shared home network.
 
-## 5. Сгенерировать SIP-профиль
+## 5. Generate a SIP profile
 
-В `.local/site.json` записать проверенные IP/CIDR и адрес реально существующего NTP-сервера. В `.local/phones.json` на пилоте оставить одну запись: фактический MAC, номер, `model: "CP-7945G"`, `verified: true`, `transport: "tcp"`, точный `firmware_load` без `.loads`.
+Set verified IP/CIDR values and an existing NTP server in `.local/site.json`.
+For the pilot, keep one entry in `.local/phones.json`: actual MAC, extension,
+`model: "CP-7945G"`, `verified: true`, `transport: "tcp"`, and the exact
+`firmware_load` without `.loads`.
 
 ```bash
 python3 scripts/provision.py \
@@ -56,59 +97,92 @@ python3 scripts/provision.py \
   --out .local
 ```
 
-Результат: индивидуальный `SEP<MAC>.cnf.xml`, `dialplan.xml`, конфиги Asterisk, локальные секреты. Повторный запуск сохраняет уже созданные пароли; смена пароля должна одновременно попасть на PBX и телефон.
+The generator creates a per-phone `SEP<MAC>.cnf.xml`, `dialplan.xml`, Asterisk
+configuration and local secrets. Rerunning preserves passwords. Password changes
+must reach both the PBX and phone together.
 
-Значимые фрагменты сгенерированного XML:
+Key excerpts from generated XML:
 
 ```xml
 <deviceProtocol>SIP</deviceProtocol>
-<!-- Внутри callManager: -->
+<!-- Inside callManager: -->
 <processNodeName>LAN_IP_PBX</processNodeName>
-<!-- Внутри sipLines/line: -->
+<!-- Inside sipLines/line: -->
 <proxy>USECALLMANAGER</proxy>
-<!-- На уровне device: -->
+<!-- At device level: -->
 <loadInformation>SIP45.9-4-2SR4-3S</loadInformation>
 <deviceSecurityMode>1</deviceSecurityMode>
 <transportLayerProtocol>1</transportLayerProtocol>
 ```
 
-Это поясняющие фрагменты, не самостоятельный профиль. `1` выбирает TCP; расширение `.loads` в `loadInformation` не добавляют. `USECALLMANAGER` использует адрес из `callManagerGroup`. Часовой пояс телефона — `Pacific Standard/Daylight Time`; сервер может использовать IANA `America/Los_Angeles`. NTP работает в режиме `unicast`. Основание для XML — [документация автора USECALLMANAGER](https://usecallmanager.nz/sepmac-cnf-xml.html), а не гарантия Cisco для Asterisk.
+These excerpts are explanatory, not a complete profile. `1` selects TCP; omit
+`.loads` from `loadInformation`. `USECALLMANAGER` uses `callManagerGroup`'s address.
+The phone timezone is `Pacific Standard/Daylight Time`; the server may use IANA
+`America/Los_Angeles`. NTP uses `unicast`. XML follows the
+[USECALLMANAGER author's documentation](https://usecallmanager.nz/sepmac-cnf-xml.html),
+not a Cisco guarantee of Asterisk compatibility.
 
-После загрузки проверить часы и переход летнего времени. G.711 выбран как базовый кодек; TLS/SRTP здесь не объявляются настроенными. На первом этапе защищать систему изоляцией сети и ACL.
+After boot, verify the clock and daylight saving behavior. G.711 is the baseline
+codec; TLS/SRTP are not configured. Use network isolation and ACLs initially.
 
-## 6. Пилот без factory reset
+## 6. Pilot without a factory reset
 
-1. Проверить Asterisk/TFTP, полный пакет, SEP-файл с правильным MAC и достаточное питание.
-2. Подключить один телефон. Настроить TFTP и сохранить изменения.
-3. Сделать обычный restart: `Settings → **#**`. Допустимо однократное переподключение питания, если обновление ещё не идёт.
-4. Наблюдать TFTP: запрос индивидуального `SEP…cnf.xml`, затем load-файла и компонентов, если firmware меняется. Чужие файлы старого CUCM не подделывать автоматически.
-5. Дождаться полной загрузки, не отключая питание во время записи flash. Возможны несколько автоматических перезапусков.
-6. Сверить App Load, номер, время, затем регистрацию и звонки.
+1. Check Asterisk/TFTP, the complete bundle, correct MAC in the SEP filename and
+   sufficient power.
+2. Connect one phone, configure TFTP and save.
+3. Perform a normal restart with `Settings → **#**`. Reconnecting power once is
+   acceptable only if a firmware update has not started.
+4. Observe TFTP requests for the individual `SEP…cnf.xml`, then the load file and
+   components if firmware changes. Do not automatically fabricate files from
+   the previous CUCM environment.
+5. Wait for a complete boot without interrupting power during flash writes.
+   Several automatic restarts may occur.
+6. Verify App Load, extension and time, then registration and calling.
 
-### Отдельная промежуточная SCCP-стадия
+### Separate intermediate SCCP stage
 
-Если шаг 2 определил необходимость intermediate, работать на отдельном пилотном TFTP-каталоге. Сохранённый SCCP-профиль направить на **точный `SCCP45.…`** load ID промежуточного пакета и проверить App Load после перезагрузки. Основной генератор намеренно принимает только SIP45: не ослаблять его проверку и не переименовывать SCCP в SIP.
+If step 2 established that intermediate firmware is required, use a separate
+pilot TFTP directory. Point the saved SCCP profile at the intermediate bundle's
+**exact `SCCP45.…` load ID** and verify App Load after restart. The main generator
+intentionally accepts only SIP45; do not weaken validation or rename SCCP to SIP.
 
-Если старого профиля нет, подготовить штатный recovery-комплект с `term45.default.loads` и его компонентами на изолированной тестовой сети, затем использовать описанный ниже factory recovery. Это не автоматическая рекомендация стирать телефон. После подтверждённой промежуточной версии переключить пилот на готовый SIP-каталог и перезагрузить. Не публиковать intermediate на TFTP всей партии.
+If no old profile is available, prepare the standard recovery bundle with
+`term45.default.loads` and its components on an isolated test network, then use
+the factory recovery procedure below. This is not an automatic recommendation
+to erase the phone. Once the intermediate version is verified, switch the pilot
+to the prepared SIP directory and restart. Do not expose intermediate firmware
+to the entire batch.
 
-## 7. Recovery только при необходимости
+## 7. Recovery only when necessary
 
-Обычный restart сохраняет записанные настройки. Factory reset удаляет настройки, сертификаты, историю и приложение; восстановление зависит от TFTP. Сначала исключить неверный MAC, VLAN, IP, firewall, неполный пакет и несовместимую ревизию.
+A normal restart preserves configuration. Factory reset removes settings,
+certificates, history and the application; recovery depends on TFTP. First rule
+out an incorrect MAC, VLAN, IP, firewall, incomplete package or incompatible hardware.
 
-Перед factory reset проверить DHCP, option 150/66, `term45.default.loads` и его компоненты. Включить телефон, удерживать `#` до последовательного янтарного мигания клавиш линий, отпустить и набрать `123456789*0#`. Дождаться основной страницы без отключения питания. [Cisco Administration Guide, Basic Reset / Factory Reset, печатные стр. 248–249; сохранённая копия документа Cisco](https://www.vikaskumar.org/files/voip/manuals/P747_BK_W06BD6D9_00_adminguide_7945-7965-7970-7971-7975.pdf#page=268). [Официальная японская копия руководства](https://www.cisco.com/c/ja_jp/td/docs/vauc/iptelep/ipphone7900/ag/029/P747_BK_W06BD6D9_00_adminguide_7945-7965-7970-7971-7975.pdf).
+Before a factory reset, verify DHCP, option 150/66, `term45.default.loads` and all
+its components. Power on while holding `#` until line keys flash amber in sequence,
+release it and enter `123456789*0#`. Wait for the main screen without interrupting
+power. See [Cisco Administration Guide, Basic Reset / Factory Reset, printed
+pages 248–249, preserved copy](https://www.vikaskumar.org/files/voip/manuals/P747_BK_W06BD6D9_00_adminguide_7945-7965-7970-7971-7975.pdf#page=268)
+and the [official Japanese guide](https://www.cisco.com/c/ja_jp/td/docs/vauc/iptelep/ipphone7900/ag/029/P747_BK_W06BD6D9_00_adminguide_7945-7965-7970-7971-7975.pdf).
 
-`Auth Fail` — проверить путь версий и целостность. `Load Rejected HC` — аппаратный минимум. Повторные сбросы не устраняют причину. Не выполнять неизвестные deep-reset последовательности и не обходить подписи.
+For `Auth Fail`, check the version path and integrity. `Load Rejected HC` indicates
+a hardware minimum. Repeated resets do not fix the cause. Do not use unknown
+deep-reset sequences or bypass signature checks.
 
-## 8. Испытания и десять аппаратов
+## 8. Acceptance and rollout to ten phones
 
-Для каждого аппарата проверить:
+For each phone, verify:
 
-1. `pjsip show contacts` показывает ожидаемый номер/LAN-адрес.
-2. `600` — echo, собственная речь возвращается.
-3. `601` — тестовый тон, слушать на умеренной громкости.
-4. Звонок между двумя телефонами: речь в обе стороны, DTMF, удержание/возврат, перевод, speakerphone и трубка.
-5. `620` — группа: после ответа одного остальные прекращают звонить.
-6. Перезапуск телефона сохраняет номер; после перезапуска PBX регистрация восстанавливается.
-7. Часы корректны, секретов нет в Git, лишние сети не имеют доступа.
+1. `pjsip show contacts` shows the expected extension and LAN address.
+2. `600` returns your speech through echo.
+3. `601` plays the test tone; use moderate volume.
+4. A call between two phones has two-way speech, DTMF, hold/resume, transfer,
+   speakerphone and handset operation.
+5. `620` rings the group; answering one phone stops the others ringing.
+6. Restarting the phone preserves its extension; registration recovers after PBX restart.
+7. Time is correct, no secrets are in Git, and unintended networks have no access.
 
-После успешного пилота добавлять аппараты небольшими группами и записывать итоговый App Load. Десять записей в конфиге не равны десяти прошитым аппаратам. Внешние номера и экстренные вызовы в базовой конфигурации не подключены.
+After a successful pilot, add phones in small groups and record the final App
+Load. Ten configuration entries do not equal ten flashed phones. External numbers
+and emergency calling are not connected in the baseline configuration.

@@ -1,57 +1,54 @@
-# Презентация: Cisco 7945G, Asterisk и Home Assistant
+# Presentation: Cisco 7945G, Asterisk and Home Assistant
 
-[Открыть PDF](cisco-home-telephony.pdf) · [Скачать редактируемый PowerPoint](cisco-home-telephony.pptx)
+[Open PDF](cisco-home-telephony.pdf) · [Download editable PowerPoint](cisco-home-telephony.pptx)
 
-![Обзор 14 слайдов](preview.webp)
+![Overview of all 14 slides](preview.webp)
 
-14 слайдов на русском: купленная партия из десяти 7945G, домашняя сетевая схема,
-PoE, переход SCCP/SIP, TFTP, Asterisk PJSIP, Home Assistant через AMI,
-Assist по номеру 630 с G.711 ↔ Opus, развёртывание и проверка звонков,
-резервные копии и запуск всей партии. Подписи и технические схемы в PPTX состоят
-из редактируемых объектов. Ссылки на первичные источники находятся в заметках
-соответствующих слайдов. PDF предназначен для чтения и печати.
+14 English slides cover the purchased batch of ten 7945G phones, home network
+architecture, PoE, SCCP/SIP conversion, TFTP, Asterisk PJSIP, Home Assistant over
+AMI, Assist on extension 630 with G.711 ↔ Opus, deployment, call acceptance,
+backups and batch rollout. PPTX labels and diagrams are editable objects.
+Speaker notes link to primary sources. The PDF is suitable for reading and printing.
 
-Презентация сопровождает [подробную инструкцию k3s](../k3s-deployment.md),
-[настройку телефонов](../provisioning.md) и [Home Assistant](../home-assistant.md).
-Для подготовки сервера без вымышленных телефонных профилей есть
-[отдельный bootstrap-процесс](../pbx-bootstrap.md) с `--pbx-only`.
-Подробные HA package/dashboard, установка и приёмка находятся в
-[companion-репозитории](https://github.com/ha-homelab/asterisk-telephony).
-Перед прошивкой проверьте текущую
-App Load и аппаратную ревизию каждого телефона. Для HW 13.0+ нельзя переходить
-ниже 9.3(1)SR3. Порядок обновления определяется release notes выбранной версии.
+The presentation accompanies the [k3s runbook](../k3s-deployment.md),
+[phone provisioning guide](../provisioning.md) and [Home Assistant guide](../home-assistant.md).
+A separate [PBX bootstrap procedure](../pbx-bootstrap.md) uses `--pbx-only` to
+prepare the server before verified phone profiles are available. Detailed HA
+packages, dashboard, installation and acceptance procedures live in the
+[companion repository](https://github.com/ha-homelab/asterisk-telephony).
+Before flashing, check each phone's App Load and hardware revision. HW 13.0+
+must not run firmware below 9.3(1)SR3. Follow the chosen release's upgrade notes.
 
-Слайды отделяют подготовку серверной части от подключения проверенного аппарата
-и физической приёмки. Они не утверждают, что установка дома или реальный звонок
-уже завершены. Даже успешные container/runtime проверки не заменяют проверку
-двустороннего звука, DTMF, управления вызовами и Assist на телефонах.
+The slides distinguish server preparation from adding verified hardware and
+physical acceptance. They do not establish that home deployment or a real call
+has been completed. Successful container/runtime checks do not replace tests of
+two-way audio, DTMF, call control and Assist on physical phones.
 
-## Исходники
+## Sources
 
-- [tools/build_slides.mjs](../../tools/build_slides.mjs) содержит текст, цвета,
-  расположение объектов, заметки со ссылками и данные для четырёх SVG.
-- [SVG-схемы](../diagrams/) можно редактировать в текстовом редакторе, Inkscape
-  или другом редакторе SVG. Они не содержат внешних изображений и шрифтов.
-- Шрифт презентации: Arial. Формат: 16:9, 1280 × 720.
+- [tools/build_slides.mjs](../../tools/build_slides.mjs) contains text, colors,
+  object layout, source-linked speaker notes and the four SVG definitions.
+- [SVG diagrams](../diagrams/) can be edited in a text editor, Inkscape or another
+  SVG editor. They contain no external images or fonts.
+- Presentation font: Arial. Format: 16:9, 1280 × 720.
 
-## Пересборка SVG без специальных пакетов
+## Rebuild SVG files without special packages
 
-Из корня репозитория:
+From the repository root:
 
 ```bash
 node tools/build_slides.mjs --svg-only
 ```
 
-Команда обновляет `docs/diagrams/architecture.svg`, `assist.svg`,
-`commissioning.svg` и `power.svg`. Достаточно современного Node.js,
-сетевые запросы не выполняются.
+This updates `docs/diagrams/architecture.svg`, `assist.svg`, `commissioning.svg`
+and `power.svg`. It needs a modern Node.js runtime and makes no network requests.
 
-## Пересборка PPTX и PDF
+## Rebuild PPTX and PDF
 
-Авторинг использует JavaScript-пакет `@oai/artifact-tool` из bundled workspace
-runtime Codex. Это **не публичная npm-зависимость**: не устанавливайте случайный
-одноимённый пакет. В Codex сначала получите пути через инструмент
-`load_workspace_dependencies`, затем задайте переменные своими путями:
+Authoring uses `@oai/artifact-tool` from Codex's bundled workspace runtime.
+This is **not a public npm dependency**; do not install an unrelated package with
+the same name. In Codex, obtain paths with `load_workspace_dependencies`, then
+set these variables to the returned paths:
 
 ```bash
 export RUNTIME_NODE=/path/to/bundled/node
@@ -61,7 +58,7 @@ export SOFFICE=/path/to/bundled/soffice
 "$RUNTIME_NODE" tools/build_slides.mjs
 ```
 
-Для встроенной проверки пакета перед выдачей файла дополнительно задайте:
+For the built-in package check before delivery, also set:
 
 ```bash
 export PRESENTATION_SKILL_DIR=/path/to/presentations/skills/presentations
@@ -69,11 +66,10 @@ export RUNTIME_PYTHON=/path/to/bundled/python3
 "$RUNTIME_NODE" tools/build_slides.mjs
 ```
 
-Сборка записывает PPTX, PDF и обзор `preview.webp` в `docs/slides/`. Изображения для визуальной проверки,
-кандидат PPTX и отчёты проверок сохраняются в игнорируемой `.slides-build/`.
-Если встроенный PDF-экспорт недоступен в установленном runtime, скрипт использует
-LibreOffice через `SOFFICE`. Просмотрите все слайды после правок: структурная
-проверка не подтверждает, что надписи и стрелки читаются правильно.
+The build writes PPTX, PDF and `preview.webp` to `docs/slides/`. Visual-review
+images, the candidate PPTX and validation reports go to Git-ignored
+`.slides-build/`. If native PDF export is unavailable, the script uses LibreOffice
+via `SOFFICE`. Review every slide after edits: structural validation does not
+establish that labels and arrows are legible.
 
-Для обычного редактирования готового PPTX в PowerPoint или LibreOffice этот
-runtime не нужен.
+Editing the resulting PPTX in PowerPoint or LibreOffice does not require this runtime.

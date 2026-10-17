@@ -1,106 +1,118 @@
-# Инвентаризация и генерация конфигурации
+# Inventory and configuration generation
 
-Если аппараты ещё не проверены, используйте [явный PBX-only bootstrap](pbx-bootstrap.md).
-Он позволяет подготовить сервер и AMI без inventory; требования к обычному
-телефонному provisioning ниже остаются обязательными.
+If phones are not yet verified, use the [explicit PBX-only bootstrap](pbx-bootstrap.md).
+It prepares the server and AMI without an inventory. The requirements below
+remain mandatory for normal phone provisioning.
 
-## 1. Проверка аппаратов
+## 1. Verify the phones
 
-На каждом аппарате проверьте наклейку `CP-7945G`, MAC порта SW, серийный номер,
-hardware revision, current load, наличие старого CTL/ITL и возможность входа в
-настройки. Серийные номера можно хранить только в своей `.local/phones.json`.
-Письмо подтверждает лот, а не соответствие каждого сохранившегося аппарата.
+Check each phone's `CP-7945G` label, SW-port MAC, serial number, hardware revision,
+current load, existing CTL/ITL and access to settings. Store serial numbers only
+in private `.local/phones.json`. The purchase email identifies the lot, not every
+phone that remains today.
 
-Скопируйте `examples/phones.example.json`. В нём десять строк с номерами 201–210.
-Удалите строки отсутствующих телефонов. MAC можно записать с `:` или `-`;
-генератор нормализует его в 12 заглавных hex-символов. Значения `label` для
-первичной настройки используйте латиницей, до 24 символов. Верхний `phoneLabel`
-автоматически сокращается до 12 символов, пробелы заменяются на `_`. Пароли
-ограничены 30 символами согласно формату SEP для этого поколения.
+Copy `examples/phones.example.json`, which has ten entries for extensions 201–210.
+Remove entries for missing phones. MACs may use `:` or `-`; the generator converts
+them to 12 uppercase hexadecimal characters. Use ASCII labels of up to 24
+characters for initial setup. The top-level `phoneLabel` is automatically
+shortened to 12 characters, with spaces replaced by `_`. Passwords are limited
+to 30 characters by this generation's SEP format.
 
-`verified:true` означает, что вы сверили модель и MAC с аппаратом. Это не заменяет
-проверку совместимости прошивки. `firmware_load` — точное имя `.loads` **без
-расширения**, например `SIP45.9-4-2SR4-3S`, только если такой файл действительно
-есть в вашем проверенном комплекте. Не переименовывайте прошивку, чтобы она
-совпала с примером. Для промежуточного SCCP этапа нужен отдельный набор из
-[инструкции конверсии](sip-conversion.md), этот генератор создаёт конечный SIP-профиль.
+`verified:true` means the model and MAC were checked against the actual phone;
+it does not verify firmware compatibility. `firmware_load` is the exact `.loads`
+filename **without its extension**, for example `SIP45.9-4-2SR4-3S`, only if that
+file exists in your verified bundle. Do not rename firmware to match the example.
+An intermediate SCCP stage requires the separate procedure in the
+[conversion guide](sip-conversion.md); this generator produces the final SIP profile.
 
-## 2. Параметры site.json
+## 2. Configure site.json
 
-Основной образец: `deploy/site.example.json`. Поля `node_ipv4` и `lan_cidr`
-должны соответствовать выбранному LAN-интерфейсу PBX и подсети телефонов.
-`ntp_ipv4` — **существующий доступный NTP-сервер**, не просто IP PBX. Этот проект
-не разворачивает NTP. Часовой пояс телефона — Pacific Standard/Daylight Time.
-Сначала добейтесь правильного времени на телефоне.
+Use `deploy/site.example.json` as the starting point. `node_ipv4` is the PBX
+address and must belong to its `lan_cidr`. `ntp_ipv4` must identify an existing
+reachable NTP server; this project does not deploy NTP. The phone timezone is
+Pacific Standard/Daylight Time. Verify its clock before provisioning.
 
-Для начальной схемы предполагается одна общая домашняя подсеть телефонов и PBX.
-Для отдельного voice VLAN адаптируйте разрешения и ACL: текущий генератор
-требует адрес PBX внутри `lan_cidr`. Не расширяйте это поле до `0.0.0.0/0`.
+Optional `phone_cidrs` defines the source allowlist for phone SIP endpoints.
+Omitting it preserves the default `[lan_cidr]`. An explicit list **replaces**
+that default. For a PBX at `192.168.50.10` in `192.168.50.0/24`, setting
+`"phone_cidrs": ["192.168.60.25/32"]` allows only that phone, without also
+allowing every host in the PBX subnet. Supply 1–50 non-overlapping private IPv4
+CIDRs, including `/32` entries for individually verified phone addresses.
 
-`transport` у каждого телефона — `tcp` по умолчанию, либо явный `udp`.
-XML выставляет соответственно `transportLayerProtocol=1` или `2`, а PJSIP
-использует соответствующий transport. Значение `4` из старых сетевых примеров
-здесь не используется. Телефон получает адрес PBX через `USECALLMANAGER` и
-`processNodeName`. Источник схемы SEP: [описание usecallmanager](https://usecallmanager.nz/sepmac-cnf-xml.html).
+The generator also adds these networks to both SIP transports' `local_net`
+for NAT classification. This does not open a firewall or authorize all hosts
+in `lan_cidr`. Review host firewall rules separately: phone sources need
+TCP/UDP5060 and UDP10000–10199 on the PBX. Existing routes must support traffic
+in both directions. Open TFTP UDP69 and UDP20000–20031 only for the intended
+phones during provisioning. The generator changes no firewall, routes or DHCP.
+Regenerate configuration after editing `phone_cidrs`; preflight rejects stale
+ACLs. Do not widen `lan_cidr` just to admit a single phone.
 
-## 3. Локальная генерация
+Each phone's `transport` defaults to `tcp`; `udp` must be selected explicitly.
+XML sets `transportLayerProtocol=1` or `2` respectively, and PJSIP uses the
+matching transport. This project does not use value `4` from older online
+examples. The phone receives the PBX address through `USECALLMANAGER` and
+`processNodeName`. SEP schema reference:
+[USECALLMANAGER documentation](https://usecallmanager.nz/sepmac-cnf-xml.html).
+
+## 3. Generate locally
 
 ```bash
 umask 077
 python3 scripts/provision.py --site .local/site.json --inventory .local/phones.json
 ```
 
-Результат:
+Output:
 
-- `.local/secrets.json`: отдельный случайный 120-битный пароль на номер.
-- `.local/asterisk/*.conf`: PJSIP endpoint/auth/AOR, dialplan, RTP, runtime пути.
-- `.local/tftp/SEP<MAC>.cnf.xml`: один профиль на телефон.
-- `.local/tftp/dialplan.xml`: номера 2xx, 600, 601 и 620.
+- `.local/secrets.json`: a separate random 120-bit password per extension.
+- `.local/asterisk/*.conf`: PJSIP endpoint/auth/AOR, dialplan, RTP and runtime paths.
+- `.local/tftp/SEP<MAC>.cnf.xml`: one profile per phone.
+- `.local/tftp/dialplan.xml`: extensions 2xx, 600, 601 and 620.
 
-Каталоги получают mode 0700, файлы 0600. Содержимое паролей не выводится.
-Генератор удаляет устаревшие сгенерированные SEP-профили из `.local/tftp`, если
-телефон удалён из инвентаризации. Другие файлы не удаляет. Секреты удалённых
-номеров остаются в локальном хранилище для отката; удаляйте их после своей
-политики хранения. После изменения профилей повторите deployment и provisioning
-затронутых телефонов. Сам запуск генератора не меняет работающий PBX.
+Directories use mode 0700 and files 0600. Passwords are not printed. When a phone
+is removed from the inventory, the generator removes its old generated SEP
+profile from `.local/tftp`; other files are left intact. Removed extensions'
+secrets remain in the local store for rollback; delete them according to your
+retention policy. After changing profiles, redeploy and provision the affected
+phones. Running the generator alone does not change the live PBX.
 
-## 4. Комплект прошивки
+## 4. Prepare firmware
 
-Разархивируйте законно полученный Cisco ZIP для **7945/7965 SIP** в отдельный
-каталог. Сверьте подпись/контрольную сумму дистрибутива с надёжным источником,
-изучите release notes. Сохраните все требуемые `.loads`, `.sbn` и другие
-компоненты; одного `.loads` недостаточно. Скопируйте только полный проверенный
-набор в `.local/firmware/`, без конфигов и README.
+Extract an authorized Cisco ZIP for **7945/7965 SIP** into a separate directory.
+Verify its signature/checksum against a trusted source and read the release notes.
+Keep every required `.loads`, `.sbn` and other component; a `.loads` file alone is
+insufficient. Copy only the complete verified bundle into `.local/firmware/`,
+without configuration files or README files.
 
 ```bash
 shasum -a 256 .local/firmware/*
 ```
 
-Внесите **каждое имя** и SHA-256 в поле `files` локального manifest по образцу
-`examples/firmware-manifest.example.json`. Запишите происхождение набора,
-`load_id` и только после ручной проверки поставьте `reviewed:true`.
+Add **every filename** and SHA-256 to `files` in the local manifest, following
+`examples/firmware-manifest.example.json`. Record provenance and `load_id`, and set
+`reviewed:true` only after manual verification.
 
 ```bash
 python3 scripts/verify_firmware.py --directory .local/firmware --manifest .local/firmware-manifest.json
 ```
 
-Проверка отклонит отсутствующие/лишние файлы, неправильный SHA-256, symlink и
-путь вне каталога. Она **не доказывает** происхождение Cisco, полноту по vendor
-release notes, корректность аппаратного пути или право использования.
-Самостоятельно вычисленная SHA-256 сохраняет известное состояние ваших файлов;
-сравнение с этой же суммой не является проверкой подлинности.
+The check rejects missing/extra files, incorrect SHA-256 values, symlinks and
+paths outside the directory. It **does not establish** Cisco provenance,
+completeness against release notes, hardware compatibility or usage rights.
+A locally computed SHA-256 records the current bytes; comparing those bytes to
+the same hash does not authenticate them.
 
-## 5. Минимальная настройка Asterisk
+## 5. Minimal Asterisk setup
 
-Один endpoint и AOR на номер, одно активное устройство на AOR. Новый REGISTER
-заменяет старый contact. Профили требуют пароль; anonymous endpoint и trunk
-отсутствуют. ACL ограничена `lan_cidr`. Все медиа проходят PBX (`direct_media=no`),
-адрес RTP закреплён за LAN IP (`media_address`, `bind_rtp_to_media_address`).
-Это исключает выбор WireGuard/overlay адреса на многосетевом узле.
+Each extension has one endpoint and AOR, with one active device per AOR. A new
+REGISTER replaces the old contact. Profiles require passwords; there is no
+anonymous endpoint or trunk. The source ACL is restricted to `phone_cidrs`
+(default: `lan_cidr`). All media passes through the PBX (`direct_media=no`), with
+RTP bound to its LAN IP (`media_address`, `bind_rtp_to_media_address`). This avoids
+selecting a WireGuard/overlay address on a multi-interface node.
 
-Начальные кодеки G.711 ulaw/alaw не требуют транскодирования для типового
-внутреннего звонка. G.722, BLF, shared lines, transfer и voicemail добавляйте
-после проверки базовой связи: они не заявлены как протестированные функции
-этой поставки.
+The baseline G.711 ulaw/alaw codecs need no transcoding for a typical internal
+call. Add G.722, BLF, shared lines, transfer and voicemail only after basic calling
+is verified; this delivery does not claim those features have been tested.
 
-PJSIP источник: [официальные примеры Asterisk](https://docs.asterisk.org/Configuration/Channel-Drivers/SIP/Configuring-res_pjsip/res_pjsip-Configuration-Examples/).
+PJSIP reference: [official Asterisk examples](https://docs.asterisk.org/Configuration/Channel-Drivers/SIP/Configuring-res_pjsip/res_pjsip-Configuration-Examples/).

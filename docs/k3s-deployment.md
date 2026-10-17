@@ -1,73 +1,78 @@
-# Cisco 7945G → Asterisk в домашнем k3s
+# Cisco 7945G → Asterisk in a home k3s cluster
 
-Эта инструкция разворачивает внутреннюю АТС для десяти Cisco CP-7945G. Телефоны
-должны быть переведены на подходящую **SIP firmware** по отдельной инструкции.
-Внешний SIP trunk, PSTN/экстренные вызовы, voicemail и публичный доступ здесь не
-настраиваются. Два телефона, echo `600`, тон `601` и группа `620` позволяют
-проверить весь локальный маршрут.
+This guide deploys an internal PBX for ten Cisco CP-7945G phones. Convert the
+phones to suitable **SIP firmware** using the separate conversion guide first.
+External SIP trunks, PSTN/emergency calling, voicemail and public access are
+outside this setup. Two phones, echo `600`, tone `601` and ring group `620` let
+you verify the complete local call path.
 
-## 1. Выбрать домашний узел
+## 1. Choose the home node
 
-Публичные примеры используют условную сеть: узел `voice-node`, IP
-`192.168.50.10`, LAN `192.168.50.0/24`, контекст `home-k3s` и registry
-`192.168.50.20:5050`. Это **не реальные параметры и не результат проверки
-живого кластера**. Сохраните собственные значения в `.local/site.json`.
+Public examples use an illustrative network: node `voice-node`, IP
+`192.168.50.10`, LAN `192.168.50.0/24`, context `home-k3s` and registry
+`192.168.50.20:5050`. These are **not actual infrastructure values or the result
+of a live cluster check**. Keep your own values in `.local/site.json`.
 
-Выберите проводной Linux worker внутри дома: голос должен идти по LAN, а не
-через облачный control plane или VPN. Слово «фиксированный» означает узел для
-этого Deployment, а не незанятый физический компьютер. Проверьте ресурсы, порты
-и архитектуру CPU. Не переустанавливайте существующий k3s ради этой АТС.
+Choose a wired Linux worker inside the home: voice traffic should use the LAN,
+not a cloud control plane or VPN. A fixed node means the node selected for this
+Deployment; it need not be an otherwise unused physical computer. Check its
+resources, ports and CPU architecture. Do not reinstall an existing k3s cluster
+for this PBX.
 
-Пример registry использует HTTP в доверенной домашней сети. Для него отдельно
-нужны настройка **Docker builder для push** и настройка **k3s/containerd для pull**.
-[Prerequisite для HTTP registry](../deploy/README.md#plain-http-registry-prerequisite)
-описывает точечную настройку; существующий mirror k3s не настраивает Docker.
-Предпочтителен registry с TLS. Image digest обязателен в любом случае.
+The registry example uses HTTP on a trusted home network. It requires separate
+configuration for **Docker builder pushes** and **k3s/containerd pulls**. The
+[HTTP registry prerequisite](../deploy/README.md#plain-http-registry-prerequisite)
+describes the scoped configuration; an existing k3s mirror does not configure
+Docker. Prefer a registry with TLS. An image digest is required in either case.
 
-У Asterisk один Pod, `hostNetwork: true`, фиксация на `metadata.name` узла,
-`replicas: 1`, стратегия `Recreate`. SIP и RTP используют IP узла. Нет Kubernetes
-Service/Ingress/NodePort/LoadBalancer, DNS туннеля, порт-форвардинга на роутере или
-DHCP workload. Не масштабируйте до двух экземпляров: они конкурируют за одни порты.
+Asterisk runs in one Pod with `hostNetwork: true`, node selection by
+`metadata.name`, `replicas: 1` and the `Recreate` strategy. SIP and RTP use the
+node IP. There is no Kubernetes Service/Ingress/NodePort/LoadBalancer, DNS tunnel,
+router port forwarding or DHCP workload. Do not scale to two replicas: both
+would compete for the same ports.
 
-## 2. Подготовить локальные параметры и firmware
+## 2. Prepare local settings and firmware
 
-Нужны Python 3.9+, kubectl с существующим доступом, Docker/BuildKit на подходящем
-builder, SSH к выбранному узлу и лицензированная firmware Cisco. Архитектура image должна соответствовать узлу. Скрипт по умолчанию собирает
-`linux/amd64`; для ARM узла задайте `BUILD_PLATFORM=linux/arm64`. Для amd64
-используйте native amd64 builder или настроенную эмуляцию BuildKit.
+You need Python 3.9+, kubectl with existing cluster access, Docker/BuildKit on a
+suitable builder, SSH access to the selected node and licensed Cisco firmware.
+The image architecture must match the node. The build script defaults to
+`linux/amd64`; set `BUILD_PLATFORM=linux/arm64` for an ARM node. For amd64, use a
+native amd64 builder or correctly configured BuildKit emulation.
 
 ```bash
 umask 077
 mkdir -p .local/firmware
 cp deploy/site.example.json .local/site.json
-# Отредактируйте .local/site.json: подтвердите node/IP/CIDR/context,
-# укажите ntp_ipv4 существующего доступного NTP server (узел не обязан им быть).
-# Используйте пример inventory из README и физически проверенные MAC.
+# Edit .local/site.json: verify node/IP/CIDR/context and the phone source ACL.
+# Set ntp_ipv4 to an existing reachable NTP server; the node need not provide NTP.
+# Use the inventory example in README with physically verified MAC addresses.
 python3 scripts/provision.py --site .local/site.json --inventory .local/phones.json
 python3 scripts/verify_firmware.py --directory .local/firmware --manifest .local/firmware-manifest.json
 ```
 
-Последняя команда должна пройти до копирования firmware на узел. Не скачивайте
-случайные «прошивки» из форумов. Не помещайте vendor firmware, MAC/inventory,
-пароли, kubeconfig, сгенерированные XML или манифесты Secret в Git.
+The final command must pass before copying firmware to the node. Do not download
+unverified firmware from forums. Keep vendor firmware, MAC addresses/inventory,
+passwords, kubeconfig, generated XML and Secret manifests out of Git.
 
-## 3. Собрать, проверить и опубликовать образы
+## 3. Build, test and publish images
 
-Для AMD64-узла при локальном ARM-компьютере доступна
-[нативная сборка и одноразовый экспорт через GitHub Actions](ci-images.md).
-Она использует те же Dockerfile и smoke; обычные push/PR artifacts не сохраняют.
+If the node is AMD64 and your workstation is ARM, use the documented
+[native build and one-time export through GitHub Actions](ci-images.md).
+It uses the same Dockerfiles and smoke test; ordinary push/PR runs retain no
+image artifacts.
 
-Закреплена версия Asterisk **22.11.0 LTS**, объявленная официальным сайтом;
-SHA-256 исходного архива зафиксирован в Dockerfile. Это контроль неизменности
-проверенного HTTPS-архива, а не заявление о проверке отдельной GPG-подписи.
-Базовый Debian `bookworm-slim` разрешается в digest перед сборкой. APT зависимости
-берутся из актуального Debian репозитория, поэтому сборка не является побитно
-воспроизводимой. Финальные deployment image references обязательно содержат digest.
+Asterisk is pinned to **22.11.0 LTS**, announced by the official site; the source
+archive SHA-256 is pinned in the Dockerfile. This checks that the reviewed HTTPS
+archive has not changed; it is not a claim that a separate GPG signature was
+verified. The Debian `bookworm-slim` base is resolved to a digest before the
+build. APT dependencies come from the current Debian repository, so builds are
+not bit-for-bit reproducible. Final deployment image references must include
+digests.
 
 ```bash
-# На amd64 builder для voice-node. Эта команда не выполняет push.
+# On an amd64 builder for voice-node. This command does not push.
 bash scripts/build-images.sh 192.168.50.20:5050/cisco-home
-# Публикация в своём доступном registry:
+# Publish to your reachable registry:
 docker push 192.168.50.20:5050/cisco-home/asterisk:22.11.0
 docker push 192.168.50.20:5050/cisco-home/tftp:bookworm
 docker image inspect --format '{{join .RepoDigests "\n"}}' \
@@ -76,132 +81,149 @@ docker image inspect --format '{{join .RepoDigests "\n"}}' \
   192.168.50.20:5050/cisco-home/tftp:bookworm
 ```
 
-Для HTTP registry настройка `registries.yaml` на k3s node не настраивает Docker
-builder. У последнего отдельно требуется точечный `insecure-registries` для
-вашего `HOST:PORT`: [порядок и ограничения](../deploy/README.md#plain-http-registry-prerequisite).
-Не перезаписывайте существующий daemon.json и не перезапускайте чужой builder без окна.
+For an HTTP registry, `registries.yaml` on the k3s node does not configure the
+Docker builder. The builder separately needs a scoped `insecure-registries`
+entry for your `HOST:PORT`: see the
+[procedure and limits](../deploy/README.md#plain-http-registry-prerequisite).
+Do not overwrite an existing daemon.json or restart a shared builder without a
+maintenance window.
 
-Впишите соответствующие `repository@sha256:…` в `asterisk_image` и `tftp_image`
-файла `.local/site.json`. Если registry требует авторизации, создайте pull Secret
-в namespace `telephony` из отдельного Docker config файла и укажите **имя** в
-`image_pull_secrets`. Не добавляйте PAT/password в site.json или shell history.
+Put the corresponding `repository@sha256:…` references into `asterisk_image` and
+`tftp_image` in `.local/site.json`. If the registry requires authentication,
+create a pull Secret in namespace `telephony` from a separate Docker config file
+and add its **name** to `image_pull_secrets`. Do not put a PAT/password into
+site.json or shell history.
 
-Проверка образов с настоящим генератором конфигурации, но синтетическим MAC,
-случайным временным паролем и loopback IP, без доступа контейнера к LAN:
+Test the images with the real configuration generator, a synthetic MAC, a
+random temporary password and a loopback IP. The containers cannot access the
+LAN:
 
 ```bash
 bash scripts/smoke-containers.sh 192.168.50.20:5050/cisco-home
 ```
 
-Smoke проверяет загрузку `chan_pjsip`, endpoint 201, UDP/TCP транспорты и dialplan
-600/601/620; затем выполняет реальный TFTP RRQ и проверяет init script как UID10001
-на root-owned томе с доступом через fsGroup. Asterisk работает без сети, а TFTP —
-в одноразовой Docker internal network без публикации портов. Для совместимости
-с remote Docker context синтетические конфиги передаются в одноразовых fixture images,
-которые удаляются вместе с тестовыми контейнерами и сетью. Точно эти проверки запускаются в GitHub Actions после сборки двух
-образов. Реальную регистрацию Cisco и двусторонний звук проверяют отдельно в LAN.
+The smoke test checks `chan_pjsip`, endpoint 201, UDP/TCP transports and dialplan
+600/601/620, then performs a real TFTP RRQ and checks the init script as UID10001
+on a root-owned volume accessible through fsGroup. Asterisk has no network;
+TFTP uses a disposable Docker internal network with no published ports. To
+support remote Docker contexts, synthetic configs are copied into disposable
+fixture images, which are removed along with the test containers and network.
+GitHub Actions runs these same checks after building both images. Test physical
+Cisco registration and two-way audio separately on the LAN.
 
-## 4. Проверить узел, firewall и DHCP
+## 4. Check the node, firewall and DHCP
 
 ```bash
 kubectl --context home-k3s get nodes -o wide
 python3 scripts/preflight.py --site .local/site.json --cluster --with-tftp
-# На выбранном узле (read-only):
+# Read-only checks on the selected node:
 ssh voice-node 'ip -br addr; sudo ss -lntup; df -h /var/lib; free -h'
 ssh voice-node 'sudo nft list ruleset'
 ```
 
-Заранее проверьте отсутствие других владельцев TCP/UDP `5060`, UDP `69`, UDP
-`10000–10199` и UDP `20000–20031`. `ss` не доказывает отсутствие динамического
-использования диапазона — сопоставьте с другими hostNetwork workload и конфигами.
-Оставьте минимум 512 MiB RAM и 1 CPU лимита для Asterisk; короткие LAN звонки
-обычно требуют меньше, но нагрузку и звук проверяют практически.
+First check that nothing else owns TCP/UDP `5060`, UDP `69`, UDP `10000–10199` or
+UDP `20000–20031`. `ss` alone cannot prove a range is not used dynamically;
+compare it with other hostNetwork workloads and their configurations. Allow at
+least 512 MiB RAM and a 1 CPU limit for Asterisk. Short LAN calls usually need
+less, but verify resource usage and audio under real load.
 
-Разрешите с доверенного phone LAN на выбранный узел:
+Allow the trusted phone sources in `phone_cidrs` (default: `lan_cidr`) to reach
+the selected node on:
 
-- TCP **и** UDP `5060`: SIP signaling;
+- TCP **and** UDP `5060`: SIP signaling;
 - UDP `10000–10199`: Asterisk RTP;
-- только во время provisioning: UDP `69` **и** `20000–20031`: TFTP RRQ и transfer;
-- DNS/NTP/DHCP к существующим серверам сети, не к новым Pod в этой схеме.
+- during provisioning only, UDP `69` **and** `20000–20031`: TFTP RRQ and transfers;
+- DNS/NTP/DHCP at the existing network servers, not new Pods in this setup.
 
-Ответы должны проходить обратно к динамическим клиентским UDP портам телефонов.
-`69/udp` в одиночку недостаточно для TFTP. Порты `20000–20031` ограничивают
-серверные transfer sockets; прошивайте сначала один телефон, затем небольшими
-партиями. RTP диапазон — серверный; телефон выбирает собственный RTP source port.
+An explicit phone `/32` can be outside the PBX's `lan_cidr` if routing already
+works in both directions. Match that source in the host firewall rather than
+widening the allowed subnet. Changing `phone_cidrs` requires regeneration;
+preflight rejects stale generated ACLs. It does not install firewall rules.
 
-Сопоставьте `deploy/firewall.nft.example` с действующим firewall узла. Сначала
-`sudo nft -c -f …` проверяет синтаксис, затем владелец firewall вносит и сохраняет
-правила своей штатной системой. **Не делайте `nft flush ruleset`**: это удалит
-правила k3s. Шаблон разрешает LAN, но другие правила всё ещё могут блокировать
-этот трафик. Поддержка NetworkPolicy для hostNetwork зависит от CNI, поэтому
-обычная pod NetworkPolicy здесь не считается защитой. Не открывайте SIP/TFTP
-на WAN, ZeroTier/WireGuard peer сетях или в домашнем Cloudflare tunnel.
+Replies must reach the phones' dynamic client UDP ports. `69/udp` alone is not
+enough for TFTP. Ports `20000–20031` bound the server transfer sockets; flash one
+phone first, then small batches. The RTP range belongs to the server; the phone
+chooses its own RTP source port.
 
-DHCP остаётся на существующем роутере. В phone scope
-задайте Cisco option **150 = 192.168.50.10** (IP TFTP), подтвердив выбранный IP.
-Для dnsmasq это обычно `dhcp-option=tag:phones,150,192.168.50.10`, но тег `phones`
-должен реально назначаться нужным MAC/диапазону: не вставляйте одну эту строку
-в глобальную конфигурацию вслепую. При одном тестовом телефоне можно вручную
-задать Alternate TFTP. Не запускайте второй DHCP server на LAN.
+Adapt `deploy/firewall.nft.example` to the node's existing firewall. First use
+`sudo nft -c -f …` to check syntax, then have the firewall owner install and
+persist the rules through the existing mechanism. **Do not run
+`nft flush ruleset`**: it would remove k3s rules. The template allows LAN traffic,
+but other rules can still block it. NetworkPolicy support for hostNetwork
+depends on the CNI, so ordinary Pod NetworkPolicy is not considered protection
+here. Do not expose SIP/TFTP to WAN, ZeroTier/WireGuard peer networks or a home
+Cloudflare tunnel.
 
-## 5. Доставить firmware на выбранный узел
+DHCP stays on the existing router. Within the phone scope, set Cisco option
+**150 = 192.168.50.10** (the TFTP IP), after confirming the selected address.
+For dnsmasq this is usually `dhcp-option=tag:phones,150,192.168.50.10`, but the
+`phones` tag must actually be assigned to the intended MAC addresses/range: do
+not blindly paste this line into global configuration. For one test phone you
+can set Alternate TFTP manually. Do not run a second DHCP server on the LAN.
 
-На узле создаётся только каталог firmware, без конфигов с паролями. XML доставляет
-Kubernetes Secret. Сначала подтвердите SSH host key привычным способом.
+## 5. Deliver firmware to the selected node
+
+Only the firmware directory is created on the node; it contains no password
+configurations. Kubernetes Secrets deliver the XML. Verify the SSH host key
+through your normal trusted process first.
 
 ```bash
 rsync -av --checksum .local/firmware/ voice-node:/tmp/cisco-firmware/
 ssh voice-node 'sudo install -d -m 0755 /var/lib/cisco-tftp'
-# Только после локальной проверки manifest; ожидаются обычные файлы в одном каталоге.
+# Only after local manifest verification; all inputs must be regular files in one directory.
 ssh voice-node 'sudo find /tmp/cisco-firmware -maxdepth 1 -type f -exec cp {} /var/lib/cisco-tftp/ \;'
 ssh voice-node 'sudo find /var/lib/cisco-tftp -maxdepth 1 -type f -exec chmod 0644 {} \;'
 ```
 
-Сверьте SHA-256 на узле с `.local/firmware-manifest.json`; наличие файла по имени
-не доказывает правильную версию. Например `ssh voice-node 'sha256sum /var/lib/cisco-tftp/*'`.
-Здесь нет `rsync --delete`: существующие файлы не удаляются незаметно. Перед новым
-набором firmware вручную уберите/архивируйте устаревшие файлы, чтобы исключить
-неверный load. Подкаталоги и symlink в наборе запрещены. Образы не содержат Cisco
-firmware; после окончания работы локальная лицензированная копия остаётся у вас.
+Compare the node's SHA-256 values with `.local/firmware-manifest.json`; a matching
+filename does not prove a matching version. For example, run
+`ssh voice-node 'sha256sum /var/lib/cisco-tftp/*'`. These commands omit
+`rsync --delete`, so existing files are not silently deleted. Before installing
+a new firmware set, explicitly remove or archive obsolete files to avoid
+serving the wrong load. Subdirectories and symlinks are prohibited in the set.
+Images contain no Cisco firmware; you retain your local licensed copy when
+provisioning is complete.
 
-## 6. Отрендерить и применить
+## 6. Render and apply
 
 ```bash
 python3 -m unittest discover -s tests -v
 bash scripts/deploy.sh --with-tftp
-# По умолчанию это ТОЛЬКО локальная генерация, без kubectl.
+# The default is local generation ONLY, with no kubectl calls.
 ```
 
-Просмотрите `.local/rendered/core.yaml` и `tftp.yaml` приватно: там Secret, base64
-не является шифрованием. Для первого server dry run требуется заранее созданный
-namespace; сухая проверка Namespace не сохраняет его для проверки детей.
+Review `.local/rendered/core.yaml` and `tftp.yaml` privately: they contain
+Secrets, and base64 is not encryption. The first server dry run requires an
+existing namespace; dry-running a Namespace does not save it for validation of
+its children.
 
 ```bash
-# Эти команды уже меняют только выделенный namespace, не запускают workloads.
+# These commands change only the dedicated namespace and start no workloads.
 kubectl --context home-k3s create namespace telephony
 kubectl --context home-k3s label namespace telephony \
   pod-security.kubernetes.io/enforce=privileged \
   pod-security.kubernetes.io/audit=restricted \
   pod-security.kubernetes.io/warn=restricted --overwrite
 bash scripts/deploy.sh --server-dry-run --with-tftp
-# После проверки firewall/socket/firmware, в согласованное окно:
+# After firewall/socket/firmware review, during an agreed maintenance window:
 bash scripts/deploy.sh --apply --firewall-reviewed --with-tftp
 ```
 
-`hostNetwork` требует исключения из Pod Security baseline/restricted; privileged
-label разрешает это на уровне **отдельного namespace**, но сам Asterisk
-непривилегированный, UID 10001, без capabilities, с read-only rootfs. TFTP стартует
-root только ради bind/chroot/setuid, с четырьмя необходимыми capabilities, затем
-`tftpd-hpa` переключается на пользователя tftp. Не давайте посторонним право
-создавать Pod в этом namespace. Kubernetes Secret требует нормального RBAC и
-шифрования datastore/backups существующего кластера.
+`hostNetwork` needs an exception from Pod Security baseline/restricted. The
+privileged label permits this at the **dedicated namespace** level, while
+Asterisk itself is unprivileged: UID10001, no capabilities and a read-only root
+filesystem. TFTP starts as root only for bind/chroot/setuid, with the four
+required capabilities, then `tftpd-hpa` switches to user tftp. Do not give
+unrelated users permission to create Pods in this namespace. Kubernetes Secrets
+need appropriate RBAC and encryption of the existing cluster datastore/backups.
 
-TFTP Job живёт максимум **60 минут**, затем завершается, через 10 минут удаляется
-TTL controller. Запускайте первую прошивку сразу после готовности Job. Не начинайте
-новую прошивку под конец часа. Для нового окна удалите старый Job, повторите apply
-с `--with-tftp`. Не удаляйте Job и не прерывайте питание во время активной прошивки.
+The TFTP Job lasts at most **60 minutes**, then terminates; the TTL controller
+removes it ten minutes later. Begin the first flash as soon as the Job is ready.
+Do not start another flash near the end of the hour. For another window, delete
+the old Job and apply again with `--with-tftp`. Do not delete the Job or
+interrupt power during an active flash.
 
-## 7. Приёмка и закрытие provisioning
+## 7. Acceptance and closing provisioning
 
 ```bash
 kubectl --context home-k3s -n telephony get pods -o wide
@@ -210,36 +232,37 @@ kubectl --context home-k3s -n telephony exec deploy/asterisk -- asterisk -rx 'pj
 kubectl --context home-k3s -n telephony exec deploy/asterisk -- asterisk -rx 'pjsip show contacts'
 ```
 
-`tftpd-hpa` отправляет transfer logs в syslog. В минимальном образе syslog daemon
-нет, поэтому `kubectl logs job/cisco-tftp` не является журналом всех RRQ/transfers.
-Для краткой проверки сетевого обмена используйте на выбранном узле `tcpdump`
-с фильтром UDP69/20000–20031 на LAN интерфейсе, без `-A`/`-X` и без сохранения
-полного payload; завершите захват после проверки. Следите также за экраном телефона.
+`tftpd-hpa` sends transfer logs to syslog. The minimal image has no syslog daemon,
+so `kubectl logs job/cisco-tftp` is not a complete RRQ/transfer log. For a short
+network check, use `tcpdump` on the selected node's LAN interface with a filter
+for UDP69/20000–20031, without `-A`/`-X` or full payload capture, then stop the
+capture. Also watch the phone's display.
 
-Проверьте один 7945G: корректный SIP load, адрес DHCP, верное время, регистрация.
-Позвоните `600` (эхо), `601` (тестовый тон), затем между двумя аппаратами в обе
-стороны. Поднимите/положите трубку, проверьте speakerphone, DTMF, hold/resume и
-группу `620`; выдержите звонок несколько минут. После этого добавляйте остальные.
-MAC/пароли/пакеты SIP в логах не публикуйте.
+Check one 7945G: correct SIP load, DHCP address, clock and registration. Call
+`600` (echo), `601` (test tone), then call between two phones in both directions.
+Check off-hook/on-hook behavior, speakerphone, DTMF, hold/resume and ring group
+`620`; keep a call active for several minutes. Add the remaining phones only
+after these checks. Do not publish MAC addresses, passwords or SIP packets from
+logs.
 
 ```bash
-# Только когда все текущие flash/transfers завершены:
+# Only after all current flashes/transfers have completed:
 kubectl --context home-k3s -n telephony delete job cisco-tftp --ignore-not-found
-# Затем уберите временный allow UDP69/20000–20031 в действующем firewall.
+# Then remove temporary UDP69/20000–20031 allows from the existing firewall.
 ```
 
-При следующей перезагрузке 7945G может снова запрашивать TFTP config; закрытый
-TFTP означает отсутствие обновлений, а не гарантию автономного boot на каждой
-firmware. Обязательно проверьте cold boot одного аппарата после закрытия окна.
-Если выбранный load требует TFTP при boot, открывайте ограниченное окно на
-перезагрузку; постоянный TFTP потребует отдельного осознанного решения и защиты LAN.
+A 7945G may request TFTP configuration again at its next reboot. Closing TFTP
+prevents updates; it does not guarantee autonomous boot with every firmware
+version. Test a cold boot of one phone after closing the window. If the selected
+load needs TFTP at boot, open a restricted reboot window. Permanent TFTP requires
+a separate deliberate decision and LAN protection.
 
-## Источники
+## Sources
 
 - [Asterisk downloads / LTS](https://www.asterisk.org/downloads/).
 - [Asterisk 22.11.0 source archive](https://downloads.asterisk.org/pub/telephony/asterisk/asterisk-22.11.0.tar.gz).
 - [Asterisk release support](https://docs.asterisk.org/About-the-Project/Asterisk-Versions/).
-- [Kubernetes hostNetwork и NetworkPolicy](https://kubernetes.io/docs/concepts/services-networking/network-policies/#networkpolicy-and-hostnetwork-pods).
+- [Kubernetes hostNetwork and NetworkPolicy](https://kubernetes.io/docs/concepts/services-networking/network-policies/#networkpolicy-and-hostnetwork-pods).
 - [Kubernetes Jobs: deadline, TTL](https://kubernetes.io/docs/concepts/workloads/controllers/job/).
 - [tftpd-hpa: chroot, port-range, blocksize](https://manpages.debian.org/bookworm/tftpd-hpa/in.tftpd.8.en.html).
 - [k3s networking](https://docs.k3s.io/networking/basic-network-options).

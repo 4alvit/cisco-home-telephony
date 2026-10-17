@@ -1,59 +1,67 @@
-# Проверка серверной установки — 17 октября 2026
+# Live server validation — October 17, 2026
 
-Серверная часть установлена в существующем домашнем k3s. Этот протокол
-не является приёмкой физических Cisco: ни один аппарат пока не прошёл
-инвентаризацию, перепрошивку, регистрацию или проверку звука.
+The server is installed in the existing home k3s cluster. This record does not
+constitute physical-phone acceptance. One 7945G has since been powered through
+PoE and identified on the LAN; SIP flashing, registration and audio tests remain
+pending.
 
-## Выполнено на реальной системе
+## Verified on the live system
 
-- Выделенный namespace, один Asterisk **22.11.0** на домашнем Linux AMD64 узле.
-  Контейнер работает как UID10001, без capabilities, с read-only rootfs.
-  Deployment использует проверенный immutable image digest.
-- SIP TCP/UDP, endpoint `ha-assist`, маршрут **630** и работающий Opus проверены
-  в живом контейнере. Подтверждены пути G.711 μ-law → Opus и Opus → G.711.
-- Readiness проверяет оба SIP transport, AMI LISTEN на заданном IPv4:5038,
-  модуль Opus, endpoint и маршрут Assist. Успешный rollout не заменяет звонок.
-- Установлены постоянные ограничения firewall на PBX и HA узлах, включая IPv6.
-  AMI разрешён только с фактического адреса HA; доступ с рабочей станции отклонён.
-  Чужие правила firewall сохранены. TFTP закрыт, TFTP Job не запущен.
-- В существующем **Home Assistant 2026.10.0** установлена закреплённая
-  TECH7Fox integration **1.0.5**. Asterisk и встроенный VoIP имеют состояние
-  `loaded`; VoIP слушает UDP5060. `AMI Connected` включён.
-- Из самого HA-container успешно выполнены AMI Login, CoreSettings,
-  PJSIPShowEndpoints и Logoff. Версия совпала, endpoint найден, CLI Command
-  получил ожидаемый отказ. Вызов HA service `asterisk.send_action` с Ping
-  принят; ответ сервиса сам по себе не считается проверкой звонка.
-- В HA создана отдельная административная панель **«Телефония»** с реальным
-  AMI sensor, инструкцией первого аппарата и ссылками на документацию.
-  Конфигурация панели проверена обратным чтением через API.
-- Перед установкой сделана локальная резервная копия HA configuration и
-  `.storage`. После внутреннего перезапуска HA вернулся в `RUNNING`, safe mode
-  выключен; все **120 автоматизаций и 94 скрипта** сохранились.
+- Dedicated namespace and one Asterisk **22.11.0** instance on a home Linux AMD64
+  node. The container runs as UID10001, without capabilities, with a read-only
+  root filesystem and a verified immutable image digest.
+- SIP TCP/UDP, endpoint `ha-assist`, extension **630** and the Opus module checked
+  in the running container. Both G.711 μ-law → Opus and Opus → G.711 translation
+  paths are available.
+- Readiness checks both SIP transports, AMI LISTEN on the configured IPv4:5038,
+  Opus, and the Assist endpoint/route. Successful rollout does not replace a call.
+- Persistent firewall restrictions on PBX and HA nodes, including IPv6. Only the
+  actual HA source can reach AMI; access from the workstation was rejected.
+  Other firewall rules were preserved. TFTP is closed and no TFTP Job is running.
+- Pinned TECH7Fox integration **1.0.5** installed in existing **Home Assistant
+  2026.10.0**. Asterisk and native VoIP entries are `loaded`; VoIP listens on
+  UDP5060. `AMI Connected` is on.
+- AMI Login, CoreSettings, PJSIPShowEndpoints and Logoff succeeded from the HA
+  container itself. The version matched and the endpoint was found; CLI Command
+  received the expected denial. HA service `asterisk.send_action` accepted Ping;
+  that service response alone does not prove calling works.
+- A dedicated administrative telephony dashboard contains the actual AMI sensor,
+  first-phone instructions and documentation links. Its configuration was verified
+  by reading it back through the API.
+- HA configuration and `.storage` were backed up locally before installation.
+  Following HA's internal restart, it returned to `RUNNING` with safe mode off;
+  all **120 automations and 94 scripts** were preserved.
 
-Образы собраны на стандартном GitHub `ubuntu-24.04` runner и прошли
-[native AMD64 build и изолированный smoke](https://github.com/4alvit/cisco-home-telephony/actions/runs/39029793014)
-из commit `f5cb1546ed93c53d4792817d0bb1ba0f3a929821`. Checksums архива,
-архитектура и registry manifest/config digest сверены перед deployment.
-Временный GitHub artifact удалён после доставки. Адрес registry, полные
-deployment receipts, настройки firewall, entity maps и секреты сохранены только
-локально. Последующие изменения readiness не меняли Dockerfile этих образов.
+Images were built on a standard GitHub `ubuntu-24.04` runner and passed
+[native AMD64 build and isolated smoke tests](https://github.com/4alvit/cisco-home-telephony/actions/runs/39029793014)
+from commit `f5cb1546ed93c53d4792817d0bb1ba0f3a929821`. Archive checksums,
+architecture and registry manifest/config digests were checked before deployment.
+The temporary GitHub artifact was deleted after transfer. Registry addresses,
+full deployment receipts, firewall configuration, entity maps and secrets remain
+local. Later readiness changes did not modify these images' Dockerfiles.
 
-## Осталось выполнить с настоящими телефонами
+## First physical phone
 
-1. Найти и включить один **CP-7945G** через порт SW и PoE 802.3af.
-2. Записать MAC, аппаратную ревизию, Active/App Load, Boot Load и сетевые
-   параметры. До этого не выбирать downgrade/reset/flash.
-3. Получить подходящую лицензированную SIP45 firmware и проверить путь
-   обновления по [инструкции](sip-conversion.md). Firmware в Git отсутствует.
-4. Дополнить приватный bootstrap inventory, сгенерировать настоящие профили,
-   открыть ограниченное окно TFTP и проверить первый аппарат.
-5. Проверить регистрацию, echo600, звонок между двумя аппаратами, DTMF и
-   двусторонний звук. Для Assist после первого вызова разрешить звонки для
-   реального VoIP device и выбрать рабочий STT/TTS pipeline.
-6. Сопоставить настоящие HA entity ID и установить панель управления звонками
-   из [companion repository](https://github.com/ha-homelab/asterisk-telephony).
+A **CP-7945G**, hardware revision **13.0**, was found on the LAN after being
+connected through PoE. Its current application is **SCCP45.9-4-2SR4-3S** and its
+boot load is **tnp45.9-3-1-CR17.bin**. Device and network status were read from its
+web interface and saved privately. MAC, serial number and network details are
+not published. This confirms one powered, reachable phone, not SIP registration
+or the condition of the remaining batch.
 
-Сейчас нет подтверждения физического питания/подключения партии. Наличие
-служебного `ha-assist` в AMI не означает наличие или регистрацию Cisco.
-Готовый Opus transcoder и открытый listener не доказывают качество сети,
-работу выбранного Assist pipeline либо звук в телефонной трубке.
+## Remaining physical acceptance
+
+1. Obtain authorized SIP45 firmware and verify the hardware-compatible
+   [upgrade path](sip-conversion.md). Firmware is not stored in Git.
+2. Extend the private bootstrap inventory, generate real profiles, open a
+   restricted TFTP window and commission the first phone.
+3. Verify registration, echo600, a call between two phones, DTMF and two-way audio.
+   For Assist, enable calls for the actual VoIP device after its first call and
+   select a working STT/TTS pipeline.
+4. Map actual HA entity IDs and install the call-control dashboard from the
+   [companion repository](https://github.com/ha-homelab/asterisk-telephony).
+5. Inventory and commission the remaining phones in small groups.
+
+The service endpoint `ha-assist` does not establish that any Cisco is registered.
+A working transcoder and listening socket do not prove network quality,
+Assist pipeline behavior or audio in a handset.

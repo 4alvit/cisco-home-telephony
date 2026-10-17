@@ -1,9 +1,9 @@
-# Образы с нативного GitHub runner
+# Images from a native GitHub runner
 
-Обычные push/PR запускают сборку и smoke на стандартном `ubuntu-24.04`, без
-публикации контейнеров и без загрузки artifacts. Если локальный компьютер ARM,
-а выбранный k3s-узел AMD64, можно один раз получить уже проверенные AMD64-образы
-через ручной workflow. Эмуляция на локальном ARM для этого не нужна.
+Normal push/PR runs build and smoke-test on standard `ubuntu-24.04`, without
+publishing containers or uploading artifacts. If your workstation is ARM and
+your k3s node is AMD64, a manual workflow can export the verified AMD64 images
+without local emulation.
 
 ```bash
 gh workflow run validate.yml --repo 4alvit/cisco-home-telephony \
@@ -11,10 +11,10 @@ gh workflow run validate.yml --repo 4alvit/cisco-home-telephony \
 gh run list --repo 4alvit/cisco-home-telephony --workflow validate.yml --limit 5
 ```
 
-Выберите именно созданный вами run. Подтвердите его `headSha`, `event`,
-`headBranch` и `conclusion` через `gh run view RUN_ID --json
-headSha,event,headBranch,conclusion`. Нужны ожидаемый commit, `workflow_dispatch`,
-`main` и `success`. Нельзя брать бинарники из непроверенного PR или чужого fork.
+Select the run you created. Inspect `headSha`, `event`, `headBranch` and
+`conclusion` with `gh run view RUN_ID --json headSha,event,headBranch,conclusion`.
+Require the expected commit, `workflow_dispatch`, `main` and `success`.
+Do not use binaries from an unreviewed PR or another fork.
 
 ```bash
 umask 077
@@ -22,7 +22,7 @@ mkdir -p .local/ci-images
 gh run download RUN_ID --repo 4alvit/cisco-home-telephony \
   --name verified-amd64-images-COMMIT_SHA --dir .local/ci-images
 cd .local/ci-images
-# Linux; на macOS вместо sha256sum используйте shasum -a 256.
+# Linux; on macOS, use shasum -a 256 instead of sha256sum.
 sha256sum -c SHA256SUMS
 cat source.json
 docker load --input asterisk-amd64.tar.gz
@@ -30,21 +30,21 @@ docker load --input tftp-amd64.tar.gz
 docker image inspect cisco-home-ci/asterisk:22.11.0 cisco-home-ci/tftp:bookworm
 ```
 
-Сверьте `source.json` с run/commit и `images.json` с загруженными image ID и
-`linux/amd64`. В artifacts нет домашних конфигураций, firmware или секретов.
-Теги `cisco-home-ci/*` локальные: перед push назначьте теги своего registry и
-следуйте [deployment runbook](k3s-deployment.md). В k3s используйте итоговые
-registry digests, а не image ID или изменяемые теги.
+Match `source.json` to the run/commit and `images.json` to the imported image IDs
+and `linux/amd64` architecture. Artifacts contain no home configuration, firmware
+or secrets. The `cisco-home-ci/*` tags are local: retag them for your registry
+before pushing, following the [deployment runbook](k3s-deployment.md). Use the
+resulting registry digests in k3s, not image IDs or mutable tags.
 
-Если домашний registry использует HTTP, можно обойти изменение Docker daemon:
-распаковать `.tar.gz`, затем использовать `skopeo copy --dest-tls-verify=false
+For an internal HTTP registry, avoid changing the Docker daemon by extracting
+the `.tar.gz` and using `skopeo copy --dest-tls-verify=false
 docker-archive:/absolute/path/asterisk-amd64.tar
-docker://YOUR_REGISTRY/cisco-home/asterisk:22.11.0`. Исключение TLS относится
-только к этому подтверждённому внутреннему registry. Проверьте manifest/config
-digest и архитектуру в registry после переноса.
+docker://YOUR_REGISTRY/cisco-home/asterisk:22.11.0`. Apply this TLS exception only
+to the verified internal registry. Check registry manifest/config digests and
+architecture after transfer.
 
-Экспорт выключен по умолчанию; размер ограничен 400 MiB, retention — один день.
-Хранение artifacts имеет отдельную общую квоту: бесплатные runner minutes не
-означают неограниченное хранение. После успешного скачивания и проверки удалите
-именно artifact своего run в GitHub Actions. Для первого домашнего deployment
-artifact был удалён сразу после проверенного переноса обоих образов.
+Export is disabled by default, limited to 400 MiB with one-day retention.
+Artifact storage has a separate shared quota: free runner minutes do not imply
+unlimited storage. After downloading and verifying, delete only your run's
+artifact in GitHub Actions. The first home deployment artifact was deleted after
+both images had been transferred and verified.
