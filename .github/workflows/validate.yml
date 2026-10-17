@@ -1,0 +1,26 @@
+name: Validate and build
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Python and shell checks
+        run: |
+          python3 -m unittest discover -s tests -v
+          python3 -m compileall -q scripts
+          for script in scripts/*.sh; do bash -n "$script"; done
+      - name: Build both images and verify binary versions
+        run: bash scripts/build-images.sh cisco-home-ci
+      - name: Isolated smoke with synthetic generated configuration
+        run: bash scripts/smoke-containers.sh cisco-home-ci

@@ -1,0 +1,17 @@
+# REVIEW ONLY. Replace subnet after verifying the actual phone LAN.
+# This adds a narrow INPUT guard; it does not replace existing firewall policy.
+# Never flush ruleset on a k3s node. Apply/persist using the existing firewall owner.
+# Do not allow TFTP ports outside a supervised maintenance window.
+table inet cisco_voice_guard {
+  chain input {
+    type filter hook input priority -10; policy accept;
+    ip saddr 192.168.50.0/24 udp dport { 5060, 10000-10199 } accept
+    ip saddr 192.168.50.0/24 tcp dport 5060 accept
+    # TEMPORARY: remove these two lines after the provisioning window.
+    ip saddr 192.168.50.0/24 udp dport { 69, 20000-20031 } accept
+    udp dport { 69, 20000-20031 } drop
+    # Both IPv4 and IPv6 traffic from every other source is denied.
+    udp dport { 5060, 10000-10199 } drop
+    tcp dport 5060 drop
+  }
+}

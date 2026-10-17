@@ -1,0 +1,128 @@
+import importlib.util
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location("render_k3s", ROOT / "scripts/render_k3s.py")
+render = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(render)
+
+
+def fixture():
+    return {"kube_context": "test-context", "namespace": "telephony", "node_name": "test-node",
+            "node_ipv4": "192.168.50.58", "lan_cidr": "192.168.50.0/24",
+            "asterisk_image": "example.invalid/asterisk@sha256:" + "a" * 64,
+            "tftp_image": "example.invalid/tftp@sha256:" + "b" * 64}
+
+
+def configs():
+    return {name + ".conf": "; unit test fixture\n" for name in ("asterisk", "pjsip", "extensions", "rtp", "modules", "logger")}
+
+
+class K3sSafetyTests(unittest.TestCase):
+    def test_mutable_image_public_address_and_shared_namespace_rejected(self):
+        for changes in ({"asterisk_image": "image:latest"}, {"node_ipv4": "8.8.8.8", "lan_cidr": "8.8.8.0/24"},
+                        {"node_ipv4": "192.168.161.4"}, {"namespace": "default"}, {"kube_context": ""}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                render.validate_site(dict(fixture(), **changes))
+
+    def test_default_has_no_provisioning_or_public_exposure_resources(self):
+        manifest = render.render_core(fixture(), configs())
+        self.assertEqual([i["kind"] for i in manifest["items"]], ["Namespace", "Secret", "Deployment"])
+        deployment = manifest["items"][-1]["spec"]
+        self.assertEqual(deployment["replicas"], 1)
+        self.assertEqual(deployment["strategy"]["type"], "Recreate")
+        pod = deployment["template"]["spec"]
+        self.assertTrue(pod["hostNetwork"])
+        self.assertFalse(pod["automountServiceAccountToken"])
+        self.assertTrue(pod["securityContext"]["runAsNonRoot"])
+        self.assertEqual(pod["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0]["matchFields"][0]["values"], ["test-node"])
+
+    def test_credentials_change_secret_and_old_revision_is_restorable(self):
+        before = render.render_core(fixture(), configs())
+        changed = dict(configs(), **{"pjsip.conf": "password=new-random-test-value\n"})
+        after = render.render_core(fixture(), changed)
+        old_name = before["items"][1]["metadata"]["name"]
+        new_name = after["items"][1]["metadata"]["name"]
+        self.assertNotEqual(old_name, new_name)
+        self.assertTrue(after["items"][1]["immutable"])
+        self.assertEqual(after["items"][2]["spec"]["template"]["spec"]["volumes"][0]["secret"]["secretName"], new_name)
+
+    def test_tftp_is_bounded_and_readonly(self):
+        manifest = render.render_tftp(fixture(), {"SEP000000000001.cnf.xml": "<device/>"})
+        job = manifest["items"][1]["spec"]
+        self.assertEqual(job["activeDeadlineSeconds"], 3600)
+        self.assertEqual(job["backoffLimit"], 0)
+        daemon = job["template"]["spec"]["containers"][0]
+        self.assertIn("20000:20031", daemon["args"])
+        self.assertNotIn("--create", daemon["args"])
+        self.assertTrue(daemon["volumeMounts"][0]["readOnly"])
+
+    def test_readiness_requires_both_transports_not_just_running_process(self):
+        probe = render.render_core(fixture(), configs())["items"][2]["spec"]["template"]["spec"]["containers"][0]["readinessProbe"]["exec"]["command"]
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "asterisk"
+            binary.write_text("#!/bin/sh\nprintf '%s\\n' \"$TEST_TRANSPORTS\"\n")
+            binary.chmod(0o700)
+            env = dict(os.environ, PATH=directory + os.pathsep + os.environ["PATH"])
+            for output, success in (("Transport: header only", False),
+                                    ("Transport: transport-udp udp 0 0 192.168.50.58:5060", False),
+                                    ("Transport: transport-udp udp 0 0 192.168.50.58:5060\nTransport: transport-tcp tcp 0 0 192.168.50.58:5060", True)):
+                env["TEST_TRANSPORTS"] = output
+                result = subprocess.run(probe, env=env, capture_output=True)
+                self.assertEqual(result.returncode == 0, success)
+
+    def test_preflight_enforces_firmware_and_generated_profile_match(self):
+        with tempfile.TemporaryDirectory() as directory:
+            local = Path(directory)
+            (local / "site.json").write_text(json.dumps(fixture()))
+            (local / "asterisk").mkdir()
+            for name, text in configs().items():
+                (local / "asterisk" / name).write_text(text)
+            (local / "firmware").mkdir()
+            load = "SIP45.test"
+            files = {load + ".loads": b"synthetic manifest", "test.sbn": b"synthetic binary"}
+            for name, content in files.items():
+                (local / "firmware" / name).write_bytes(content)
+            (local / "firmware-manifest.json").write_text(json.dumps({"model": "CP-7945G", "reviewed": True, "load_id": load,
+                "files": {name: hashlib.sha256(content).hexdigest() for name, content in files.items()}}))
+            (local / "phones.json").write_text(json.dumps({"phones": [{"model":"CP-7945G", "verified":True, "mac":"020000000001", "firmware_load":load}]}))
+            (local / "tftp").mkdir()
+            xml = local / "tftp/SEP020000000001.cnf.xml"
+            xml.write_text("<device><loadInformation>" + load + "</loadInformation></device>")
+            cmd = ["python3", str(ROOT / "scripts/preflight.py"), "--site", str(local / "site.json"), "--with-tftp"]
+            self.assertEqual(subprocess.run(cmd, capture_output=True).returncode, 0)
+            xml.write_text("<device><loadInformation>SIP45.wrong</loadInformation></device>")
+            self.assertNotEqual(subprocess.run(cmd, capture_output=True).returncode, 0)
+            xml.write_text("<device><loadInformation>" + load + "</loadInformation></device>")
+            (local / "firmware/test.sbn").write_bytes(b"tampered")
+            self.assertNotEqual(subprocess.run(cmd, capture_output=True).returncode, 0)
+
+    def test_default_deploy_cannot_contact_kubernetes_or_print_credentials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            local = Path(directory)
+            (local / "site.json").write_text(json.dumps(fixture()))
+            (local / "asterisk").mkdir()
+            for name, text in configs().items():
+                (local / "asterisk" / name).write_text(text + "; secret-marker-must-not-print\n")
+            bin_dir = local / "bin"
+            bin_dir.mkdir()
+            kube = bin_dir / "kubectl"
+            kube.write_text("#!/bin/sh\necho 'kubectl must not execute' >&2\nexit 98\n")
+            kube.chmod(0o700)
+            env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ["PATH"])
+            result = subprocess.run(["bash", str(ROOT / "scripts/deploy.sh"), "--site", str(local / "site.json")], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("secret-marker", result.stdout + result.stderr)
+            self.assertNotIn("kubectl must not", result.stdout + result.stderr)
+            rendered = local / "rendered/core.yaml"
+            self.assertEqual(rendered.stat().st_mode & 0o777, 0o600)
+            self.assertFalse((local / "rendered/tftp.yaml").exists())
+
+if __name__ == "__main__":
+    unittest.main()

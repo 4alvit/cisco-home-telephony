@@ -1,0 +1,114 @@
+{
+  "phones": [
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "REPLACE-PHONE-01",
+      "extension": "201",
+      "label": "Home 01",
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    },
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "REPLACE-PHONE-02",
+      "extension": "202",
+      "label": "Home 02",
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    },
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "REPLACE-PHONE-03",
+      "extension": "203",
+      "label": "Home 03",
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    },
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "REPLACE-PHONE-04",
+      "extension": "204",
+      "label": "Home 04",
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    },
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "REPLACE-PHONE-05",
+      "extension": "205",
+      "label": "Home 05",
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    },
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "REPLACE-PHONE-06",
+      "extension": "206",
+      "label": "Home 06",
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    },
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "REPLACE-PHONE-07",
+      "extension": "207",
+      "label": "Home 07",
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    },
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "REPLACE-PHONE-08",
+      "extension": "208",
+      "label": "Home 08",
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    },
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "REPLACE-PHONE-09",
+      "extension": "209",
+      "label": "Home 09",
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    },
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "REPLACE-PHONE-10",
+      "extension": "210",
+      "label": "Home 10",
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+.local/
+private/
+firmware/
+.env*
+!.env.example
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+.DS_Store
+.build/
+
+.slides-build/

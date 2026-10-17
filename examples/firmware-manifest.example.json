@@ -1,0 +1,10 @@
+{
+  "model": "CP-7945G",
+  "reviewed": false,
+  "load_id": "SIP45.9-4-2SR4-3S",
+  "source": "Record authorized Cisco download or lawful archive provenance",
+  "files": {
+    "SIP45.9-4-2SR4-3S.loads": "REPLACE_WITH_REVIEWED_SHA256",
+    "REPLACE_WITH_EVERY_COMPONENT.sbn": "REPLACE_WITH_REVIEWED_SHA256"
+  }
+}
