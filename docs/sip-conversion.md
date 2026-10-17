@@ -46,6 +46,10 @@ archive is unavailable, that upgrade path is not ready to run.
 
 ## 3. Obtain the complete package
 
+An inspected third-party copy of the target release is documented in the
+[firmware archive guide](firmware-archive.md), including a working download,
+complete component hashes, safe extraction and explicit provenance limits.
+
 Use Cisco Software Download or an existing authorized archive with known
 provenance. Check the model, SIP/SCCP protocol and published checksum. Record
 source, date and SHA-256 privately. Your own SHA-256 identifies the file's bytes

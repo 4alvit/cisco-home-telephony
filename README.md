@@ -28,6 +28,8 @@ See [live deployment validation](docs/server-validation.md).
 The first physical 7945G has been identified on the network; SIP conversion,
 registration and audio acceptance are still pending. Cisco firmware is not
 included: obtain an authorized copy and verify the upgrade path.
+The [firmware archive guide](docs/firmware-archive.md) records a working preserved
+SR4-3 copy, byte-level checks, extraction steps and provenance limitations.
 
 ## Workflow
 
