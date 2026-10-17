@@ -6,8 +6,14 @@ The optional gateway connects HA to the existing local Cisco phones. It supports
 numeric dialing, answering a selected ringing line, exact-channel hangup,
 explicit speaker-button toggling, PBX Do Not Disturb, opt-in auto-answer, text
 pages and photographs. The separate `cisco_phone_control` HA integration supplies
-entities and recurring alarms/timers. A button press is not evidence of successful
-audio; see the dated [validation record](server-validation.md).
+entities and recurring alarms/timers. Scheduled alerts keep the phone ringing
+until a person answers, rejects the call or presses **Stop alert**. They never
+auto-answer and play no audio after an answer. A button press is not evidence
+of successful delivery; see the dated [validation record](server-validation.md).
+
+The new alert contract below requires the matching gateway, Asterisk helper and
+HA integration update. Deployment and live acceptance of this revised behavior
+are pending. Earlier finite-tone tests do not validate the new alert behavior.
 
 This service is an explicit change from the short-lived commissioning callback.
 It keeps the previously provisioned callback URLs and credentials, so the phones
@@ -52,7 +58,8 @@ and, if wanted, `ring_allowlist`; neither is an unrestricted dialplan.
 Build the Asterisk image containing `phone_gateway.py` and Pillow and use its
 immutable digest. On the selected node, create `/var/lib/cisco-phone-gateway`
 owned by UID/GID `10001:10001`, mode `0700`. Back up this directory with the
-private gateway input; it contains preferences and operation idempotency state.
+private gateway input; it contains preferences, operation idempotency state and
+durable alert identities.
 
 Review host firewall changes before applying. The API port (default TCP18084)
 admits the actual HA source. The node itself may complete TCP health probes;
@@ -97,7 +104,7 @@ automatically after recovery.
 
 All API requests require `Authorization: Bearer <private-token>` from a configured
 HA source. `GET /v1/phones` returns stable primary IDs, assigned lines, live AMI
-registration/call state, PBX DND, auto-answer and capability names. It does not
+registration/call state, PBX DND, auto-answer, the latest `alert` and capability names. It does not
 return credentials. Every mutation is a JSON POST to
 `/v1/phones/<primary-line>/<action>` with a unique `idempotency_key`.
 
@@ -106,8 +113,15 @@ return credentials. Every mutation is a JSON POST to
 - `speaker`: `mode: "toggle"`; only an idle phone is accepted. This emulates a
   physical button, so there is no invented boolean speaker state.
 - `dnd` / `autoanswer`: `enabled: true` or `false`. Both default to false.
-- `ring`: `line`, `destination` (default640); ring up to20seconds, then run the
-  allowlisted local destination after answer. Alarm640 ends after a finite tone.
+- `alert`: `line`, `kind` (`"timer"` or `"alarm"`). Starts one alert with no
+  application ring-duration limit. It returns a new `alert_id`, the selected
+  line/kind and `ring_timeout_seconds: null`.
+- `alert_stop`: `alert_id`. Stops only the exact owned alert associated with
+  that phone. The ID must be the returned 32-character lowercase hexadecimal
+  identity. Use a new `idempotency_key` for this stop operation.
+- `ring`: `line`, `destination` (default 640). This legacy finite call rings for
+  at most 20 seconds and runs the allowlisted destination after answer. It is
+  **not the timer/alarm scheduler path**. Manual 640 remains a finite tone test.
 - `message`: `title`, `text` (up to2000characters).
 - `image`: `title`, `image_base64`; PNG/JPEG up to2MiB and16million source pixels.
   EXIF orientation is applied, metadata is removed, and the picture is converted
@@ -119,12 +133,52 @@ An ambiguous network outcome is never retried automatically. Reusing a completed
 idempotency key returns its recorded result; a pending key returns a conflict.
 Retain keys for one logical timer/alarm occurrence, not across different events.
 
+### Alert identity and manual stop
+
+For a synthetic example, POST
+`{"line":"201","kind":"timer","idempotency_key":"timer-example-0001"}`
+to `/v1/phones/201/alert`. Later POST
+`{"alert_id":"<returned-32-hex-id>","idempotency_key":"stop-example-0001"}`
+to `/v1/phones/201/alert_stop`. The wire field is `idempotency_key`, not `key`.
+Never invent an alert ID or stop a channel by extension alone.
+
+Each phone in `GET /v1/phones` has an `alert` object, or `null` when none exists.
+It contains `id`, `kind`, `line`, `state` and `reason`. States are `starting`,
+`ringing`, `stopping`, `ended` or `unknown`; `reason` can be null. An accepted
+request is not proof of ringing. Observe `ringing`, and after a stop confirm
+`ended` and no associated channels. Treat `unknown` or an ambiguous timeout as
+an operation to reconcile, not a reason to create a second alert.
+
+The updated HA integration exposes **116 entities for four phones**. It removes
+the Alarm sound and Timer sound selectors and adds **Stop alert**. **Cancel
+timer** cancels a pending timer and stops its active timer alert. Disabling
+**Alarm enabled** stops an active alarm as well as future occurrences. A person
+can also answer or reject the ringing call at the phone; either ends the alert
+without an after-answer tone. HA's ordinary **Answer** action is blocked for
+alert channels. The per-phone auto-answer preference never applies to them.
+
+The private `cisco-alert` context creates a Local channel and dials only the
+inventoried line, without a Dial timeout and with call forwarding ignored.
+Its companion waits in `WaitForSignal` without a periodic retry or audio loop.
+The five-second AMI Originate timeout only bounds the initial Local-leg answer;
+it is **not** a five-second phone-ring limit. On physical answer, a subroutine
+aborts the call before bridging or playing audio. The context is not included
+in the normal phone dialplan.
+
+The gateway persists the alert identity before originating and reconciles the
+same owned channels after a gateway restart. A PBX restart, power loss or call
+failure can end ringing; recovery never replays the occurrence. One alert may
+be active per phone. Registered/idle and DND checks apply before it starts, so
+busy, offline and missed occurrences remain visible instead of interrupting
+another call. This is not a guarantee of ringing through a network failure.
+
 ## Behavioral limits
 
 The controller distinguishes Asterisk **Ringing** (the phone is being called)
 from **Ring** (the phone is originating a call). Auto-answer is opt-in per phone
 and attempts one answer only for a single freshly observed ringing channel.
 It must not press a line key during an outgoing call or another active line.
+Alerts always bypass this feature and require manual dismissal.
 
 PBX DND blocks local direct/group routing and gateway alarm/dial requests. It does
 not claim to synchronize the phone's native DND softkey/icon, or protect routes

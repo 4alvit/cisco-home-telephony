@@ -241,6 +241,14 @@ def render_core(site, configs):
                 "; asterisk -rx 'dialplan show 630@home'"
                 " | grep -Fq 'Dial(PJSIP/ha-assist/'"
             )
+    if site.get("gateway", {}).get("enabled"):
+        probe = spec["containers"][0]["readinessProbe"]
+        probe["timeoutSeconds"] = 5
+        probe["exec"]["command"][2] += (
+            "; asterisk -rx 'module show like app_signal'"
+            " | grep -Eq '^[[:space:]]*app_signal[.]so[[:space:]].*[[:space:]][0-9]+[[:space:]]+Running([[:space:]]|$)'"
+            "; asterisk -rx 'core show application WaitForSignal' | grep -Fq 'WaitForSignal('"
+        )
     if site.get("radio", {}).get("enabled"):
         probe = spec["containers"][0]["readinessProbe"]
         probe["timeoutSeconds"] = 5

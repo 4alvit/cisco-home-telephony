@@ -4,11 +4,12 @@
 
 ![Overview of all 18 slides](preview.webp)
 
-18 English slides cover the purchased batch of ten 7945G phones, home network
+18 English slides cover Cisco 7945G model capabilities, verified inventory, home network
 architecture, PoE, SCCP/SIP conversion, TFTP, Asterisk PJSIP, Home Assistant over
 AMI, Assist on extension 630 with G.711 ↔ Opus, deployment, call acceptance,
 backups and batch rollout. Four new slides cover eight lines on four phones,
-120 Home Assistant control entities, alarms and radio, and free SIP account status. PPTX labels and diagrams are editable objects.
+116 Home Assistant control entities after the alert update, alarms and radio,
+and free SIP account status. PPTX labels and diagrams are editable objects.
 Speaker notes link to primary sources. The PDF is suitable for reading and printing.
 
 The presentation accompanies the [k3s runbook](../k3s-deployment.md),
@@ -22,9 +23,17 @@ must not run firmware below 9.3(1)SR3. Follow the chosen release's upgrade notes
 
 The slides distinguish implemented features, verified local call results and
 remaining live acceptance. The status snapshot reflects October 17, 2026.
+Saved pilot evidence covers gateway call control, DND, opt-in auto-answer,
+displayed text/images and radio 701 RTP. The revised timer/alarm contract keeps
+ringing until manual dismissal, without auto-answer or after-answer audio.
+Deployment and live acceptance of that update are pending. Earlier finite-tone
+tests do not validate the new behavior. Human radio-audio confirmation remains
+a separate acceptance step.
 Account activation does not establish SIP registration or working external audio.
-All three configured providers reached `Registered`; the SIP2SIP audio pilot was
-deferred at the user's request. Callcentric remains blocked for outbound calls
+All three configured providers reached `Registered`. The fixed SIP2SIP echo call
+answered and exchanged RTP in both directions, but reported receive loss;
+satisfactory media quality and human listening are not established.
+Callcentric remains blocked for outbound calls
 pending provider review, and Linphone has no verified call peer. Those two
 profiles are registration-only.
 Successful container/runtime checks do not replace human-audible phone tests.

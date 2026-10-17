@@ -3,9 +3,11 @@
 The provisioner supports three **disabled-by-default, SIP-network-only** account
 profiles. Generated configuration alone does not prove provider registration or
 a successful external call. As of **2026-10-17**, SIP2SIP, Callcentric and Linphone
-all reached **Registered** on the deployed Asterisk. No external test call was
-placed: the SIP2SIP 802 audio pilot was deferred at the user's request to keep
-the phones quiet. Two-way external audio remains unverified. A Callcentric IP Freedom account
+all reached **Registered** on the deployed Asterisk. After the user resumed
+testing, a bounded synthetic SIP2SIP 802 call answered and showed increasing RTP
+packet counts in both directions, then cleaned up completely. Its receive-loss
+counter increased, so this establishes connectivity, **not clean audio quality**;
+see the pilot evidence below. A Callcentric IP Freedom account
 was created at $0, but its provider risk review currently blocks outbound calls
 and account changes. No support ticket was automatically opened and no support
 message has been sent. Linphone email activation is complete; no verified fixed
@@ -23,6 +25,44 @@ configured bare username and separate domain. It subsequently registered
 without an authentication or configuration change. Do not treat a transient
 registration state alone as evidence of a wrong password, and do not change
 credentials or broaden firewall rules without diagnostics.
+
+## Observed SIP2SIP pilot and quality limit
+
+The synthetic 802 call to the provider's documented `4444@sip2sip.info` echo
+service ran on **2026-10-17, 20:49:48–20:50:02 UTC**. Both samples reported the
+external channel as `Up`. Over approximately five seconds, transmitted RTP
+packets increased **255 → 505** and received packets **213 → 414**. Cleanup left
+zero owned channels and zero total channels, and all eight local lines were
+available afterward. This pilot called no physical phone and recorded no audio.
+The reported channel read/write formats were `alaw`/`ulaw`; these fields are not
+a listening test or a complete record of SDP codec negotiation.
+
+The helper reads `CHANNEL(rtcp,all,audio)`. In Asterisk 22.11.0, its **`lp` field
+maps to `rxploss`**, the local receive-loss estimate, and **`rlp` maps to
+`txploss`**, the remote party's reported loss of packets sent by Asterisk.
+These are packet counts, not percentages or latency measurements. See the
+[quality-string mapping](https://github.com/asterisk/asterisk/blob/22.11.0/main/rtp_engine.c#L2528-L2556)
+and the [native RTP statistics mapping](https://github.com/asterisk/asterisk/blob/22.11.0/res/res_rtp_asterisk.c#L8780-L8785).
+
+Here `lp` increased **42 → 91**: a net increase of 49 in the cumulative
+receive-loss estimate. The native RTP engine calculates that estimate from
+expected and received sequence counts saved at the latest local RTCP report;
+the immediately read `rxcount` can be newer. Late packets can also affect the
+estimate. Do not turn these two samples into an exact loss percentage, equate
+loss to `txcount - rxcount`, or assign the cause to a particular network device.
+The positive, growing estimate is a quality concern requiring investigation.
+[Asterisk's loss calculation](https://github.com/asterisk/asterisk/blob/22.11.0/res/res_rtp_asterisk.c#L4450-L4506).
+
+The final `rtt` was **0.15451 seconds (154.51 ms)**. Asterisk documents RTT in
+seconds; it is round-trip delay, not one-way delay or loss. `rlp` remained zero,
+which alone does not certify a loss-free send path or a fresh remote report.
+[RTCPReceived field definitions](https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/AMI_Events/RTCPReceived/).
+
+The acceptance result is therefore **answer + bidirectional RTP + cleanup
+passed; media quality remains unaccepted**. A later authorized quality test
+should correlate RTCP report times, sequence/SSRC continuity, jitter and scoped
+firewall counters, then assess intelligibility in both directions. Preserve the
+existing network restrictions while identifying any loss source.
 
 ## Routes and account requirements
 
@@ -42,6 +82,14 @@ credentials or broaden firewall rules without diagnostics.
   account and a real peer are required; registration may require email/phone
   verification. Third-party SIP devices are supported by the service.
   [Official FAQ](https://www.linphone.org/en/faq/).
+
+No Linphone-operated echo service was verified. The independent
+[The Test Call operator's page](https://thetestcall.blogspot.com/), updated
+2026-07-20, publishes `sip:thetestcall@sip.linphone.org`, lists PCMU/PCMA/G.722,
+and provides real-time echo on menu option 3. This is a possible explicitly
+reviewed peer, not an official Linphone test service. It has not been called or
+configured here; its current reachability and audio quality remain unverified.
+The deployed Linphone target remains null and route 803 remains absent.
 
 Only enabled profiles with a non-null target add their number to Asterisk and
 the Cisco exact-match `dialplan.xml`. Each call route has one fixed destination. Callcentric destinations

@@ -340,15 +340,45 @@ creates no router port forward. TFTP remains closed.
 identifiers and credentials are stored only in private local files. Callcentric
 still blocks outbound calls pending its account review, so 801 has no provider
 route. Linphone has no verified peer selected, so 803 also remains unrouted.
-SIP2SIP 802 is configured for its fixed test destination, but external media has
-not been tested. Registration alone does not establish successful external calls.
+SIP2SIP **802** is configured for its fixed **4444** echo destination. After the
+operator resumed testing, a bounded synthetic call reached `Up` and exchanged
+RTP in both directions. Over a five-second sample, sent packets increased from
+255 to 505 and received packets from 213 to 414. Asterisk's local loss counter
+also increased from 42 to 91, so this establishes connectivity, not clean audio
+quality. Read/write codecs were G.711 A-law/mu-law. No handset was called and no
+audio was recorded. Exact-channel cleanup left zero active channels, with all
+eight local lines still available. Human listening and external-media quality
+remain to be checked.
 
 The operator then requested a pause in phone testing. The pending test timer was
 canceled, its alarm was disabled, original UI settings were restored and the
 helper exited. A direct PBX check confirmed zero active channels. Further
 physical calls, music, timer/alarm acceptance, HA content-service acceptance and
-the external echo pilot are deferred until the operator resumes testing. No
-successful end-to-end schedule test is claimed.
+the external echo pilot were paused. The operator subsequently resumed testing;
+the external echo result above was obtained after that resumption. Schedule and
+content-service results are recorded separately below when completed.
+
+## Persistent timer and alarm correction
+
+After testing resumed, the operator heard the original timer ring and then play
+a tone after it was answered. That confirmed the old finite call path, but did
+not meet the requested behavior: both timers and weekday alarms must keep
+ringing until manually dismissed, without automatically answering the handset.
+
+The corrected implementation uses a private Local-channel helper with an
+unlimited phone `Dial`, ignores forwarding, and aborts the call immediately on
+manual answer. A disposable Asterisk **22.11.0** container with networking
+disabled and a synthetic SIP handset verified ringing for more than 35 seconds,
+exact cancellation, immediate hangup on manual answer with zero RTP packets,
+no retry after rejection, ignored forwarding, and zero remaining channels.
+Gateway tests additionally cover persistent alert identity, cancellation after
+restart, delayed originate completion and exclusion from automatic answering.
+
+The HA update adds **Stop alert**, makes timer cancellation and alarm disabling
+stop their own active alert, and removes the obsolete sound selectors. Its
+expected inventory is **29 controls per phone, 116 across four phones**.
+Deployment and physical acceptance of this corrected behavior are pending;
+the earlier finite-call test must not be treated as their acceptance.
 
 ## Remaining acceptance
 

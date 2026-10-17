@@ -75,6 +75,128 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(again.mutate('201', 'ring', {'destination': '640', 'idempotency_key': 'test-123456'}), first)
         self.assertEqual(len(FakeAMI.calls), 1)
 
+    def alert_channels(self, alert_id, line='201'):
+        root = 'cisco-alert-' + alert_id
+        return [
+            {'Channel': f'Local/{line}@cisco-alert-a1;1', 'Uniqueid': root + '-a',
+             'Linkedid': root + '-a', 'ChannelStateDesc': 'Up'},
+            {'Channel': f'Local/{line}@cisco-alert-a1;2', 'Uniqueid': root + '-b',
+             'Linkedid': root + '-a', 'ChannelStateDesc': 'Up'},
+            {'Channel': f'PJSIP/{line}-a1', 'Uniqueid': '123.45',
+             'Linkedid': root + '-a', 'ChannelStateDesc': 'Ringing'}]
+
+    def test_alert_uses_indefinite_private_dialplan_without_auto_answer_or_audio(self):
+        result = self.request('alert', line='202', kind='timer')
+        self.assertIsNone(result['ring_timeout_seconds'])
+        action, values = FakeAMI.calls[-1]
+        self.assertEqual(action, 'Originate')
+        self.assertEqual(values['Channel'], 'Local/202@cisco-alert/n')
+        self.assertEqual(values['Application'], 'WaitForSignal')
+        self.assertEqual(values['Data'], 'cisco-alert-' + result['alert_id'])
+        self.assertEqual(values['Timeout'], '5000')  # Local Answer only, never the phone Dial.
+        self.assertNotIn('Exten', values)
+        self.assertEqual(values['CallerID'], 'Timer <640>')
+        self.send.assert_not_called()
+        self.assertEqual(self.server.latest_alert('201')['state'], 'starting')
+
+    def test_alert_identity_and_autoanswer_exclusion_survive_gateway_restart(self):
+        result = self.request('alert', kind='alarm')
+        FakeAMI.channels = self.alert_channels(result['alert_id'])
+        restarted = gateway.Gateway(config(), self.directory.name)
+        self.addCleanup(restarted.db.close)
+        phone = restarted.listing()['phones'][0]
+        self.assertEqual(phone['alert']['id'], result['alert_id'])
+        self.assertEqual(phone['alert']['state'], 'ringing')
+        self.assertTrue(restarted.is_alert_channel(FakeAMI.channels[-1]))
+        with self.assertRaisesRegex(gateway.Refused, 'alert_requires_manual_answer_or_stop'):
+            restarted.mutate('201', 'answer', {'idempotency_key': 'answer-12345',
+                             'channel': 'PJSIP/201-a1', 'uniqueid': '123.45'})
+        self.send.assert_not_called()
+        self.assertEqual(self.request('alert', kind='alarm')['alert_id'], result['alert_id'])
+        self.assertEqual(sum(action == 'Originate' for action, _ in FakeAMI.calls), 1)
+
+    def test_new_alert_refused_while_another_is_starting_even_without_channel(self):
+        self.request('alert', kind='timer')
+        with self.assertRaisesRegex(gateway.Refused, 'alert_already_active'):
+            self.server.mutate('201', 'alert', {'idempotency_key': 'different-1234', 'kind': 'alarm'})
+        self.assertEqual(sum(action == 'Originate' for action, _ in FakeAMI.calls), 1)
+
+    def test_stop_alert_only_hangs_its_exact_linked_channels_even_if_phone_offline(self):
+        result = self.request('alert', kind='timer')
+        FakeAMI.channels = self.alert_channels(result['alert_id']) + [
+            {'Channel': 'PJSIP/202-b2', 'Uniqueid': '200.1', 'Linkedid': '200.1', 'ChannelStateDesc': 'Up'}]
+        FakeAMI.endpoints = {'201': 'Unavailable', '202': 'Unavailable'}
+        def stop(name, **values):
+            FakeAMI.calls.append((name, values))
+            if name == 'Hangup':
+                FakeAMI.channels = [item for item in FakeAMI.channels if item['Uniqueid'] == '200.1']
+            return [{'Response': 'Success'}]
+        with patch.object(FakeAMI, 'action', side_effect=stop):
+            stopped = self.server.mutate('201', 'alert_stop', {
+                'idempotency_key': 'stop-alert-1234', 'alert_id': result['alert_id']})
+        self.assertEqual(stopped['state'], 'ended')
+        self.assertEqual(self.server.latest_alert('201')['reason'], 'stopped')
+        self.assertEqual([row['Uniqueid'] for row in FakeAMI.channels], ['200.1'])
+        self.assertEqual(sum(action == 'Hangup' for action, _ in FakeAMI.calls), 1)
+
+    def test_cancel_before_channel_creation_catches_delayed_originate(self):
+        result = self.request('alert', kind='alarm')
+        self.server.mutate('201', 'alert_stop', {'idempotency_key': 'stop-delayed-123', 'alert_id': result['alert_id']})
+        self.assertEqual(self.server.latest_alert('201')['state'], 'stopping')
+        FakeAMI.channels = self.alert_channels(result['alert_id'])
+        self.server.listing()
+        self.assertTrue(any(action == 'Hangup' for action, _ in FakeAMI.calls))
+        self.assertTrue(self.server.is_alert_channel(FakeAMI.channels[-1]))
+
+    def test_manual_call_end_finishes_alert_without_repeating_it(self):
+        result = self.request('alert', kind='alarm')
+        FakeAMI.channels = self.alert_channels(result['alert_id'])
+        self.server.listing()
+        FakeAMI.channels = []
+        alert = self.server.listing()['phones'][0]['alert']
+        self.assertEqual(alert['state'], 'ended')
+        self.assertEqual(alert['reason'], 'call_ended')
+        self.server.listing()
+        self.assertEqual(sum(action == 'Originate' for action, _ in FakeAMI.calls), 1)
+
+    def test_terminal_alert_stays_cancelled_through_late_originate_and_ambiguous_stop(self):
+        result = self.request('alert', kind='alarm')
+        self.server.db.execute('UPDATE alerts SET created=0 WHERE id=?', (result['alert_id'],))
+        self.server.db.commit()
+        self.assertEqual(self.server.listing()['phones'][0]['alert']['state'], 'ended')
+        FakeAMI.channels = self.alert_channels(result['alert_id'])
+        with patch.object(FakeAMI, 'action', side_effect=OSError('Hangup response lost')):
+            with self.assertRaises(OSError):
+                self.server.listing()
+        self.assertEqual(self.server.alerts()[0]['stop_requested'], 1)
+        restarted = gateway.Gateway(config(), self.directory.name)
+        self.addCleanup(restarted.db.close)
+        for _ in range(2):
+            previous = sum(action == 'Hangup' for action, _ in FakeAMI.calls)
+            self.assertEqual(restarted.listing()['phones'][0]['alert']['state'], 'stopping')
+            self.assertGreater(sum(action == 'Hangup' for action, _ in FakeAMI.calls), previous)
+        FakeAMI.channels = []
+        self.assertEqual(restarted.listing()['phones'][0]['alert']['state'], 'ended')
+        self.assertEqual(sum(action == 'Originate' for action, _ in FakeAMI.calls), 1)
+
+    def test_lost_originate_response_retains_cancellable_identity_without_retry(self):
+        with patch.object(FakeAMI, 'action', side_effect=OSError('response lost')):
+            with self.assertRaises(OSError):
+                self.request('alert', kind='timer')
+        alert = self.server.latest_alert('201')
+        self.assertEqual(alert['state'], 'unknown')
+        with self.assertRaisesRegex(gateway.Refused, 'previous_action_outcome_unknown'):
+            self.request('alert', kind='timer')
+        stopped = self.server.mutate('201', 'alert_stop', {
+            'idempotency_key': 'stop-unknown-123', 'alert_id': alert['id']})
+        self.assertEqual(stopped['state'], 'stopping')
+
+    def test_invalid_or_unknown_alert_identity_never_hangs_up_a_call(self):
+        self.request('alert', kind='alarm')
+        with self.assertRaisesRegex(gateway.Refused, 'alert_not_found'):
+            self.server.mutate('201', 'alert_stop', {'idempotency_key': 'bad-stop-1234', 'alert_id': '0' * 32})
+        self.assertFalse(any(action == 'Hangup' for action, _ in FakeAMI.calls))
+
     def test_ambiguous_failure_never_repeats_dial(self):
         self.send.side_effect = OSError('connection interrupted')
         with self.assertRaises(OSError): self.request('dial', number='600')

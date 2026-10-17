@@ -15,10 +15,11 @@ the wired interface. Do not move the Pod automatically to another node: the
 phones and option 150 refer to a fixed address.
 
 Readiness confirms that both SIP transports exist in Asterisk; it does not
-measure call quality. After every change, make a real two-way call and test
-Cisco echo 600. You can later add a SIPp scenario with a dedicated test endpoint
-for ongoing audio checks. Monitoring must not write passwords or call
-recordings into shared logs.
+measure call quality. During an authorized test window after a relevant change,
+make a real two-way call and test Cisco echo 600. Defer calls, music and device
+restarts while the operator has paused testing. You can later add a SIPp scenario
+with a dedicated test endpoint for ongoing audio checks. Monitoring must not
+write passwords or call recordings into shared logs.
 
 ## What persists
 
@@ -70,7 +71,7 @@ requires DHCP/TFTP/phone configuration changes; it is not transparent failover.
 Before changing anything, use `core show channels count` to confirm that there
 are no active calls, make an encrypted backup and record the Git SHA. A new
 Asterisk version must pass the build and smoke test, then testing with one real
-phone. Do not update all ten phones' firmware at the same time as Asterisk.
+phone. Do not update every phone's firmware at the same time as Asterisk.
 
 Changing any `.conf` creates a new immutable Secret with a hash in its name.
 The Pod receives the new Secret reference and is recreated through `Recreate`.
@@ -103,8 +104,8 @@ SSH/HTTPS failures and single-port PoE recovery, use the
 [remote-management runbook](phone-control.md). For the second line and the
 required wallpaper sizes/catalogue, use the
 [two-line and wallpaper guide](second-line-and-wallpaper.md). The
-[live validation record](server-validation.md) distinguishes what worked on the
-pilot from acceptance checks still needed for other phones.
+[live validation record](server-validation.md) separates verified four-phone
+results from remaining audio and feature acceptance checks.
 
 **Dark screen with a steady green Display button:** the 7945G uses this light
 for screen sleep. The separate Display button has overlapping-rectangle symbols
@@ -233,14 +234,13 @@ actual flags/capabilities, served a file through RRQ. The network was isolated;
 no real MAC addresses, passwords or firmware entered the test. The script
 removed its temporary containers, fixture images and test network.
 
-This verifies the ARM64 build/runtime. The `Validate and build` GitHub Actions
-workflow checks **Linux AMD64** separately. Check its current Actions status;
-do not equate an ARM64 smoke test with a test on a specific home worker. Smoke
-tests do not replace Cisco boot, licensed firmware verification, PoE,
-DHCP/firewall validation, physical registration or two-way audio. After initial
-preparation, the server side was deployed to the home k3s cluster on
-October 17, 2026; its [validation results](server-validation.md) are separate from
-physical-phone acceptance that has not yet been completed.
+These initial checks verified the ARM64 build/runtime. The deployed **Linux
+AMD64** image subsequently passed its own native build and smoke run before
+deployment to home k3s on October 17, 2026. The [validation record](server-validation.md)
+links that run and records the four converted phones, all eight registrations,
+live controls and audio-test limits. Check the `Validate and build` Actions
+status for each new revision. Neither architecture's smoke test replaces Cisco
+boot, firmware verification, PoE, DHCP/firewall validation or two-way audio.
 
 With `autoload=yes`, Asterisk also tries to load optional modules and may emit
 messages about missing queues/ARI/phoneprov configurations and other unused

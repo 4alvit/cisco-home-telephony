@@ -93,6 +93,7 @@ docker exec "$container" asterisk -rx 'core show translation paths opus' | grep 
 docker exec "$container" asterisk -rx 'dialplan show 630@home' | grep 'ha-assist/sip:630@127.0.0.1:5061' > /dev/null
 python3 tests/ami_runtime.py "$container" "$test_root/generated/ha-ami-secret.json"
 python3 tests/gateway_ami_runtime.py "$container" "$test_root/generated/gateway-ami-secret.json"
+python3 scripts/test-alert-originate.py --image "$prefix/asterisk:22.11.0"
 docker exec "$container" asterisk -rx 'module show like app_audiosocket' | grep -E 'app_audiosocket.so.*Running' > /dev/null
 docker exec "$container" asterisk -rx 'dialplan show 702@home' | grep -F 'AGI(radio.py,echo)' > /dev/null
 docker exec "$container" asterisk -rx 'dialplan show 640@home' | grep -F 'Wait(2)' > /dev/null

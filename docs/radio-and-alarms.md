@@ -6,7 +6,12 @@ after an authenticated phone calls an enabled station number. Existing lines
 201–208, Echo 600, test tone 601, first-line group 620 and Assist 630 retain their
 numbers. All features on this page are disabled unless explicitly enabled.
 
-![Per-call radio and finite alarms](diagrams/radio-services.svg)
+![Per-call radio and manually stopped alerts](diagrams/radio-services.svg)
+
+The revised timer/alarm path rings until manual dismissal, without auto-answer
+or after-answer audio. It requires the matching Asterisk, gateway and HA
+updates. Its deployment and live acceptance are pending; earlier finite-tone
+tests validate only the previous behavior. Radio and manual dialing are unchanged.
 
 ## Station numbers
 
@@ -62,6 +67,9 @@ real local settings and verified image digests before use. An enabled `radio`
 object without `stations` uses the whole catalog. `max_seconds` accepts
 30–7200 seconds; `max_calls` accepts 1–4 concurrent radio calls across the PBX.
 The default two-call limit keeps this small-node workload bounded.
+The `alarms.duration_seconds` setting controls only the legacy/manual 640 tone.
+It does not set the duration of a scheduled alert. The new alert context is
+generated for an enabled gateway and verified phone inventory.
 
 Build the image containing Python, FFmpeg, `app_audiosocket`, `res_audiosocket`
 and `res_agi`. Reusing an old image while changing only `site.json` is not
@@ -160,34 +168,55 @@ This uses Asterisk's documented [AudioSocket application](https://docs.asterisk.
 and [AGI application](https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/Dialplan_Applications/AGI/),
 plus FFmpeg's [protocol whitelist and pipe protocol](https://ffmpeg.org/ffmpeg-protocols.html).
 
-## Finite alarms and recurring schedules
+## Timers and weekday alarms: ring until manually stopped
 
-**640** answers and plays a local, intermittent 880 Hz signal for the configured
-1–30 seconds, then stops and hangs up. The default is 15 seconds; an absolute
-35-second channel limit is a second bound. This is an attention signal, not
-an emergency alarm, wake-up guarantee or unattended monitoring service.
+Home Assistant owns countdowns, clock times, selected weekdays and enable/disable
+state. When an occurrence is due, it requests a gateway `alert` with the verified
+line and `kind: "timer"` or `"alarm"`. The gateway requires a registered, idle
+phone with DND off and gives the occurrence its own persisted identity.
 
-Home Assistant owns timers, clock times, weekday recurrence and enable/disable
-state. The [companion repository](https://github.com/ha-homelab/asterisk-telephony)
-documents that scheduler. The PBX contract after a phone answers is:
+The phone keeps ringing without an application ring-duration limit until one of
+these manual actions ends it:
 
-```text
-Action: Originate
-Channel: PJSIP/<verified-primary-extension>
-Context: home
-Exten: 640
-Priority: 1
-Timeout: 20000
-Async: true
-```
+- Answer or reject the call on the physical phone. Answering dismisses the
+  alert before bridging; there is no tone, radio or other after-answer audio.
+- Press **Stop alert** in Home Assistant.
+- For a timer, press **Cancel timer**. For an alarm, turn **Alarm enabled** off.
 
-By default, the phone rings normally for at most 20 seconds and must be
-answered. Optional per-phone auto-answer can be enabled explicitly through the
-gateway; it is off by default. The scheduler/gateway must check a fresh
-registered, idle endpoint and DND state immediately before originating. Busy,
-unregistered, DND or missed alarms must be reported rather than interrupting
-another call or retrying indefinitely. Test one immediate alarm before enabling
-a recurring schedule and verify the phone returns to idle after the tone.
+Alerts never use auto-answer, even if that phone's ordinary auto-answer switch
+is enabled. HA's ordinary Answer control is also blocked for alert channels.
+The updated integration removes Alarm sound and Timer sound selectors and
+provides Stop alert instead: **116 entities across four phones**.
+
+The Asterisk `cisco-alert` helper uses a private Local channel, no Dial timeout,
+and ignores forwarding. Its other leg waits in `WaitForSignal` without a
+repeating interval. AMI's five-second timeout applies only to the initial Local
+answer, not to ringing at the handset. The helper never plays the manual 640
+tone. [The gateway API](phone-gateway.md#alert-identity-and-manual-stop) documents
+the exact alert/stop identity and observable states; the
+[companion repository](https://github.com/ha-homelab/asterisk-telephony)
+documents HA scheduling.
+
+Gateway restarts reconcile an existing alert from persisted identity. PBX or
+power loss can end the call; neither recovery nor a missed schedule replays the
+occurrence. Busy, offline, DND and ambiguous outcomes must be reported. Do not
+retry by creating a second alert. This is an attention feature, not an emergency
+alarm or a guarantee through network failure.
+
+Validate the new deployment with one attended timer and one selected-weekday
+alarm. Confirm ringing continues beyond the old 20-second boundary, auto-answer
+does not activate, and each manual dismissal method leaves no owned channels.
+Also verify restart reconciliation and that unrelated calls are preserved.
+Do not count the previous finite-tone tests as acceptance of this new behavior.
+
+### Legacy/manual 640 tone
+
+Directly dialing **640** still answers and plays a local intermittent 880 Hz tone
+for 1–30 seconds, then hangs up. The default is 15 seconds, with an absolute 35-second
+channel bound. The gateway's older `ring` action likewise retains its 20-second
+ring limit followed by the allowed destination after answer. Neither path is
+used by the revised timer/alarm scheduler. Ordinary manual radio calls retain
+their existing behavior and limits.
 
 ## Optional gateway DND
 

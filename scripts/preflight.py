@@ -10,7 +10,7 @@ import sys
 import xml.etree.ElementTree as ET
 from render_k3s import load_site, read_files, read_wallpaper, render_core, render_tftp
 from verify_firmware import verify as verify_firmware
-from provision import ha_settings, phone_networks, local_networks, radio_settings, service_dialplan, gateway_settings, external_sip
+from provision import ha_settings, phone_networks, local_networks, radio_settings, service_dialplan, gateway_settings, external_sip, alert_dialplan
 
 
 def check_service_config(site, configs):
@@ -26,6 +26,15 @@ def check_service_config(site, configs):
         raise ValueError("Disabled radio has stale routes; rerun provision.py")
     if not site.get("alarms", {}).get("enabled", False) and "exten => 640," in dialplan:
         raise ValueError("Disabled alarms have stale routes; rerun provision.py")
+    extensions = sorted(set(re.findall(r'^\[(2[0-9]{2})\]$', configs.get('pjsip.conf', ''), re.M)))
+    alerts = alert_dialplan(site, extensions)
+    if alerts and dialplan.count(alerts) != 1:
+        raise ValueError('Alert helper differs from inventoried endpoints; rerun provision.py')
+    remainder = dialplan.replace(alerts, '', 1) if alerts else dialplan
+    if re.search(r'^\[cisco-alert(?:-answered)?\]', remainder, re.M | re.I):
+        raise ValueError('Stale or duplicate alert context; rerun provision.py')
+    if re.search(r'^\s*include\s*=>\s*cisco-alert\b', dialplan, re.M | re.I):
+        raise ValueError('Alert context must not be reachable through a dialplan include')
 
 
 def check_phone_config(site, configs):

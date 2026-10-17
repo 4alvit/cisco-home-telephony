@@ -67,6 +67,36 @@ def service_dialplan(site):
     return ''.join(routes), numbers
 
 
+def alert_dialplan(site, extensions):
+    """Private AMI-only alert context; no timeout, forwarding, or answer audio.
+
+    Originate answers only the Local leg, whose companion waits in WaitForSignal.
+    Dial's omitted timeout keeps the physical phone ringing until it terminates
+    the call or the operator hangs up the exact owned channel. The U subroutine
+    aborts both legs before bridging on manual answer. Neither context is included
+    in home. https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/Dialplan_Applications/Dial/
+    """
+    if not gateway_settings(site) or not extensions:
+        return ''
+    extensions = sorted(set(extensions))
+    if any(not isinstance(ext, str) or not re.fullmatch(r'2[0-9]{2}', ext) for ext in extensions):
+        raise ValueError('alert destinations must be inventoried local extensions')
+    parts = ['\n[cisco-alert]\n']
+    for extension in extensions:
+        parts.append(f'''exten => {extension},1,GotoIf($[${{REGEX("^[0-9a-f]{{32}}$" ${{CISCO_ALERT_ID}})}} = 1]?ready:reject)
+ same => n(ready),Answer()
+ same => n,Dial(PJSIP/{extension},,iU(cisco-alert-answered))
+ same => n,Hangup()
+ same => n(reject),Hangup(21)
+''')
+    parts.append('''
+[cisco-alert-answered]
+exten => s,1,Set(GOSUB_RESULT=ABORT)
+ same => n,Return()
+''')
+    return ''.join(parts)
+
+
 def read_json(path):
     return json.loads(Path(path).read_text())
 
@@ -618,6 +648,8 @@ exten => s,1,Hangup(21)
 """
     configs["pjsip.conf"] += external["pjsip"]
     configs["extensions.conf"] += external["dialplan"]
+    configs["extensions.conf"] += alert_dialplan(
+        site, [line["extension"] for phone in phones for line in phone_lines(phone)])
     service_numbers += external["numbers"]
     for name,body in configs.items():
         private_write(out/"asterisk"/name,body)

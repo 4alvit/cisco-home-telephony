@@ -235,8 +235,14 @@ email was sent.
 
 The account was created and its settings email received on 2026-10-17. The
 deployed Asterisk subsequently reached Registered using the issued bare username
-and domain. The synthetic 802 echo/audio pilot was deferred at the user's request
-before any external call was placed; two-way audio remains unverified.
+and domain. After the user resumed testing, a bounded synthetic 802 call to
+`4444@sip2sip.info` answered and showed increasing RTP counts in both directions,
+with complete channel cleanup afterward. No physical phone was called and no
+audio was recorded. The local receive-loss estimate (`lp`) increased from 42 to
+91, so connectivity passed but clean audio quality has **not** been established.
+The final RTT was 0.15451 seconds (154.51 ms), a delay measurement rather than a
+loss percentage. See the [pilot evidence and Asterisk source interpretation](external-sip.md#observed-sip2sip-pilot-and-quality-limit)
+before treating a successful call as media-quality acceptance.
 
 ### France: Linphone / Belledonne Communications
 
@@ -250,8 +256,14 @@ not a free PSTN trunk. Use the current account settings supplied after signup an
 verify PJSIP registration and two-way audio before enabling a call route.
 Email activation completed on 2026-10-17 and the account dashboard displays the
 assigned SIP address. The deployed account reached Registered with a null
-target. No official echo/test URI was verified. Leave route 803 absent until an operator-controlled
-or explicitly approved peer is available; do not guess an echo address.
+target. No Linphone-operated echo/test URI was verified. The independent
+[The Test Call operator's page](https://thetestcall.blogspot.com/), updated
+2026-07-20, publishes `sip:thetestcall@sip.linphone.org`, supports PCMU, PCMA and
+G.722, and lists real-time echo on menu option 3. This provides a concrete
+candidate for a later explicitly reviewed test, not a Linphone-operated service
+or a verified live result. No call to that peer was made and it has not been
+configured; route 803 remains absent. Do not substitute a guessed echo address
+or assume that a published test address guarantees availability or audio quality.
 
 ### How to connect a provider without changing the phones
 

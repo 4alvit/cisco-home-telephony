@@ -30,8 +30,8 @@ conversion to MPP is not required.
 - [SVG diagrams](docs/diagrams/) and [color slides](docs/slides/), all in English.
 - [Home Assistant](docs/home-assistant.md): phone states, DTMF, call control and
   Assist on extension **630**.
-- [Internet radio and bounded alarm audio](docs/radio-and-alarms.md), including
-  seven station extensions and an isolated runtime validation suite.
+- [Internet radio, timers and weekday alarms](docs/radio-and-alarms.md), including
+  seven station extensions and alerts that ring until manually stopped.
 - [Persistent HA phone control](docs/phone-gateway.md): opt-in auto-answer,
   PBX DND, numeric dialing, text and photo delivery.
 - [External SIP research](docs/extended-services-research.md), with disabled-by-default

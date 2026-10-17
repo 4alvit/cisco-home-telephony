@@ -194,6 +194,9 @@ class Gateway:
         self.db = sqlite3.connect(directory / 'gateway.sqlite3', check_same_thread=False)
         self.db.execute('CREATE TABLE IF NOT EXISTS preferences (phone TEXT PRIMARY KEY, dnd INTEGER, autoanswer INTEGER)')
         self.db.execute('CREATE TABLE IF NOT EXISTS operations (key TEXT PRIMARY KEY, digest TEXT, response TEXT, created REAL)')
+        self.db.execute('''CREATE TABLE IF NOT EXISTS alerts (
+            id TEXT PRIMARY KEY, phone TEXT, line TEXT, kind TEXT, state TEXT,
+            reason TEXT, created REAL, seen INTEGER, stop_requested INTEGER)''')
         for phone in self.phones:
             self.db.execute('INSERT OR IGNORE INTO preferences VALUES (?, 0, 0)', (phone,))
         self.db.commit()
@@ -209,20 +212,91 @@ class Gateway:
             for line in phone['lines']:
                 ami.action('DBPut', Family='cisco-dnd', Key=line, Val=value)
 
+    def alerts(self):
+        columns = ('id', 'phone', 'line', 'kind', 'state', 'reason', 'created', 'seen', 'stop_requested')
+        return [dict(zip(columns, row)) for row in self.db.execute(
+            'SELECT id,phone,line,kind,state,reason,created,seen,stop_requested FROM alerts ORDER BY created')]
+
+    @staticmethod
+    def alert_channels(alert, channels):
+        roots = {'cisco-alert-' + alert['id'] + suffix for suffix in ('-a', '-b')}
+        related = [item for item in channels if item.get('Uniqueid') in roots or item.get('Linkedid') in roots]
+        for item in related:
+            name = item.get('Channel', '')
+            require(re.fullmatch(r'Local/' + re.escape(alert['line']) + r'@cisco-alert-[0-9a-f]+;[12]', name)
+                    or re.fullmatch(r'PJSIP/' + re.escape(alert['line']) + r'-[0-9a-f]+', name),
+                    'unexpected_alert_channel')
+            require(item.get('Uniqueid'), 'alert_channel_identity_missing')
+        return related
+
+    def is_alert_channel(self, channel):
+        # Retained records also suppress auto-answer for a late-arriving channel
+        # after an ambiguous originate or a gateway restart.
+        identities = {channel.get('Uniqueid'), channel.get('Linkedid')}
+        return any('cisco-alert-' + alert['id'] + suffix in identities
+                   for alert in self.alerts() for suffix in ('-a', '-b'))
+
+    def stop_alert_channels(self, ami, alert):
+        _, channels = ami.snapshot()
+        for item in self.alert_channels(alert, channels):
+            # Hanging up one Local leg can remove all its peers. Re-read before
+            # each action and never act on a recycled name or another call.
+            _, current = ami.snapshot()
+            if not any(candidate.get('Uniqueid') == item['Uniqueid']
+                       and candidate.get('Channel') == item['Channel']
+                       for candidate in self.alert_channels(alert, current)):
+                continue
+            try:
+                ami.action('Hangup', Channel=item['Channel'], Cause='16')
+            except Refused:
+                _, current = ami.snapshot()
+                require(not any(candidate.get('Uniqueid') == item['Uniqueid']
+                                for candidate in self.alert_channels(alert, current)),
+                        'alert_hangup_not_confirmed', 503)
+
+    def reconcile_alerts(self, ami, channels):
+        for alert in self.alerts():
+            related = self.alert_channels(alert, channels)
+            if related:
+                if alert['stop_requested'] or alert['state'] == 'ended':
+                    # A delayed originate must never revive a terminal alert.
+                    # Persist cancellation before I/O so an ambiguous Hangup or
+                    # gateway restart continues stopping the same owned legs.
+                    if not alert['stop_requested']:
+                        self.db.execute('UPDATE alerts SET state=?,stop_requested=1 WHERE id=?',
+                                        ('stopping', alert['id']))
+                        self.db.commit()
+                    self.stop_alert_channels(ami, alert)
+                    state = 'stopping'
+                else:
+                    state = 'ringing' if any(item.get('ChannelStateDesc') == 'Ringing'
+                                             for item in related) else 'starting'
+                self.db.execute('UPDATE alerts SET state=?,seen=1 WHERE id=?', (state, alert['id']))
+            elif alert['state'] != 'ended' and (alert['seen'] or time.time() - alert['created'] > 15):
+                reason = 'stopped' if alert['stop_requested'] else ('call_ended' if alert['seen'] else 'not_observed')
+                self.db.execute('UPDATE alerts SET state=?,reason=? WHERE id=?', ('ended', reason, alert['id']))
+        self.db.commit()
+
+    def latest_alert(self, phone_id):
+        found = [alert for alert in self.alerts() if alert['phone'] == phone_id]
+        return ({key: found[-1][key] for key in ('id', 'line', 'kind', 'state', 'reason')} if found else None)
+
     def listing(self):
         with self.lock, AMI(self.config['ami']) as ami:
             endpoints, channels = ami.snapshot()
+            self.reconcile_alerts(ami, channels)
             return {'ami_fresh': True, 'observed_at': time.time(),
                     'dial_allowlist': self.config['dial_allowlist'],
                     'ring_allowlist': self.config.get('ring_allowlist', ['640']),
                     'phones': [
                 {'id': phone['id'], 'lines': phone['lines'], **self.preference(phone['id']),
                  'dnd_pending': phone['id'] in self.dnd_pending,
+                 'alert': self.latest_alert(phone['id']),
                  'online': all(endpoints.get(line) not in (None, 'Unavailable', 'Invalid') for line in phone['lines']),
                  'channels': [{'name': item['Channel'], 'uniqueid': item.get('Uniqueid'),
                                'state': item.get('ChannelStateDesc'), 'line': item['Channel'].split('/')[1].split('-')[0]}
                               for item in own_channels(phone, channels)],
-                 'capabilities': ['dial', 'answer', 'hangup', 'speaker_toggle', 'message', 'image', 'dnd', 'autoanswer', 'ring']}
+                 'capabilities': ['dial', 'answer', 'hangup', 'speaker_toggle', 'message', 'image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop']}
                 for phone in self.phones.values()]}
 
     def resource(self, phone, data, content_type):
@@ -274,7 +348,7 @@ class Gateway:
 
     def mutate(self, phone_id, action, body):
         require(phone_id in self.phones, 'unknown_phone', 404)
-        require(action in ('dial', 'answer', 'hangup', 'speaker', 'message', 'image', 'dnd', 'autoanswer', 'ring'),
+        require(action in ('dial', 'answer', 'hangup', 'speaker', 'message', 'image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop'),
                 'unknown_action', 404)
         require(isinstance(body, dict), 'json_object_required', 400)
         key = body.get('idempotency_key')
@@ -320,6 +394,20 @@ class Gateway:
             return {action: body['enabled']}
         with AMI(self.config['ami']) as ami:
             endpoints, channels = ami.snapshot()
+            self.reconcile_alerts(ami, channels)
+            if action == 'alert_stop':
+                alert_id = body.get('alert_id')
+                require(isinstance(alert_id, str) and re.fullmatch(r'[0-9a-f]{32}', alert_id), 'bad_alert_id', 400)
+                matches = [alert for alert in self.alerts() if alert['id'] == alert_id and alert['phone'] == phone['id']]
+                require(len(matches) == 1, 'alert_not_found', 404)
+                alert = matches[0]
+                if alert['state'] != 'ended':
+                    self.db.execute('UPDATE alerts SET state=?,stop_requested=1 WHERE id=?', ('stopping', alert_id))
+                    self.db.commit()
+                    self.stop_alert_channels(ami, alert)
+                    _, current = ami.snapshot()
+                    self.reconcile_alerts(ami, current)
+                return {'alert_id': alert_id, 'state': next(row['state'] for row in self.alerts() if row['id'] == alert_id)}
             require(all(endpoints.get(endpoint) not in (None, 'Unavailable', 'Invalid') for endpoint in phone['lines']),
                     'phone_unavailable', 503)
             owned = own_channels(phone, channels)
@@ -327,9 +415,30 @@ class Gateway:
                 require(not owned, 'phone_busy')
                 self.notify(phone, action, body)
                 return {'resource_ttl_seconds': 120}
-            if action in ('dial', 'ring'):
+            if action in ('dial', 'ring', 'alert'):
                 require(not owned and all(endpoints.get(endpoint) == 'Not in use' for endpoint in phone['lines']), 'phone_busy')
                 require(not self.preference(phone['id'])['dnd'], 'do_not_disturb')
+                require(not any(row['phone'] == phone['id'] and row['state'] != 'ended' for row in self.alerts()),
+                        'alert_already_active')
+                if action == 'alert':
+                    kind = body.get('kind')
+                    require(kind in ('timer', 'alarm'), 'bad_alert_kind', 400)
+                    alert_id = secrets.token_hex(16)
+                    self.db.execute('INSERT INTO alerts VALUES (?, ?, ?, ?, ?, NULL, ?, 0, 0)',
+                                    (alert_id, phone['id'], line, kind, 'starting', time.time()))
+                    self.db.commit()  # Durable identity exists before the async originate.
+                    try:
+                        ami.action('Originate', Channel='Local/' + line + '@cisco-alert/n',
+                                   Application='WaitForSignal', Data='cisco-alert-' + alert_id,
+                                   Timeout='5000', Async='true', CallerID=kind.title() + ' <640>',
+                                   ChannelId='cisco-alert-' + alert_id + '-a',
+                                   OtherChannelId='cisco-alert-' + alert_id + '-b',
+                                   Variable='__CISCO_ALERT_ID=' + alert_id)
+                    except Exception:
+                        self.db.execute('UPDATE alerts SET state=? WHERE id=?', ('unknown', alert_id))
+                        self.db.commit()
+                        raise
+                    return {'alert_id': alert_id, 'line': line, 'kind': kind, 'ring_timeout_seconds': None}
                 if action == 'ring':
                     destination = body.get('destination', '640')
                     require(destination in self.config.get('ring_allowlist', ['640']), 'ring_destination_not_allowed', 400)
@@ -356,9 +465,14 @@ class Gateway:
             require(body.get('channel') == channel['Channel'] and body.get('uniqueid') == channel['Uniqueid'],
                     'channel_identity_changed')
             if action == 'answer':
+                require(not self.is_alert_channel(channel), 'alert_requires_manual_answer_or_stop')
                 require(channel.get('ChannelStateDesc') == 'Ringing', 'phone_not_ringing')
                 execute(phone, 'Key:Line' + str(phone['lines'].index(line) + 1))
             else:
+                for alert in self.alerts():
+                    if channel in self.alert_channels(alert, channels):
+                        self.db.execute('UPDATE alerts SET stop_requested=1 WHERE id=?', (alert['id'],))
+                        self.db.commit()
                 ami.action('Hangup', Channel=channel['Channel'], Cause='16')
             return {'line': line, 'channel': channel['Channel'], 'uniqueid': channel['Uniqueid']}
 
@@ -374,6 +488,7 @@ class Gateway:
                         self.dnd_pending.clear()
                         self.last_pbx_start = started
                     endpoints, channels = ami.snapshot()
+                    self.reconcile_alerts(ami, channels)
                     active = {item.get('Uniqueid') for item in channels}
                     self.auto_attempts.intersection_update(active)
                     for phone in self.phones.values():
@@ -382,6 +497,8 @@ class Gateway:
                         if not pref['autoanswer'] or pref['dnd'] or len(owned) != 1:
                             continue
                         item = owned[0]
+                        if self.is_alert_channel(item):
+                            continue
                         identity = item.get('Uniqueid')
                         if not identity or identity in self.auto_attempts or item.get('ChannelStateDesc') != 'Ringing':
                             continue

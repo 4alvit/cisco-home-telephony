@@ -5,17 +5,14 @@ independent lines. Repeat the same checks for every later batch. A phone's
 successful conversion does not prove another unit's firmware compatibility,
 registration, audio or remote-management behavior.
 
-The first three phones now register lines **201–206**. The second and third
-phones have saved LakeDawn backgrounds and verified two-stage SSH access; each
-of their four lines passed an Echo 600 call, bidirectional RTP checks and HA
-Hangup. Native VoIP discovery, call permissions and the existing Russian
-pipeline/VAD settings for **203/205** passed verification; spoken Assist
-acceptance is still separate. After its old ITL was erased, the fourth phone
-automatically received the new DHCP/TFTP settings and requested its plain SEP
-profile. **207/208 remain pending SIP verification**. The
-[validation record](server-validation.md) separates these results from the
-remaining audio, Assist and feature tests. Prepared files or an open TFTP window
-do not establish that conversion finished.
+The installed four-phone setup registers **201–208** on
+**SIP45.9-4-2SR4-3S**, with saved LakeDawn backgrounds and verified two-stage SSH
+access. Each added line **203–208** passed an Echo 600 call, bidirectional RTP
+checks and exact-channel HA Hangup. All four primary identities
+**201/203/205/207** have native VoIP permissions and select **Local Russian Home**
+with **Silero Baya**. The [validation record](server-validation.md) distinguishes
+these results from remaining human-audible Assist and feature tests. Use an
+authorized maintenance window for the procedure below.
 
 All addresses below are synthetic examples. Real MAC addresses, switch ports,
 hardware observations, credentials and deployment receipts belong in private
@@ -28,9 +25,9 @@ hardware observations, credentials and deployment receipts belong in private
 For this example, assign:
 
 - Phone A, the existing pilot: button 1 **201**, button 2 **202**.
-- Phone B, the next verified device: button 1 **203**, button 2 **204**.
-- Phone C, the other verified device: button 1 **205**, button 2 **206**.
-- Phone D, the next addition: button 1 **207**, button 2 **208**.
+- Phone B: button 1 **203**, button 2 **204**.
+- Phone C: button 1 **205**, button 2 **206**.
+- Phone D: button 1 **207**, button 2 **208**.
 
 Start from the [two-line example](../examples/phones.two-lines.example.json)
 and [inventory guide](provisioning.md). Keep all four physical phones in the
@@ -74,8 +71,7 @@ For each new phone, privately record the label/model, SW-port MAC, hardware
 revision, current App Load, current IP, switch/physical port and trust-list
 state. Correlate the phone identity with DHCP, LLDP and the switch forwarding
 table; a lease, power draw or port number alone is insufficient. Set
-`verified: true` only after observing the actual **CP-7945G**. A matching product
-name in an old purchase record is not this check.
+`verified: true` only after checking the actual **CP-7945G** model and MAC.
 
 Review the [firmware conversion path](sip-conversion.md) and the
 [archive provenance notes](firmware-archive.md) for the observed hardware and
@@ -284,9 +280,10 @@ Assist still requires a first call from each intended SIP identity.
 
 For Assist, start with each physical phone's **primary line: 201, 203, 205, 207**.
 Dial **630** from that specific line to discover its native VoIP identity, then
-enable **Allow calls** and choose the intended working language/pipeline for
-that device. Choose the intended current pipeline for each phone; the installed home setup uses Local Russian Home with Silero Baya. Preserve unrelated Echo/device selections and global pipeline definitions. Native VoIP identity
-follows the SIP From extension, so approval for 201 does not approve 203, 205 or
+enable **Allow calls** and choose the intended language/pipeline for that device.
+The installed home setup uses **Local Russian Home** with **Silero Baya**.
+Preserve unrelated Echo/device selections and global pipeline definitions. Native
+VoIP identity follows the SIP From extension, so approval for 201 does not approve 203, 205 or
 207; secondary lines need their own discovery only if Assist is wanted there.
 Call again and confirm a spoken request, an audible answer and clean hangup.
 Do not restart HA during an active call. Validate new package configuration

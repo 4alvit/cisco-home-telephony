@@ -18,7 +18,7 @@
 - [three-phones.svg](three-phones.svg): the earlier three-phone architectural
   example with independent lines 201–206.
 - [radio-services.svg](radio-services.svg): per-call radio workers, approved
-  broadcaster streams, and finite alarms scheduled through Home Assistant.
+  broadcaster streams, and alarms that ring until manually stopped.
   See the [radio and alarms guide](../radio-and-alarms.md) for limits and tests.
 
 Each file is a standalone SVG containing editable text and vector objects.
@@ -33,4 +33,4 @@ establish that home deployment or physical acceptance has been completed.
 
 ## Phone controls and alarms
 
-[phone-control.svg](phone-control.svg) shows the HA entities, private API, fresh AMI guards and per-phone callback boundaries. [radio-services.svg](radio-services.svg) shows radio decoding and the finite alarm route.
+[phone-control.svg](phone-control.svg) shows the HA entities, private API, fresh AMI guards and per-phone callback boundaries. [radio-services.svg](radio-services.svg) shows radio decoding and manually dismissed timer/alarm calls.

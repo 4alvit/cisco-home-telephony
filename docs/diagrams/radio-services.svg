@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
-  <title id="title">Radio on demand and finite home alarms</title>
-  <desc id="desc">A phone calls a station number from 701 through 707. Asterisk starts one AGI worker, which validates an official broadcaster and sends decoded audio through a loopback AudioSocket. Hanging up stops the worker and FFmpeg. Home Assistant schedules an ordinary ringing call, guarded by idle, registration and do-not-disturb checks. Answering plays extension 640 for at most thirty seconds.</desc>
+  <title id="title">Radio on demand and manually stopped alerts</title>
+  <desc id="desc">A phone calls a station number from 701 through 707. Asterisk starts one AGI worker, which validates an official broadcaster and sends decoded audio through a loopback AudioSocket. Hanging up stops the worker and FFmpeg. Home Assistant requests a separately identified timer or weekday alert after idle, registration and do-not-disturb checks. The phone rings until manual answer, rejection or Stop alert, with no auto-answer or after-answer audio. The revised alert behavior awaits deployment and live acceptance.</desc>
   <defs>
     <marker id="teal" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8" fill="#48DDCC"/></marker>
     <marker id="gold" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8" fill="#F7CB64"/></marker>
@@ -8,7 +8,7 @@
   </defs>
   <rect width="1280" height="760" fill="#101C34"/>
   <g font-family="Arial, sans-serif">
-    <text x="45" y="55" font-size="34" font-weight="700" fill="#F5F7FB">Radio on demand · alarms with an end</text>
+    <text x="45" y="55" font-size="34" font-weight="700" fill="#F5F7FB">Radio on demand and manually stopped alerts</text>
     <text x="45" y="94" font-size="21" fill="#AAB9D0">Optional home services · no idle downloads · existing phone numbers stay unchanged</text>
     <g fill="none" stroke-width="3">
       <path d="M285,245 H365" stroke="#48DDCC" marker-start="url(#teal)" marker-end="url(#teal)"/>
@@ -52,14 +52,14 @@
       <text x="165" y="517" font-size="25" font-weight="600">Home Assistant</text>
       <text x="165" y="555" font-size="21">Timers + weekdays</text>
       <text x="165" y="590" font-size="21">Explicit enable/disable</text>
-      <text x="508" y="517" font-size="25" font-weight="600">Fresh state guard</text>
+      <text x="508" y="517" font-size="25" font-weight="600">Gateway alert identity</text>
       <text x="508" y="555" font-size="21">Registered · idle · DND off</text>
-      <text x="508" y="590" font-size="21">Ordinary ring ≤20 seconds</text>
-      <text x="982" y="517" font-size="27" font-weight="600">Answer → 640 → finite signal</text>
-      <text x="982" y="557" font-size="23">15 seconds by default · 30 seconds maximum</text>
-      <text x="982" y="596" font-size="21" fill="#FF836D">Ends automatically · no auto-answer or retry loop</text>
+      <text x="508" y="590" font-size="21">No automatic replay</text>
+      <text x="982" y="517" font-size="27" font-weight="600">Ring until you stop it</text>
+      <text x="982" y="557" font-size="23">Answer, reject or press HA Stop alert</text>
+      <text x="982" y="596" font-size="21" fill="#FF836D">No auto-answer or after-answer audio</text>
     </g>
-    <text x="45" y="691" font-size="20" fill="#AAB9D0">Architecture and number plan only. Verify the deployed image, current streams and handset audio separately.</text>
+    <text x="45" y="691" font-size="20" fill="#AAB9D0">Revised alert behavior awaits deployment and live acceptance. Radio flow is unchanged.</text>
     <text x="45" y="726" font-size="20" fill="#AAB9D0">Private listening · no public stream relay · no new inbound internet ports</text>
   </g>
 </svg>

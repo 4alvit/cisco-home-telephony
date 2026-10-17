@@ -62,7 +62,7 @@ def main():
     rows=[('600','Echo test','Hear your voice returned to you.'),('601','Test tone','Check that audio plays.'),
           ('620','Ring all phones','Calls each phone\'s primary line; DND phones are skipped.'),
           ('630','Home Assistant','Russian voice assistant using Silero Baya.'),
-          ('640','Alarm sound','Short alarm tone; the call ends automatically.')]
+          ('640','Manual tone test','Finite test tone; not the timer/alarm ringer.')]
     rows += [(v['extension'],v['name'],v['genre']) for v in stations.values()]
     y=543
     c.setFillColor(INK);c.roundRect(42,y-8,528,26,4,fill=1,stroke=0)
@@ -77,15 +77,15 @@ def main():
         y-=32
     paragraph(c,'Radio needs an Internet connection. Calls are limited to 2 hours; hang up to stop immediately. Echo online is the current online service, not the former Moscow FM broadcast.',42,100,528,9,12,GRAY)
     footer(c,1);c.showPage()
-    title(c, 'CONTROL FROM HOME ASSISTANT', 'Calls, alarms & messages', 'Use the Cisco Phone Control device for the phone you want to operate.')
+    title(c, 'CONTROL FROM HOME ASSISTANT', 'Calls, alarms & messages', 'Updated alerts require the matching gateway and Home Assistant integration.')
     y=640
-    y=block(c,'Set an alarm for selected days', 'Choose an alarm time, enable the desired weekdays, and enable the alarm. Times follow Home Assistant\'s configured local time zone. The selected phone rings; answer to hear the short alarm sound.',y)
-    y=block(c,'Start a timer', 'Set the timer duration and press Start timer. Use Cancel timer to stop it. A timer is one-shot. DND, an offline phone, or a busy phone can prevent delivery; missed alerts are not replayed after recovery.',y)
-    y=block(c,'Call controls', 'Choose the line and allowed destination, then use Dial. Answer acts on a currently ringing call. Hang up ends the selected active call. Speaker is an explicit button toggle; Home Assistant cannot reliably report the physical speaker or handset state.',y)
-    y=block(c,'Do Not Disturb and auto-answer', 'DND blocks local calls routed through the PBX and gateway calls. It is separate from the phone\'s native DND icon. Auto-answer is optional and off by default. When enabled it answers incoming calls; the phone\'s selected audio path may be speaker or headset.',y)
+    y=block(c,'Set an alarm for selected days', 'Choose the local time and weekdays, then enable the alarm. It keeps ringing until you answer or reject it on the phone, press Stop alert, or disable Alarm enabled. There is no auto-answer or audio after answering.',y)
+    y=block(c,'Start or stop a timer', 'Set the duration and press Start timer. At zero, the phone rings until you answer, reject it or press Stop alert. Cancel timer cancels the countdown and stops its active alert. Busy, offline or DND phones can miss alerts; recovery does not replay them.',y)
+    y=block(c,'Call controls', 'Choose the line and allowed destination, then use Dial. HA Answer handles normal ringing calls, not timer/alarm alerts. Hang up ends the selected active call. Speaker toggles a physical key; HA cannot reliably report the hardware speaker or handset state.',y)
+    y=block(c,'Do Not Disturb and auto-answer', 'DND blocks local calls routed through the PBX and gateway calls. It is separate from the phone\'s native DND icon. Optional auto-answer is off by default and applies only to normal calls. Timers and alarms always require manual dismissal.',y)
     y=block(c,'Send text, photos or still sprites', 'Send a text page or an approved local PNG/JPEG image through the integration. Pictures fit the 298 x 156 Services pane. Press Exit on the phone to return. These are local screen notifications, not mobile SMS/MMS; animation and video are not supported.',y)
     y=block(c,'External calls and free SIP accounts', '801-803 are reserved for optional provider tests and work only after both the account and its call route are verified. Free SIP-to-SIP calling does not mean free calls to ordinary telephone numbers. Google Voice has no supported free direct Asterisk trunk. Use another working service for emergency calls.',y,BLUE)
-    paragraph(c,'If the screen is dark: press the Display button (two overlapping rectangles). For voice assistance: dial 630 and speak after the prompt. Full setup, capabilities and validation: github.com/4alvit/cisco-home-telephony',42,84,528,9,12,GRAY)
+    paragraph(c,'New alerts: deployment and live acceptance pending. If the screen is dark, press Display (two overlapping rectangles). Voice assistance: dial 630. Setup and validation: github.com/4alvit/cisco-home-telephony',42,84,528,9,12,GRAY)
     footer(c,2);c.save()
     print(target)
 

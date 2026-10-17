@@ -8,8 +8,7 @@ remain mandatory for normal phone provisioning.
 
 Check each phone's `CP-7945G` label, SW-port MAC, serial number, hardware revision,
 current load, existing CTL/ITL and access to settings. Store serial numbers only
-in private `.local/phones.json`. The purchase email identifies the lot, not every
-phone that remains today.
+in private `.local/phones.json`.
 
 Copy `examples/phones.example.json`, which has ten entries for extensions 201–210.
 Remove entries for missing phones. MACs may use `:` or `-`; the generator converts

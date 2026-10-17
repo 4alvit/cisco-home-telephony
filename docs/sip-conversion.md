@@ -1,6 +1,6 @@
 # Cisco 7945G → SIP → Asterisk
 
-The purchased batch contains ten 7945G phones, but start with **one**. This is
+Start with **one verified 7945G** before expanding to more phones. This is
 Enterprise SIP, not MPP. Firmware binaries are not included: verify archive
 usage rights and hardware compatibility before writing flash.
 
@@ -15,8 +15,8 @@ The MAC is on the label or under `Settings → Network Configuration`; versions
 are in Model Information. If web access is enabled, Device Information provides
 read-only status. See [Cisco Remote Monitoring](https://www.cisco.com/c/en/us/td/docs/voice_ip_comm/cuipph/7975G_7971g-ge_7970g_7965g_7945g/9_0/english/admin_guide/P747_BK_W06BD6D9_00_adminguide_7945-7965-7970-7971-7975/P747_BK_W06BD6D9_00_adminguide_7945-7965-7970-7971-7975_chapter_01000.html).
 
-Do not set `verified: true` based only on the eBay listing. Check each label,
-then assign extensions 201–210 and room labels.
+Set `verified: true` only after checking the actual model and MAC. Assign unique
+extensions and labels using the [inventory guide](provisioning.md).
 
 ## 2. Select the firmware path
 
@@ -211,7 +211,7 @@ For `Auth Fail`, check the version path and integrity. `Load Rejected HC` indica
 a hardware minimum. Repeated resets do not fix the cause. Do not use unknown
 deep-reset sequences or bypass signature checks.
 
-## 8. Acceptance and rollout to ten phones
+## 8. Acceptance and rollout
 
 For each phone, verify:
 
@@ -227,8 +227,9 @@ For each phone, verify:
 7. Time is correct, no secrets are in Git, and unintended networks have no access.
 
 After a successful pilot, add phones in small groups and record the final App
-Load. Ten configuration entries do not equal ten flashed phones. External numbers
-and emergency calling are not connected in the baseline configuration.
+Load. Generated profiles do not establish that the corresponding phones have
+converted successfully. External numbers and emergency calling are not connected
+in the baseline configuration.
 
 After transfers and flash writes finish, delete the TFTP Job and close its
 temporary firewall allowances using the [operations guide](operations.md).
