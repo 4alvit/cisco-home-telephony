@@ -263,6 +263,13 @@ exclusions. Keep DTMF automations disabled unless a separate harmless test is
 explicitly intended. A confirmed second physical phone can become `call_to`;
 retain `call_to: null` until that destination really exists and is accepted.
 
+If those real registry entries already exist while a phone waits for its ITL
+erase, endpoint cards, guarded Hangup scripts and Recorder exclusions can be
+prepared before registration. Verify exact entity ownership, preserve existing
+configuration, and label those endpoints **pending**. This is configuration
+readiness only; it does not pass the call or phone acceptance checks. Native
+Assist still requires a first call from each intended SIP identity.
+
 For Assist, start with each physical phone's **primary line: 201, 203, 205**.
 Dial **630** from that specific line to discover its native VoIP identity, then
 enable **Allow calls** and choose the intended working language/pipeline for
@@ -283,9 +290,15 @@ channel change as a successful hangup.
 Only after every transfer and flash write finishes, delete the temporary TFTP
 Job and restore the host firewall's normal **closed-TFTP** policy using
 [the cleanup procedure](operations.md#close-a-tftp-maintenance-window). Job
-expiry/TTL cleanup does not close UDP69 or UDP20000–20031. Verify both ranges
+expiry/TTL cleanup does not remove host firewall permissions for UDP69 or
+UDP20000–20031. Verify both ranges
 are closed, no TFTP listener/Job remains, and the ordinary SIP/RTP and HA rules
 remain intact. Check that unrelated firewall state was preserved.
+
+A one-shot fallback may close this specific window after the Job deadline.
+It must check for remaining TFTP sockets and preserve another session's
+resources. Cancel the old timer before recreating TFTP or renewing callbacks;
+a scheduled fallback is not evidence that cleanup has actually completed.
 
 Stop temporary CGI callback listeners and remove only their owned temporary
 rules. Preserve each configured authentication URL and its private credentials

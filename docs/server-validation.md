@@ -182,6 +182,14 @@ labels, distinct line and management credentials, and the same wallpaper
 catalogue. HA discovered all twenty endpoint entities for the four new lines
 after a scoped integration reload; discovery alone is not registration.
 
+HA endpoint controls were subsequently installed while the new phones remained
+offline: four guarded Hangup scripts, eight dashboard cards, and twelve
+Recorder exclusions (**49 → 61**). Configuration validation passed before one
+HA restart. HA returned to `RUNNING`, all **218** pre-existing script/automation
+entities were preserved, and dashboard readback matched. The existing 201
+native VoIP settings remain unchanged. This verifies configuration deployment;
+new-phone call control and native Assist still require actual calls.
+
 Per-device DHCP reservations and option 150, exact-source firewall additions,
 and a bounded TFTP Job were applied. Served-file hashes matched the prepared
 profiles, firmware and artwork. Each new phone received one independently
@@ -190,7 +198,10 @@ Both phones then reported the intended TFTP server, but requested only old
 trust files and signed configuration, with **Trust List Update Failed** in
 their status logs. Their old profiles still disable SSH. A targeted handset
 ITL erase is the outstanding step before they can accept the replacement
-profile; no factory reset or signature bypass was attempted.
+profile; no factory reset or signature bypass was attempted. A one-shot fallback
+was armed after the TFTP Job's deadline to close this window's temporary access,
+with active-TFTP and callback-session checks. Its scheduled state is not a
+claim that final cleanup or phone acceptance has already occurred.
 
 At this checkpoint, **201/202 remain registered**. The new phones are **not
 yet converted or accepted**: their four contacts, wallpaper selection, remote
