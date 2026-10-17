@@ -22,7 +22,12 @@ def fixture():
 
 
 def configs():
-    return {name + ".conf": "; unit test fixture\n" for name in ("asterisk", "pjsip", "extensions", "rtp", "modules", "logger")}
+    result = {name + ".conf": "; unit test fixture\n" for name in ("asterisk", "pjsip", "extensions", "rtp", "modules", "logger")}
+    result["pjsip.conf"] = "".join(
+        f"[transport-{protocol}]\ntype=transport\nprotocol={protocol}\n"
+        "bind=192.168.50.58:5060\nlocal_net=192.168.50.0/24\n\n"
+        for protocol in ("udp", "tcp"))
+    return result
 
 
 class K3sSafetyTests(unittest.TestCase):

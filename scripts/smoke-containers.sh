@@ -30,6 +30,7 @@ python3 - "$test_root" <<'PY'
 import json, pathlib, sys
 root=pathlib.Path(sys.argv[1])
 (root/'site.json').write_text(json.dumps({'node_ipv4':'127.0.0.1','lan_cidr':'127.0.0.0/8','ntp_ipv4':'127.0.0.1',
+ 'phone_cidrs':['127.0.0.1/32','192.168.60.25/32'],
  'home_assistant':{'enabled':True,'ami_client_ipv4':'127.0.0.1','allow_originate':True,
  'assist':{'enabled':True,'host_ipv4':'127.0.0.1','sip_port':5061}}}))
 (root/'phones.json').write_text(json.dumps({'phones':[{'model':'CP-7945G','verified':True,'mac':'020000000001','extension':'201','label':'CI synthetic','firmware_load':'SIP45.9-4-2SR3-1S','transport':'tcp'}]}))

@@ -26,6 +26,32 @@ def private_write(path, text):
     path.chmod(0o600)
 
 
+def phone_networks(site):
+    """Phone source ACLs override the PBX LAN; they never implicitly widen it."""
+    values = site.get("phone_cidrs", [site["lan_cidr"]])
+    if not isinstance(values, list) or not 1 <= len(values) <= 50:
+        raise ValueError("phone_cidrs must be a nonempty list of at most 50 IPv4 CIDRs")
+    private = tuple(ipaddress.IPv4Network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+    networks = []
+    for value in values:
+        if not isinstance(value, str) or "/" not in value:
+            raise ValueError("phone_cidrs entries must be explicit IPv4 CIDRs")
+        net = ipaddress.IPv4Network(value, strict=True)
+        # Match the existing isolated smoke-test exception, never a deployed LAN.
+        loopback_test = ipaddress.IPv4Address(site["node_ipv4"]).is_loopback and net.subnet_of(ipaddress.IPv4Network("127.0.0.0/8"))
+        if not any(net.subnet_of(n) for n in private) and not loopback_test:
+            raise ValueError("phone_cidrs must contain private IPv4 networks")
+        if any(net.overlaps(previous) for previous in networks):
+            raise ValueError("phone_cidrs must not contain duplicate or overlapping networks")
+        networks.append(net)
+    return [str(net) for net in networks]
+
+
+def local_networks(site):
+    """NAT classification is distinct from the endpoint source allowlist."""
+    return list(dict.fromkeys([site["lan_cidr"], *phone_networks(site)]))
+
+
 def ha_settings(site):
     """Opt-in HA management; actual client source IP must be explicitly supplied."""
     ha = site.get("home_assistant", {})
@@ -91,6 +117,7 @@ writetimeout=5000
 
 def validate(site, inventory, *, pbx_only=False):
     ha_settings(site)
+    phone_networks(site)
     ip = ipaddress.IPv4Address(site["node_ipv4"])
     net = ipaddress.IPv4Network(site["lan_cidr"], strict=True)
     if ip not in net or ip in (net.network_address, net.broadcast_address):
@@ -214,7 +241,9 @@ def generate(site, inventory, out, *, pbx_only=False):
         private_write(secret_path,json.dumps(passwords,indent=2)+'\n')
     ip=site["node_ipv4"]
     ha=ha_settings(site)
-    pjsip=['[global]\ntype=global\nuser_agent=HomePBX\n',f'[transport-udp]\ntype=transport\nprotocol=udp\nbind={ip}:5060\nlocal_net={site["lan_cidr"]}\n',f'[transport-tcp]\ntype=transport\nprotocol=tcp\nbind={ip}:5060\nlocal_net={site["lan_cidr"]}\n']
+    local_nets = ''.join(f'local_net={net}\n' for net in local_networks(site))
+    phone_permits = '\n'.join(f'permit={net}' for net in phone_networks(site))
+    pjsip=['[global]\ntype=global\nuser_agent=HomePBX\n',f'[transport-udp]\ntype=transport\nprotocol=udp\nbind={ip}:5060\n{local_nets}',f'[transport-tcp]\ntype=transport\nprotocol=tcp\nbind={ip}:5060\n{local_nets}']
     dial=['[general]\nstatic=yes\nwriteprotect=yes\n','[home]\n']
     expected=set()
     for p in phones:
@@ -239,7 +268,7 @@ dtmf_mode=rfc4733
 callerid={p["label"]} <{ext}>
 identify_by=username
 deny=0.0.0.0/0
-permit={site["lan_cidr"]}
+{phone_permits}
 
 [auth-{ext}]
 type=auth

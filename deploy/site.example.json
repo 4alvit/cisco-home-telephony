@@ -4,6 +4,7 @@
   "node_name": "voice-node",
   "node_ipv4": "192.168.50.10",
   "lan_cidr": "192.168.50.0/24",
+  "phone_cidrs": ["192.168.50.0/24"],
   "asterisk_image": "192.168.50.20:5050/cisco-home/asterisk@sha256:REPLACE_WITH_64_HEX_DIGEST",
   "tftp_image": "192.168.50.20:5050/cisco-home/tftp@sha256:REPLACE_WITH_64_HEX_DIGEST",
   "image_pull_secrets": [],

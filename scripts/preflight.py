@@ -9,7 +9,34 @@ import sys
 import xml.etree.ElementTree as ET
 from render_k3s import load_site, read_files, render_core, render_tftp
 from verify_firmware import verify as verify_firmware
-from provision import ha_settings
+from provision import ha_settings, phone_networks, local_networks
+
+
+def check_phone_config(site, configs):
+    """Do not deploy stale phone permissions after changing the source allowlist."""
+    expected = phone_networks(site)
+    sections, current = [], None
+    for line in configs.get("pjsip.conf", "").splitlines():
+        line = line.strip()
+        if not line or line.startswith((";", "#")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            current = {"name": line[1:-1]}
+            sections.append(current)
+        elif current is not None and "=" in line:
+            key, value = (part.strip() for part in line.split("=", 1))
+            current.setdefault(key, []).append(value)
+    transports = set()
+    for section in sections:
+        if section.get("type") == ["transport"]:
+            transports.add(section["name"])
+            if section.get("local_net") != local_networks(site):
+                raise ValueError("PJSIP local networks differ from site.json; rerun provision.py")
+        if section.get("type") == ["endpoint"] and section["name"] != "ha-assist":
+            if section.get("deny") != ["0.0.0.0/0"] or section.get("permit") != expected:
+                raise ValueError("Phone source ACL differs from site.json; rerun provision.py")
+    if transports != {"transport-udp", "transport-tcp"}:
+        raise ValueError("PJSIP transports differ from generated configuration; rerun provision.py")
 
 
 def check_ha_config(site, configs):
@@ -79,6 +106,7 @@ def main():
         site = load_site(args.site, args.with_tftp)
         root = args.site.resolve().parent
         configs = read_files(root / "asterisk", ".conf")
+        check_phone_config(site, configs)
         check_ha_config(site, configs)
         render_core(site, configs)
         if args.with_tftp:
