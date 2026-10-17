@@ -37,8 +37,11 @@ def probe(name):
         pass
     finally:
         call.close(); listener.close(); thread.join(timeout=3)
+    decoder_reaped = call.proc is not None and call.proc.poll() is not None
+    worker_stopped = not thread.is_alive()
     return {"station": name, "decoded_frames": frames, "peak": peak,
-            "passed": frames >= 25 and peak > 0 and call.proc is not None and call.proc.poll() is not None}
+            "decoder_reaped": decoder_reaped, "worker_stopped": worker_stopped,
+            "passed": frames >= 25 and peak > 0 and decoder_reaped and worker_stopped}
 
 
 def main():

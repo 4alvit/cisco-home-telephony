@@ -10,13 +10,14 @@ numbers. All features on this page are disabled unless explicitly enabled.
 
 The revised timer/alarm path rings until manual dismissal, without auto-answer
 or after-answer audio. It requires the matching Asterisk, gateway and HA
-updates. Its deployment and live acceptance are pending; earlier finite-tone
-tests validate only the previous behavior. Radio and manual dialing are unchanged.
+updates. Asterisk and the gateway were deployed on 2026-10-17; HA migration and
+physical acceptance are in progress. Earlier finite-tone tests validate only
+the previous behavior. Radio and manual dialing are unchanged.
 
 ## Station numbers
 
 The versioned [catalog](../containers/asterisk/radio-catalog.json) contains the
-actual stream URLs and the exact host policies. The broadcaster pages below
+stream entry points and the exact host policies. The broadcaster pages below
 are the sources, not third-party stream aggregators. Each station was decoded
 to nonzero 8 kHz PCM by the real worker on **2026-10-17**; availability can change.
 
@@ -40,6 +41,18 @@ to nonzero 8 kHz PCM by the real worker on **2026-10-17**; availability can chan
   [Official station](https://www.radyoviva.com.tr/). Its embedded live player
   supplies an HLS playlist with AAC segments; the worker supports that bounded,
   unencrypted audio format.
+- **708 — Toddler music** (`deti-toddlers`), simple songs for young children.
+  [Official channel](https://detifm.ru/channel/327).
+- **709 — Lullabies** (`deti-lullabies`), lullabies and gentle music.
+  [Official channel](https://detifm.ru/channel/95).
+- **710 — Children's songs** (`deti-songs`), a broader children's song mix.
+  [Official channel](https://detifm.ru/channel/93).
+
+These three dedicated Children's Radio channels are the selected options for
+ages 1–4. The third channel serves a broader age range; the broadcaster can
+change its playlist. They are separate from the main FM schedule, which also
+has programmes for older children. The new routes require the updated worker
+image and private station selection; their live rollout is in progress.
 
 There is no station audio in this repository, archive, proxy endpoint, or
 download library. Use the original broadcasts under each provider's terms.
@@ -54,7 +67,7 @@ network, image or HA fields with an example:
 {
   "radio": {
     "enabled": true,
-    "stations": ["matryoshka", "echo", "bob-rock", "bob-metal", "bob-gothic", "soma-poptron", "radyo-viva"],
+    "stations": ["matryoshka", "echo", "bob-rock", "bob-metal", "bob-gothic", "soma-poptron", "radyo-viva", "deti-toddlers", "deti-lullabies", "deti-songs"],
     "max_seconds": 1800,
     "max_calls": 2
   },
@@ -89,7 +102,7 @@ python3 scripts/check_radio_streams.py --station echo
 ```
 
 The last command contacts one broadcaster and decodes a few seconds without
-placing a call or writing audio. `--all` explicitly probes all seven stations.
+placing a call or writing audio. `--all` explicitly probes all ten stations.
 The command without an option lists the catalog and performs no network
 fetch. Diagnostics contain station IDs, PCM frame counts, signal peaks and
 success state, not redirect tokens, caller details, or raw stream content.
@@ -125,6 +138,13 @@ through a synthetic loopback AudioSocket session. Every probe released its
 concurrency slot, stopped its worker thread and reaped its exact FFmpeg child.
 The installed worker and catalog hashes matched the repository sources.
 
+The three new children's channels passed the same five-second probe from the
+PBX network using temporary copies of the candidate worker and catalog. Each
+produced 251 PCM frames with nonzero signal; all three decoders were reaped,
+workers stopped and temporary files removed. No calls or audio files were
+created. This validates the candidate's network and decoding path, not deployed
+routes or physical speaker output.
+
 This verifies stream reachability and decoding from the deployed network.
 The probes created no Asterisk calls and saved no audio. They do not establish
 AGI dialplan execution, SIP/RTP delivery, speaker output, or human audibility on
@@ -137,6 +157,16 @@ opens an ephemeral **loopback-only** TCP socket, and asks Asterisk to connect
 using a random per-call UUID. Only that matching connection can start the
 downloader and decoder. No new host firewall rule or Kubernetes Service is
 needed for AudioSocket.
+
+Children's Radio supplies temporary stream URLs through the API embedded in
+its official player. For each call, the worker fetches bounded JSON from the
+fixed `101.ru` channel endpoint, requires a successful response and selects the
+single HTTPS/443 AAC64 URL on `srv01.gpmradio.ru` for that exact channel. Both
+requests use the same User-Agent. The temporary query token is neither saved
+in the catalog nor included in diagnostics. API and audio redirects have
+separate exact host/path policies. If the provider changes this contract, the
+call fails with the existing finite error tone rather than accepting another
+host or arbitrary URL.
 
 Python resolves the approved hostname and rejects non-public or mixed
 public/private address results. It connects to the checked address, verifies

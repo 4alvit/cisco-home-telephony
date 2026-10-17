@@ -10,7 +10,7 @@ import sys
 import xml.etree.ElementTree as ET
 from render_k3s import load_site, read_files, read_wallpaper, render_core, render_tftp
 from verify_firmware import verify as verify_firmware
-from provision import ha_settings, phone_networks, local_networks, radio_settings, service_dialplan, gateway_settings, external_sip, alert_dialplan
+from provision import ha_settings, phone_networks, local_networks, radio_settings, service_dialplan, gateway_settings, external_sip, alert_dialplan, softphones
 
 
 def check_service_config(site, configs):
@@ -26,7 +26,8 @@ def check_service_config(site, configs):
         raise ValueError("Disabled radio has stale routes; rerun provision.py")
     if not site.get("alarms", {}).get("enabled", False) and "exten => 640," in dialplan:
         raise ValueError("Disabled alarms have stale routes; rerun provision.py")
-    extensions = sorted(set(re.findall(r'^\[(2[0-9]{2})\]$', configs.get('pjsip.conf', ''), re.M)))
+    generic = {client['extension'] for client in softphones.validate(site)}
+    extensions = sorted(set(re.findall(r'^\[(2[0-9]{2})\]$', configs.get('pjsip.conf', ''), re.M)) - generic)
     alerts = alert_dialplan(site, extensions)
     if alerts and dialplan.count(alerts) != 1:
         raise ValueError('Alert helper differs from inventoried endpoints; rerun provision.py')
@@ -42,6 +43,7 @@ def check_phone_config(site, configs):
     expected = phone_networks(site)
     external = external_sip.object_names(site)
     external_sip.check(site, configs)
+    generic = softphones.check(site, configs)
     sections, current = [], None
     for line in configs.get("pjsip.conf", "").splitlines():
         line = line.strip()
@@ -62,7 +64,7 @@ def check_phone_config(site, configs):
             if section.get("local_net") != local_networks(site):
                 raise ValueError("PJSIP local networks differ from site.json; rerun provision.py")
         if (section.get("type") == ["endpoint"] and section["name"] != "ha-assist"
-                and section["name"] not in external["endpoints"]):
+                and section["name"] not in external["endpoints"] and section["name"] not in generic):
             if section.get("deny") != ["0.0.0.0/0"] or section.get("permit") != expected:
                 raise ValueError("Phone source ACL differs from site.json; rerun provision.py")
     if transports != {"transport-udp", "transport-tcp"}:

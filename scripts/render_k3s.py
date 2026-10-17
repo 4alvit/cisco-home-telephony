@@ -3,6 +3,7 @@
 import argparse
 import base64
 import hashlib
+import importlib.util
 import ipaddress
 import json
 import os
@@ -15,12 +16,18 @@ import tempfile
 import xml.etree.ElementTree as ET
 import zlib
 
+_softphone_spec = importlib.util.spec_from_file_location(
+    "cisco_softphones", Path(__file__).resolve().with_name("softphones.py"))
+_softphones = importlib.util.module_from_spec(_softphone_spec)
+_softphone_spec.loader.exec_module(_softphones)
+
 RFC1918 = tuple(ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 WALLPAPER_FILES = {"List.xml", "home.png", "home-thumb.png"}
 WALLPAPER_MAX_BYTES = 400_000
 WALLPAPER_PATH = "Desktops/320x212x16"
 
 def validate_site(site, with_tftp=False):
+    _softphones.validate(site)
     ha = site.get("home_assistant", {})
     if not isinstance(ha, dict) or type(ha.get("enabled", False)) is not bool:
         raise ValueError("home_assistant must be an object with boolean enabled")

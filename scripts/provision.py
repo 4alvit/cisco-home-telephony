@@ -22,6 +22,10 @@ _external_spec = importlib.util.spec_from_file_location(
     "cisco_external_sip", Path(__file__).resolve().with_name("external_sip.py"))
 external_sip = importlib.util.module_from_spec(_external_spec)
 _external_spec.loader.exec_module(external_sip)
+_softphone_spec = importlib.util.spec_from_file_location(
+    "cisco_softphones", Path(__file__).resolve().with_name("softphones.py"))
+softphones = importlib.util.module_from_spec(_softphone_spec)
+_softphone_spec.loader.exec_module(softphones)
 
 
 def alarm_settings(site):
@@ -135,7 +139,7 @@ def phone_networks(site):
 
 def local_networks(site):
     """NAT classification is distinct from the endpoint source allowlist."""
-    return list(dict.fromkeys([site["lan_cidr"], *phone_networks(site)]))
+    return list(dict.fromkeys([site["lan_cidr"], *phone_networks(site), *softphones.networks(site)]))
 
 
 def ha_settings(site):
@@ -306,6 +310,7 @@ def validate(site, inventory, *, pbx_only=False):
     alarm_settings(site)
     gateway_settings(site)
     external = external_sip.validate(site)
+    softphones.validate(site)
     phone_networks(site)
     ip = ipaddress.IPv4Address(site["node_ipv4"])
     net = ipaddress.IPv4Network(site["lan_cidr"], strict=True)
@@ -383,6 +388,7 @@ def validate(site, inventory, *, pbx_only=False):
     if external and any(account["inbound_target"] and account["inbound_target"] not in seen_ext
                         for account in external["accounts"]):
         raise ValueError("External SIP inbound target must be a verified local phone line")
+    softphones.validate(site, seen_ext)
     return normalized, ntp
 
 
@@ -464,6 +470,7 @@ def generate(site, inventory, out, *, pbx_only=False):
     phones,ntp = validate(site,inventory,pbx_only=pbx_only)
     # Resolve private provider credentials before any output is modified.
     external = external_sip.generate(site)
+    clients = softphones.validate(site)
     out=Path(out)
     if pbx_only and any((out/name).exists() or (out/name).is_symlink()
                         for name in ("tftp", "secrets.json")):
@@ -486,8 +493,11 @@ def generate(site, inventory, out, *, pbx_only=False):
             passwords.setdefault(ext,secrets.token_hex(15))
             if not isinstance(passwords[ext], str) or not re.fullmatch(r"[A-Za-z0-9]{24,30}", passwords[ext]):
                 raise ValueError("secret must be 24..30 alphanumeric characters")
+    client_passwords = softphones.prepare_secrets(clients, out, passwords)
     if not pbx_only:
         private_write(secret_path,json.dumps(passwords,indent=2)+'\n')
+    if client_passwords is not None:
+        private_write(out/"softphone-secrets.json", json.dumps(client_passwords, indent=2)+'\n')
     management = phone_management_secrets(phones, out)
     ip=site["node_ipv4"]
     ha=ha_settings(site)
@@ -546,6 +556,10 @@ qualify_frequency=60
         filename=f'SEP{p["mac"]}.cnf.xml'
         expected.add(filename)
         private_write(out/"tftp"/filename,phone_xml(p,ip,ntp,passwords,management.get("SEP" + p["mac"])))
+    for client in clients:
+        client_pjsip, client_dialplan = softphones.render_client(site, client, client_passwords[client["extension"]])
+        pjsip.append(client_pjsip)
+        dial.append(client_dialplan)
     # Only remove old generated phone profiles, leaving other operator files intact.
     for old in (out/"tftp").glob('SEP*.cnf.xml'):
         if old.name not in expected:

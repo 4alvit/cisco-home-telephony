@@ -29,6 +29,9 @@ IO_TIMEOUT = 8
 START_TIMEOUT = 15
 MAX_REDIRECTS = 3
 FRAME_BYTES = 320  # 20 ms, 8 kHz, signed 16-bit little-endian mono.
+USER_AGENT = "HomeTelephony/1.0"
+GPM_CHANNELS = {327, 95, 93}
+GPM_API_LIMIT = 65536
 
 
 def catalog():
@@ -56,7 +59,7 @@ def settings(site):
     return {"enabled": True, "stations": names, "max_seconds": seconds, "max_calls": calls}
 
 
-def checked_url(url, station):
+def checked_url(url, station, purpose="stream"):
     if not isinstance(url, str) or len(url) > 4096 or not url.isascii() or re.search(r"[\x00-\x20\x7f]", url):
         raise ValueError("invalid stream URL")
     p = urlsplit(url)
@@ -66,6 +69,20 @@ def checked_url(url, station):
     if (p.scheme not in schemes or not known_host or p.username is not None
             or p.password is not None or p.fragment or p.port not in (None, 80 if p.scheme == "http" else 443)):
         raise ValueError("stream URL is outside station policy")
+    if station.get("resolver") == "gpm-channel":
+        channel = station.get("channel_id")
+        if type(channel) is not int or channel not in GPM_CHANNELS or p.scheme != "https":
+            raise ValueError("invalid broadcaster channel policy")
+        if purpose == "api":
+            valid = (p.hostname == "101.ru" and p.path == f"/api/channel/getListServersChannel/{channel}/channel/"
+                     and p.query == "dataFormat=json")
+        else:
+            valid = (purpose == "stream" and p.hostname == "srv01.gpmradio.ru"
+                     and p.path == f"/stream/pro/aac/64/{channel}"
+                     and re.fullmatch(r"token=[A-Za-z0-9._~-]{16,3072}", p.query))
+        if not valid:
+            # Never include the rejected URL: its query may contain a short-lived token.
+            raise ValueError("broadcaster URL is outside channel policy")
     return p
 
 
@@ -77,12 +94,14 @@ def public_addresses(host, port):
     return addresses
 
 
-def open_stream(station, url=None, content_types=None):
+def open_stream(station, url=None, content_types=None, purpose="stream"):
     """Validate every redirect and connect to the checked IP, avoiding DNS rebinding."""
+    if url is None and station.get("resolver") == "gpm-channel":
+        url = gpm_stream_url(station)
     url = url or station["url"]
     content_types = content_types or {"audio/mpeg", "audio/mp3", "audio/aac", "audio/aacp", "application/octet-stream"}
     for redirect in range(MAX_REDIRECTS + 1):
-        p = checked_url(url, station)
+        p = checked_url(url, station, purpose)
         port = 443 if p.scheme == "https" else 80
         addresses = public_addresses(p.hostname, port)
         conn = http.client.HTTPConnection(p.hostname, port, timeout=IO_TIMEOUT)
@@ -105,7 +124,7 @@ def open_stream(station, url=None, content_types=None):
             target = p.path or "/"
             if p.query:
                 target += "?" + p.query
-            conn.request("GET", target, headers={"User-Agent": "HomeTelephony/1.0", "Icy-MetaData": "0", "Accept-Encoding": "identity"})
+            conn.request("GET", target, headers={"User-Agent": USER_AGENT, "Icy-MetaData": "0", "Accept-Encoding": "identity"})
             response = conn.getresponse()
             if response.status in (301, 302, 303, 307, 308):
                 location = response.getheader("Location")
@@ -126,6 +145,46 @@ def open_stream(station, url=None, content_types=None):
             conn.close()
             raise
     raise ValueError("stream redirect limit")
+
+
+def gpm_stream_url(station):
+    """Resolve a fresh official AAC URL per call; never persist its bearer token.
+
+    detifm.ru embeds this 101.ru endpoint in its channel player. The API and
+    audio fetch use the same User-Agent and egress host; tokens are short-lived.
+    Only the HTTPS/443 AAC64 entry for the exact configured channel is accepted.
+    API redirects cannot enter the audio policy, nor audio redirects the API.
+    """
+    api = station["url"]
+    checked_url(api, station, "api")
+    conn, response = open_stream(station, api, {"application/json"}, purpose="api")
+    try:
+        body = response.read(GPM_API_LIMIT + 1)
+    finally:
+        conn.close()
+    if len(body) > GPM_API_LIMIT:
+        raise ValueError("broadcaster response size rejected")
+    try:
+        document = json.loads(body)
+    except (ValueError, UnicodeError, RecursionError):
+        raise ValueError("invalid broadcaster response") from None
+    if (not isinstance(document, dict) or type(document.get("status")) is not int
+            or document["status"] != 1 or not isinstance(document.get("result"), list)
+            or not 1 <= len(document["result"]) <= 16):
+        raise ValueError("broadcaster response schema rejected")
+    candidates = []
+    for item in document["result"]:
+        if not isinstance(item, dict) or item.get("format") != "AAC":
+            continue
+        candidate = item.get("urlStream")
+        try:
+            checked_url(candidate, station, "stream")
+        except ValueError:
+            continue
+        candidates.append(candidate)
+    if len(candidates) != 1:
+        raise ValueError("broadcaster has no unique approved AAC stream")
+    return candidates[0]
 
 
 def hls_playlist(text, base):

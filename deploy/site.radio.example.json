@@ -11,7 +11,7 @@
   "ntp_ipv4": "REPLACE_WITH_REACHABLE_NTP_IPV4",
   "radio": {
     "enabled": true,
-    "stations": ["matryoshka", "echo", "bob-rock", "bob-metal", "bob-gothic", "soma-poptron", "radyo-viva"],
+    "stations": ["matryoshka", "echo", "bob-rock", "bob-metal", "bob-gothic", "soma-poptron", "radyo-viva", "deti-toddlers", "deti-lullabies", "deti-songs"],
     "max_seconds": 1800,
     "max_calls": 2
   },

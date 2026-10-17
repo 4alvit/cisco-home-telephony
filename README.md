@@ -31,7 +31,12 @@ conversion to MPP is not required.
 - [Home Assistant](docs/home-assistant.md): phone states, DTMF, call control and
   Assist on extension **630**.
 - [Internet radio, timers and weekday alarms](docs/radio-and-alarms.md), including
-  seven station extensions and alerts that ring until manually stopped.
+  ten station extensions, including toddler music and lullabies, and alerts
+  that ring until manually stopped.
+- [Mac SIP client](docs/macos-softphone.md): Telephone with independent extension
+  **209**, its own credentials and a single-host access rule.
+- [Telegram, WhatsApp and Viber](docs/messaging-bridges.md): researched voice-bridge
+  designs, account requirements and limitations.
 - [Persistent HA phone control](docs/phone-gateway.md): opt-in auto-answer,
   PBX DND, numeric dialing, text and photo delivery.
 - [External SIP research](docs/extended-services-research.md), with disabled-by-default
@@ -109,7 +114,7 @@ staging on the node and acceptance checks.
 
 Example extensions: **201–210**. **600** is echo, **601** is a test tone, and
 **620** rings the group. With HA integration enabled, **630** reaches Home
-Assistant Assist. Optional **640** plays bounded alarm audio, and **701-707**
+Assistant Assist. Optional **640** plays bounded alarm audio, and **701-710**
 select internet radio when enabled. External SIP profiles are disabled by
 default; there are no unrestricted PSTN routes, voicemail or emergency calls. Use a working external phone service for emergency calls.
 
@@ -164,13 +169,13 @@ G.711 while native Home Assistant VoIP uses Opus. AMI is disabled by default;
 
 ## Print the quick reference
 
-Print the [two-page English reference](output/pdf/cisco-phone-reference.pdf)
-on US Letter paper at actual size. Page one lists phone lines and service
-numbers; page two explains Home Assistant calls, messages, timers and alarms.
+Print the [English reference](output/pdf/cisco-phone-reference.pdf)
+on US Letter paper at actual size. It lists phone lines, service numbers and
+radio stations, and explains Home Assistant calls, messages, timers and alarms.
 The [radio catalog](containers/asterisk/radio-catalog.json) supplies the station names.
 
 To regenerate it after changing the catalog, install `reportlab` in a local
 virtual environment and run `python3 scripts/build-phone-reference.py`.
-Review both rendered pages before printing. The guide describes configured
+Review all rendered pages before printing. The guide describes configured
 features; the [deployment record](docs/server-validation.md) records what has
 actually passed live acceptance.
