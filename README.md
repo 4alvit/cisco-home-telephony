@@ -47,6 +47,8 @@ SR4-3 copy, byte-level checks, extraction steps and provenance limitations.
 3. [Generate private configuration](docs/provisioning.md).
 4. [Build images and deploy Asterisk/TFTP to k3s](docs/k3s-deployment.md).
 5. [Test calls, close TFTP and save a backup](docs/operations.md).
+6. [Add further phones in a controlled batch](docs/adding-phones.md) —
+   [three-phone architecture](docs/diagrams/three-phones.svg).
 
 Before physical inventory is complete, [bootstrap the PBX and AMI](docs/pbx-bootstrap.md)
 with `provision.py --pbx-only`. This does not create placeholder phones, Cisco XML

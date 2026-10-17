@@ -167,13 +167,44 @@ can explicitly renew their window without provisioning the phone again. The
 temporary callback service was stopped, its dedicated firewall rule removed,
 and its listening port confirmed closed after the final call-control test.
 
+## Two additional physical phones: commissioning in progress
+
+Two more CP-7945G units were identified independently through DHCP, HTTP,
+LLDP and switch forwarding records. Their hardware revisions are **12.0** and
+**13.0**. Both report the SCCP SR4-3 application file; an older HTTP Version
+field disagrees with that application/LLDP observation and is not used as a
+reason to downgrade. The existing verified SIP bundle is staged for both.
+
+The PBX now contains six endpoints: **201/202** on the existing phone,
+**203/204** on the second, and **205/206** on the third. Existing credentials
+and the first phone's profile were preserved. The new profiles have numeric
+labels, distinct line and management credentials, and the same wallpaper
+catalogue. HA discovered all twenty endpoint entities for the four new lines
+after a scoped integration reload; discovery alone is not registration.
+
+Per-device DHCP reservations and option 150, exact-source firewall additions,
+and a bounded TFTP Job were applied. Served-file hashes matched the prepared
+profiles, firmware and artwork. Each new phone received one independently
+verified PoE cycle; power was restored and all switch-port settings preserved.
+Both phones then reported the intended TFTP server, but requested only old
+trust files and signed configuration, with **Trust List Update Failed** in
+their status logs. Their old profiles still disable SSH. A targeted handset
+ITL erase is the outstanding step before they can accept the replacement
+profile; no factory reset or signature bypass was attempted.
+
+At this checkpoint, **201/202 remain registered**. The new phones are **not
+yet converted or accepted**: their four contacts, wallpaper selection, remote
+management, HA call controls and spoken Assist still need live verification.
+See [the repeatable expansion runbook](adding-phones.md) for the complete
+procedure and cleanup requirements.
+
 ## Remaining acceptance
 
 1. Confirm audible echo on **202**, then verify speakerphone audio and DTMF
    separately from the successful handset echo test on **201 → 600**.
 2. Verify dashboard confirmation behavior by clicking its controls; the
    underlying HA scripts have passed live Originate/Hangup tests.
-3. Inventory and commission a second phone, then test calls in both directions,
+3. Finish commissioning the two newly inventoried phones, then test calls in both directions,
    two-way audio, DTMF, hold/transfer and group ringing.
 4. Repeat relevant tests after controlled phone/PBX restarts and AMI
    reconnection, then commission the remaining phones in small groups.

@@ -18,8 +18,8 @@ A phone uses either the legacy `extension` field or a `lines` list, never both:
 
 ```json
 "lines": [
-  {"extension": "201", "label": "Home 201"},
-  {"extension": "202", "label": "Home 202"}
+  {"extension": "201", "label": "201"},
+  {"extension": "202", "label": "202"}
 ],
 "background_image_access": true
 ```
