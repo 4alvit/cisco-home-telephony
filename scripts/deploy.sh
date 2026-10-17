@@ -47,6 +47,20 @@ fi
 if [[ "$with_tftp" == 1 ]]; then
   # A completed/failed Job must be explicitly deleted before the next maintenance window.
   "${kube[@]}" apply --server-side --field-manager=cisco-home-telephony -f "$rendered/tftp.yaml"
+  # The Job controller creates its Pod asynchronously. kubectl wait does not
+  # wait for an empty selector to acquire a matching resource.
+  pod_deadline=$((SECONDS + 30))
+  while :; do
+    request_seconds=$((pod_deadline - SECONDS))
+    if (( request_seconds <= 0 )); then
+      echo 'Timed out waiting for the TFTP Job controller to create a Pod.' >&2
+      exit 1
+    fi
+    if (( request_seconds > 5 )); then request_seconds=5; fi
+    tftp_pods=$("${kube[@]}" --request-timeout="${request_seconds}s" -n "$namespace" get pod -l app=cisco-tftp -o name)
+    if [[ -n "$tftp_pods" ]]; then break; fi
+    sleep 1
+  done
   "${kube[@]}" -n "$namespace" wait --for=condition=Ready pod -l app=cisco-tftp --timeout=120s
   echo 'TFTP active for at most one hour. Delete job/cisco-tftp after provisioning; do not interrupt an active firmware flash.'
 fi

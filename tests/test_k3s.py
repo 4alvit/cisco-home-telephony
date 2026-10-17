@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -190,6 +191,81 @@ esac
             rendered = local / "rendered/core.yaml"
             self.assertEqual(rendered.stat().st_mode & 0o777, 0o600)
             self.assertFalse((local / "rendered/tftp.yaml").exists())
+
+    def run_delayed_tftp_deploy(self, failure=""):
+        """Execute the real deployment control flow with a delayed Job controller."""
+        with tempfile.TemporaryDirectory() as directory:
+            local = Path(directory)
+            scripts = local / "scripts"
+            scripts.mkdir()
+            (scripts / "deploy.sh").write_text((ROOT / "scripts/deploy.sh").read_text())
+            # Config generation is covered separately. Isolate this test from all
+            # cluster/network access while retaining the real shell control flow.
+            for name in ("preflight.py", "render_k3s.py"):
+                (scripts / name).write_text("pass\n")
+            (local / "site.json").write_text(json.dumps(fixture()))
+            bin_dir = local / "bin"
+            bin_dir.mkdir()
+            (bin_dir / "sleep").write_text("#!/bin/sh\nexit 0\n")
+            (bin_dir / "sleep").chmod(0o700)
+            kube = bin_dir / "kubectl"
+            kube.write_text(f"#!{sys.executable}\n" + '''import json, os, pathlib, sys
+args = sys.argv[1:]
+root = pathlib.Path(os.environ["TEST_ROOT"])
+with (root / "calls.jsonl").open("a") as log:
+    log.write(json.dumps(args) + "\\n")
+counter = root / "pod-queries"
+count = int(counter.read_text()) if counter.exists() else 0
+if "get" in args and "pod" in args:
+    if os.environ.get("TEST_FAILURE") == "discovery":
+        print("synthetic API error", file=sys.stderr)
+        sys.exit(17)
+    count += 1
+    counter.write_text(str(count))
+    if count >= 3:
+        print("pod/cisco-tftp-test")
+elif "wait" in args:
+    if count < 3:
+        print("error: no matching resources found", file=sys.stderr)
+        sys.exit(44)
+    if os.environ.get("TEST_FAILURE") == "readiness":
+        print("synthetic readiness timeout", file=sys.stderr)
+        sys.exit(23)
+''')
+            kube.chmod(0o700)
+            env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ["PATH"],
+                       TEST_ROOT=str(local), TEST_FAILURE=failure)
+            result = subprocess.run(["bash", str(scripts / "deploy.sh"), "--site", str(local / "site.json"),
+                                     "--apply", "--firewall-reviewed", "--with-tftp"],
+                                    env=env, capture_output=True, text=True, timeout=10)
+            calls = [json.loads(line) for line in (local / "calls.jsonl").read_text().splitlines()]
+            return result, calls
+
+    def test_tftp_waits_for_pod_creation_before_existing_readiness_wait(self):
+        result, calls = self.run_delayed_tftp_deploy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        queries = [call for call in calls if "get" in call and "pod" in call]
+        waits = [call for call in calls if "wait" in call]
+        self.assertEqual(len(queries), 3)
+        self.assertEqual(len(waits), 1)
+        self.assertIn("--timeout=120s", waits[0])
+        self.assertIn("--for=condition=Ready", waits[0])
+        for call in queries + waits:
+            self.assertEqual(call[call.index("--context") + 1], "test-context")
+            self.assertEqual(call[call.index("-n") + 1], "telephony")
+            self.assertEqual(call[call.index("-l") + 1], "app=cisco-tftp")
+        for call in queries:
+            self.assertTrue(any(call_arg.startswith("--request-timeout=") and
+                                1 <= int(call_arg.split("=")[1][:-1]) <= 5 for call_arg in call))
+
+    def test_tftp_discovery_and_readiness_errors_remain_failures(self):
+        for failure, expected_code in (("discovery", 17), ("readiness", 23)):
+            with self.subTest(failure=failure):
+                result, calls = self.run_delayed_tftp_deploy(failure)
+                self.assertEqual(result.returncode, expected_code, result.stderr)
+                self.assertNotIn("TFTP active", result.stdout)
+                if failure == "discovery":
+                    self.assertFalse(any("wait" in call for call in calls))
 
 if __name__ == "__main__":
     unittest.main()
