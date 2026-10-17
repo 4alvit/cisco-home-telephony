@@ -10,7 +10,9 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import socket
+import struct
 import subprocess
 import tempfile
 import threading
@@ -38,10 +40,38 @@ class Phone(helper.Phone):
         self.forward = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.forward.bind((address, 5091))
         self.calls, self.audio_packets, self.forward_packets = {}, 0, 0
+        self.media_packets_sent = 0
         self.lock = threading.RLock()
         self.stopped, self.error = threading.Event(), None
         self.thread = threading.Thread(target=self.listen, daemon=True)
         self.thread.start()
+        self.media_thread = threading.Thread(target=self.send_audio, daemon=True)
+        self.media_thread.start()
+
+    def send_audio(self):
+        # Local optimization is triggered by voice/video frames, not merely
+        # the SIP answer. Send ordinary PCMU silence, like an answered phone.
+        sequence, timestamp = 0, 0
+        try:
+            while not self.stopped.wait(.02):
+                with self.lock:
+                    targets = [call['rtp_target'] for call in self.calls.values()
+                               if call.get('rtp_target') and call['answer']
+                               and not any(call[key] for key in ('cancel', 'bye', 'reject'))]
+                packet = struct.pack('!BBHII', 0x80, 0, sequence, timestamp,
+                                     int(self.address.rsplit('.', 1)[1])) + b'\xff' * 160
+                for target in targets:
+                    self.audio.sendto(packet, target)
+                    self.media_packets_sent += 1
+                sequence, timestamp = (sequence + 1) % 65536, (timestamp + 160) % (2 ** 32)
+        except BaseException as exc:
+            self.error = type(exc).__name__ + ': ' + str(exc)
+
+    def close(self):
+        self.stopped.set()
+        self.media_thread.join(2)
+        need(not self.media_thread.is_alive(), 'fixture RTP worker not stopped')
+        super().close()
 
     def reply(self, message, address, status, body='', contact=None):
         if status == '180 Ringing' and self.redirect:
@@ -56,6 +86,12 @@ class Phone(helper.Phone):
                       if not any(call[key] for key in ('cancel', 'bye', 'answer', 'reject'))]
             need(len(active) == 1 and not self.redirect, 'Speaker must target one isolated ringing phone')
             call = active[0]
+            offered = call['request'].partition('\r\n\r\n')[2]
+            address = re.search(r'^c=IN IP4 ([^\r\n]+)', offered, re.M)
+            port = re.search(r'^m=audio ([0-9]+) RTP/AVP', offered, re.M)
+            need(address and address[1] == '127.0.0.1' and port,
+                 'fixture requires offered loopback RTP')
+            call['rtp_target'] = (address[1], int(port[1]))
             call['answer'] = helper.time.monotonic()
             line = call['request'].split(' ', 2)[1].split(':', 1)[1].split('@')[0]
             body = (f'v=0\r\no=fixture 1 1 IN IP4 {self.address}\r\ns=intercom-fixture\r\n'
@@ -123,6 +159,7 @@ def test_inside():
              and channels[0].get('BridgeId') and channels[0]['BridgeId'] == channels[1].get('BridgeId'),
              'physical legs do not share one live bridge')
         need(presses == ['201', '203'], 'Speaker was repeated or selected the wrong phone')
+        need(all(peer.media_packets_sent > 0 for peer in peers.values()), 'fixture did not send media')
         need(before == [server.preference(phone_id) for phone_id in peers], 'persistent preferences changed')
         with gateway.AMI(server.config['ami']) as cleanup:
             server.stop_intercom(cleanup, root)
@@ -191,6 +228,10 @@ def main():
         folder = root / 'asterisk'
         pjsip = folder / 'pjsip.conf'
         content = pjsip.read_text()
+        # The server starts before these synthetic peers. Retry qualification
+        # promptly instead of waiting for the production 60-second interval.
+        need(content.count('qualify_frequency=60\n') == 4, 'unexpected fixture qualification settings')
+        content = content.replace('qualify_frequency=60\n', 'qualify_frequency=1\n')
         for line, address in (('201', '127.0.0.2'), ('202', '127.0.0.2'), ('203', '127.0.0.3'), ('204', '127.0.0.3')):
             needle = f'[{line}]\ntype=aor\n'
             need(content.count(needle) == 1, 'missing synthetic AOR')
