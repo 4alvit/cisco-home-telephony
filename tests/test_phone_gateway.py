@@ -108,6 +108,16 @@ class GatewayTests(unittest.TestCase):
             self.server.mutate('201', 'ring', {'idempotency_key': 'alarm-123456'})
         self.assertNotIn('Originate', [call[0] for call in FakeAMI.calls])
 
+    def test_partial_dnd_update_persists_desired_state_for_reconciliation(self):
+        with patch.object(FakeAMI, 'action', side_effect=[{'Response': 'Success'}, OSError('lost AMI')]):
+            with self.assertRaises(OSError): self.request('dnd', enabled=True)
+        self.assertTrue(self.server.preference('201')['dnd'])
+        self.assertIn('201', self.server.dnd_pending)
+        self.server.sync_dnd(FakeAMI({}))
+        self.assertEqual([call[1]['Val'] for call in FakeAMI.calls], ['1', '1'])
+        with self.assertRaisesRegex(gateway.Refused, 'previous_action_outcome_unknown'):
+            self.request('dnd', enabled=True)
+
     def test_resources_are_phone_scoped_and_expire(self):
         phone = config()['phones'][0]
         uri = self.server.resource(phone, b'<safe/>', 'text/xml')

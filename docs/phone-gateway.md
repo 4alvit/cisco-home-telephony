@@ -120,7 +120,9 @@ It must not press a line key during an outgoing call or another active line.
 PBX DND blocks local direct/group routing and gateway alarm/dial requests. It does
 not claim to synchronize the phone's native DND softkey/icon, or protect routes
 which bypass this gateway and the guarded dialplan. Preferences are restored to
-Asterisk after a PBX restart. A short recovery interval can precede restoration.
+Asterisk after a PBX restart. Partial two-line updates retain the desired state
+and are retried by reconciliation; inventory exposes `dnd_pending` until the
+update completes. A short recovery interval can precede restoration.
 
 Text/photo delivery is a Cisco XML notification, **not cellular SMS/MMS**.
 The gateway serves each resource only to the intended phone for120seconds and

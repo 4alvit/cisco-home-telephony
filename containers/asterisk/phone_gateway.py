@@ -188,6 +188,7 @@ class Gateway:
         self.stopped = threading.Event()
         self.auto_attempts = set()
         self.last_pbx_start = None
+        self.dnd_pending = set(self.phones)
         directory = Path(state_directory)
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.db = sqlite3.connect(directory / 'gateway.sqlite3', check_same_thread=False)
@@ -213,6 +214,7 @@ class Gateway:
             endpoints, channels = ami.snapshot()
             return {'ami_fresh': True, 'observed_at': time.time(), 'phones': [
                 {'id': phone['id'], 'lines': phone['lines'], **self.preference(phone['id']),
+                 'dnd_pending': phone['id'] in self.dnd_pending,
                  'online': all(endpoints.get(line) not in (None, 'Unavailable', 'Invalid') for line in phone['lines']),
                  'channels': [{'name': item['Channel'], 'uniqueid': item.get('Uniqueid'),
                                'state': item.get('ChannelStateDesc'), 'line': item['Channel'].split('/')[1].split('-')[0]}
@@ -248,6 +250,7 @@ class Gateway:
                 image = ImageOps.exif_transpose(image).convert('RGB')
                 image = ImageOps.contain(image, (298, 156))
                 output = io.BytesIO()
+                image.info.clear()
                 image.save(output, format='PNG')
             except (ValueError, OSError, KeyError):
                 raise Refused('invalid_image', 400) from None
@@ -301,13 +304,16 @@ class Gateway:
         require(line in phone['lines'], 'line_does_not_belong_to_phone', 400)
         if action in ('dnd', 'autoanswer'):
             require(type(body.get('enabled')) is bool, 'enabled_boolean_required', 400)
+            # Persist desired state before AMI writes. A partial two-line update
+            # remains pending and is reconciled without requiring a PBX restart.
+            self.db.execute('UPDATE preferences SET ' + action + '=? WHERE phone=?', (int(body['enabled']), phone['id']))
+            self.db.commit()
             if action == 'dnd':
+                self.dnd_pending.add(phone['id'])
                 with AMI(self.config['ami']) as ami:
                     for endpoint in phone['lines']:
                         ami.action('DBPut', Family='cisco-dnd', Key=endpoint, Val='1' if body['enabled'] else '0')
-            # Column is selected from the fixed action allowlist, never from arbitrary input.
-            self.db.execute('UPDATE preferences SET ' + action + '=? WHERE phone=?', (int(body['enabled']), phone['id']))
-            self.db.commit()
+                self.dnd_pending.discard(phone['id'])
             return {action: body['enabled']}
         with AMI(self.config['ami']) as ami:
             endpoints, channels = ami.snapshot()
@@ -360,8 +366,9 @@ class Gateway:
                     status = ami.action('CoreStatus')[0]
                     started = (status.get('CoreStartupDate'), status.get('CoreStartupTime'))
                     require(all(started), 'pbx_start_identity_missing', 503)
-                    if started != self.last_pbx_start:
+                    if started != self.last_pbx_start or self.dnd_pending:
                         self.sync_dnd(ami)
+                        self.dnd_pending.clear()
                         self.last_pbx_start = started
                     endpoints, channels = ami.snapshot()
                     active = {item.get('Uniqueid') for item in channels}
