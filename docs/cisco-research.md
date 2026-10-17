@@ -29,7 +29,7 @@ Check each label before a batch rollout.
 
 At the initial research date, individual App Load/VID values, an authorized
 firmware archive and home hardware parameters had not been verified. Subsequent
-server deployment and the first phone's discovery are recorded separately in
+server deployment and the first phone's SIP conversion are recorded separately in
 [live validation](server-validation.md). Real phone calls remain untested;
 generated configuration alone is not proof of physical deployment.
 

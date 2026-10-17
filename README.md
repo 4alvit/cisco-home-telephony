@@ -25,8 +25,9 @@ conversion to MPP is not required.
 **The server is deployed in the home k3s cluster:** Asterisk 22.11.0, Home
 Assistant AMI and VoIP integrations, and a telephony dashboard are installed.
 See [live deployment validation](docs/server-validation.md).
-The first physical 7945G has been identified on the network; SIP conversion,
-registration and audio acceptance are still pending. Cisco firmware is not
+The first physical 7945G now runs **SIP45.9-4-2SR4-3S**, registers to Asterisk
+over TCP as **201**, and appears registered in Home Assistant. Real audio,
+Assist and two-phone acceptance tests are still pending. Cisco firmware is not
 included: obtain an authorized copy and verify the upgrade path.
 The [firmware archive guide](docs/firmware-archive.md) records a working preserved
 SR4-3 copy, byte-level checks, extraction steps and provenance limitations.
