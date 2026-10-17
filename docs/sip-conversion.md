@@ -143,6 +143,41 @@ codec; TLS/SRTP are not configured. Use network isolation and ACLs initially.
    Several automatic restarts may occur.
 6. Verify App Load, extension and time, then registration and calling.
 
+### Old CUCM trust blocks the new configuration
+
+If the phone repeatedly requests only `CTLSEP…`, `ITLSEP…`, `ITLFile.tlv`,
+`SEP<MAC>.cnf.xml.sgn` or `XMLDefault.cnf.xml.sgn`, without requesting plain
+`SEP<MAC>.cnf.xml` or firmware, inspect its old CUCM trust list. Those requests
+alone do not prove a trust fault. Check the actual TFTP Server 1 address and a
+short private capture first. An RRQ followed by a TFTP error response confirms
+that exchange reached both ends; it does not establish that every file or
+large transfer can pass. Missing requests or unanswered RRQs instead require
+checking DHCP/VLAN, routing, the Job and both TFTP UDP ranges.
+
+With the correct TFTP target and complete firmware/profile set ready, inspect
+the phone's **Settings → Security Configuration → Trust List → ITL File**.
+For a stale ITL from the previous CUCM installation:
+
+1. If settings are locked, enter `**#` once to unlock them.
+2. Select **Unlock** for the ITL file and confirm its lock icon opens.
+3. Select **more → Erase**. The phone may restart and fetch configuration again.
+4. Inspect **CTL File** separately if present. ITL and CTL are distinct lists;
+   do not assume erasing one clears the other or impose a universal deletion
+   order. Resolve any remaining stale list using the procedure for that phone
+   and load, then recheck requests.
+
+The ITL steps are illustrated in a
+[Cisco employee's 79xx guide](https://community.cisco.com/t5/documentos-colaboraci%C3%B3n-voz-y-video/c%C3%B3mo-eliminar-el-archivo-itl-de-los-tel%C3%A9fonos-ip/ta-p/3134134).
+This targeted deletion does **not** require a factory reset. Save the existing
+settings first and keep power and TFTP available through any resulting update.
+If the menu remains locked or deletion fails, record that result rather than
+repeatedly resetting the phone.
+
+Never rename unsigned XML to `.sgn`, fabricate a CTL/ITL file, or bypass firmware
+signature verification. Removing obsolete configuration trust is separate from
+validating Cisco's signed firmware. Afterward, verify that the phone requests
+the intended plain XML, load and components, and confirm the resulting App Load.
+
 ### Separate intermediate SCCP stage
 
 If step 2 established that intermediate firmware is required, use a separate
@@ -161,7 +196,9 @@ to the entire batch.
 
 A normal restart preserves configuration. Factory reset removes settings,
 certificates, history and the application; recovery depends on TFTP. First rule
-out an incorrect MAC, VLAN, IP, firewall, incomplete package or incompatible hardware.
+out an incorrect MAC, VLAN, IP, firewall, incomplete package or incompatible
+hardware. Follow the targeted old-CUCM trust checks above before considering a
+full reset.
 
 Before a factory reset, verify DHCP, option 150/66, `term45.default.loads` and all
 its components. Power on while holding `#` until line keys flash amber in sequence,
@@ -190,3 +227,7 @@ For each phone, verify:
 After a successful pilot, add phones in small groups and record the final App
 Load. Ten configuration entries do not equal ten flashed phones. External numbers
 and emergency calling are not connected in the baseline configuration.
+
+After transfers and flash writes finish, delete the TFTP Job and close its
+temporary firewall allowances using the [operations guide](operations.md).
+The Job deadline and cleanup TTL do not remove host firewall rules.

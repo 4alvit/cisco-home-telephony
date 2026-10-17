@@ -17,7 +17,8 @@ pending.
   Opus, and the Assist endpoint/route. Successful rollout does not replace a call.
 - Persistent firewall restrictions on PBX and HA nodes, including IPv6. Only the
   actual HA source can reach AMI; access from the workstation was rejected.
-  Other firewall rules were preserved. TFTP is closed and no TFTP Job is running.
+  Other firewall rules were preserved. TFTP is closed during ordinary operation;
+  the separately controlled first-phone commissioning window is described below.
 - Pinned TECH7Fox integration **1.0.5** installed in existing **Home Assistant
   2026.10.0**. Asterisk and native VoIP entries are `loaded`; VoIP listens on
   UDP5060. `AMI Connected` is on.
@@ -55,15 +56,31 @@ A verified private profile for extension **201** was deployed; Asterisk is Ready
 and Home Assistant discovered its five phone entities after an integration
 reload. The phone remains unregistered on SCCP. Its source is admitted by a
 single-host `/32` rule, and the existing NTP server was verified. The existing
-AMI password was preserved and `AMI Connected` remains on. TFTP is still closed,
-no TFTP Job is running, and DHCP has not been changed. Vendor signature acceptance
-and physical flashing remain pending.
+AMI password was preserved and `AMI Connected` remains on.
+
+The first commissioning attempt then enabled a bounded TFTP Job and a
+single-phone firewall exception. A DHCP reservation and option 150 were applied
+only to that phone. After a normal restart, its web interface confirmed the new
+TFTP address, and packet capture showed requests reaching the server with
+file-not-found replies returning to the phone. The requested files were CTL/ITL
+trust files and signed `SEP…cnf.xml.sgn` / `XMLDefault.cnf.xml.sgn` configuration.
+The ordinary XML profile and firmware components had not been requested.
+
+The phone's console logs also showed signed-configuration lookup and trust-list
+errors. The next step is targeted removal of the previous CUCM trust list at
+the handset, following the [trust-list procedure](sip-conversion.md), before
+another controlled boot. This is a commissioning observation, not a successful
+flash: vendor signature acceptance, SIP registration and audio remain pending.
+Raw captures, phone logs and device identifiers stay private. Closing the TFTP
+Job must be accompanied by closing its temporary firewall exceptions; the
+Job's time limit does not perform that firewall cleanup.
 
 ## Remaining physical acceptance
 
-1. Activate the prepared per-phone DHCP/TFTP settings in a commissioning window
-   and restart the first phone normally. Follow the [upgrade path](sip-conversion.md);
-   preserve device signature checks. Firmware is not stored in Git.
+1. Resolve the previous CUCM trust configuration at the handset, then restart
+   in an active per-phone TFTP commissioning window. Follow the
+   [upgrade path](sip-conversion.md); preserve device signature checks.
+   Firmware is not stored in Git.
 2. Confirm SIP firmware and registration before accepting the phone for service.
 3. Verify registration, echo600, a call between two phones, DTMF and two-way audio.
    For Assist, enable calls for the actual VoIP device after its first call and

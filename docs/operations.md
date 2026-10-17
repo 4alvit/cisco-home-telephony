@@ -117,15 +117,29 @@ Do not work around this error by running Asterisk privileged or as root.
 **Phone does not request firmware:** check its physical model/MAC, DHCP, VLAN,
 TFTP IP via option 150/Alternate TFTP, the `SEP<MAC>.cnf.xml` filename, TFTP Job
 status, and the exact `.loads` file plus every required `.sbn`. The provided
-TFTP server uses UDP 69 and the separate UDP 20000–20031 range. If an RRQ is
-visible but the file never arrives, common causes are blocked return UDP,
-the wrong VLAN or an expired Job lifetime. Files must be readable with mode 0644
-and served read-only.
+TFTP server uses UDP 69 and the separate UDP 20000–20031 range. Unanswered RRQs
+can indicate blocked return UDP, a wrong VLAN or an expired Job. Files must be
+readable with mode 0644 and served read-only. An RRQ/error response exchange
+proves that particular round trip, not a successful file transfer.
+
+**Only trust files and signed XML are requested:** repeated `CTLSEP…`, `ITLSEP…`,
+`ITLFile.tlv`, `SEP<MAC>.cnf.xml.sgn` and `XMLDefault.cnf.xml.sgn` requests, with
+no plain XML or firmware request, call for inspecting old CUCM trust after
+confirming the TFTP target and network exchange. Use the
+[targeted ITL/CTL procedure](sip-conversion.md#old-cucm-trust-blocks-the-new-configuration)
+before considering a factory reset. A missing signed configuration is not
+fixed by renaming plain XML to `.sgn`. Do not fabricate trust files or disable
+firmware signature verification.
 
 **TFTP Job Failed/DeadlineExceeded:** this is the expected end of the window
-after one hour. Confirm that no flash is active, delete the old Job, reopen the
-firewall window and repeat `deploy.sh --apply --firewall-reviewed --with-tftp`.
-Do not run two provisioning daemons on the same IP:69.
+after one hour. Its 600-second cleanup TTL removes the finished Job and dependent
+objects, **not host firewall rules**. Confirm that no transfer or flash is active,
+delete the old Job and close the temporary TFTP allowances. If another attempt
+is needed, review and reopen a narrow firewall window, then repeat
+`deploy.sh --apply --firewall-reviewed --with-tftp`. Do not run two provisioning
+daemons on the same IP:69. See Kubernetes documentation for
+[Job deadlines](https://kubernetes.io/docs/concepts/workloads/controllers/job/)
+and [finished-Job cleanup](https://kubernetes.io/docs/concepts/workloads/controllers/ttlafterfinished/).
 
 **No registration:** check SIP firmware, matching TCP/UDP selection in XML and
 Asterisk, authName/extension/password consistency, server IP, the permitted
@@ -151,6 +165,22 @@ configuration again. Open a new narrow window for that boot if required.
 Limit diagnostic packet capture to a short window: SIP and TFTP can contain
 credentials, phone numbers and audio. Keep pcap files private and delete them
 when the investigation ends; never commit `.pcap` files.
+
+## Close a TFTP maintenance window
+
+Once transfers and phone flash writes have finished, remove the temporary
+server without stopping Asterisk:
+
+```bash
+kubectl --context home-k3s -n telephony delete job cisco-tftp --ignore-not-found
+```
+
+Then remove the maintenance allowances for **UDP 69 and UDP 20000–20031** from
+the host firewall, including any persistent rules that would restore them on
+reboot. Preserve SIP/RTP and the separately restricted AMI rules. Verify that
+no TFTP server remains and that the firewall has returned to its closed state.
+Neither Job expiry nor TTL cleanup performs this firewall step. If the phone
+needs TFTP on a later cold boot, open a new reviewed window.
 
 ## Stopping and removal
 
