@@ -212,7 +212,10 @@ class Gateway:
     def listing(self):
         with self.lock, AMI(self.config['ami']) as ami:
             endpoints, channels = ami.snapshot()
-            return {'ami_fresh': True, 'observed_at': time.time(), 'phones': [
+            return {'ami_fresh': True, 'observed_at': time.time(),
+                    'dial_allowlist': self.config['dial_allowlist'],
+                    'ring_allowlist': self.config.get('ring_allowlist', ['640']),
+                    'phones': [
                 {'id': phone['id'], 'lines': phone['lines'], **self.preference(phone['id']),
                  'dnd_pending': phone['id'] in self.dnd_pending,
                  'online': all(endpoints.get(line) not in (None, 'Unavailable', 'Invalid') for line in phone['lines']),
