@@ -21,15 +21,22 @@ conversion to MPP is not required.
 - [SVG diagrams](docs/diagrams/) and [color slides](docs/slides/), all in English.
 - [Home Assistant](docs/home-assistant.md): phone states, DTMF, call control and
   Assist on extension **630**.
+- [Remote phone management](docs/phone-control.md): authenticated screenshots
+  and keypad control, separate SSH credentials, and renewable access windows.
 
 **The server is deployed in the home k3s cluster:** Asterisk 22.11.0, Home
 Assistant AMI and VoIP integrations, and a telephony dashboard are installed.
 See [live deployment validation](docs/server-validation.md).
 The first physical 7945G now runs **SIP45.9-4-2SR4-3S**, registers to Asterisk
-over TCP as **201**, and appears registered in Home Assistant. Handset echo on **600**,
+over TCP as **201** and **202** on its two line buttons, and appears registered
+in Home Assistant. Handset echo on **600**,
 Russian Assist on **630**, and HA-initiated calling and hangup passed live tests.
 Speakerphone, DTMF and two-phone acceptance remain. Cisco firmware is not
 included: obtain an authorized copy and verify the upgrade path.
+The [second-line and wallpaper guide](docs/second-line-and-wallpaper.md) covers
+the independent 202 line and original generated background now installed on the
+pilot. Authenticated screenshots, remote keys and SSH diagnostics were verified;
+see [remote management](docs/phone-control.md) for legacy client compatibility.
 The [firmware archive guide](docs/firmware-archive.md) records a working preserved
 SR4-3 copy, byte-level checks, extraction steps and provenance limitations.
 

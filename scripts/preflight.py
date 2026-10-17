@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
-from render_k3s import load_site, read_files, render_core, render_tftp
+from render_k3s import load_site, read_files, read_wallpaper, render_core, render_tftp
 from verify_firmware import verify as verify_firmware
 from provision import ha_settings, phone_networks, local_networks
 
@@ -111,7 +111,7 @@ def main():
         render_core(site, configs)
         if args.with_tftp:
             xmls = read_files(root / "tftp", ".xml")
-            render_tftp(site, xmls)
+            render_tftp(site, xmls, read_wallpaper(root / "wallpaper"))
             _, load_id = verify_firmware(root / "firmware", root / "firmware-manifest.json")
             inventory = json.loads((root / "phones.json").read_text())
             phones = inventory["phones"]

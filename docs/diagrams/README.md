@@ -9,10 +9,14 @@
   TFTP readiness, pilot phone, call checks and rollout to the remaining batch.
 - [power.svg](power.svg): built-in 802.3af support, powered by a PoE switch or an
   active injector connected to an ordinary switch.
+- [remote-management.svg](remote-management.svg): authenticated CGI, SSH,
+  a bounded authentication callback, temporary TFTP and a verified PoE port.
 
 Each file is a standalone SVG containing editable text and vector objects.
 There are no MAC addresses, passwords or delivery details. Diagram sources and
-rebuild instructions are in the [presentation guide](../slides/README.md).
+rebuild instructions for the presentation figures are in the
+[presentation guide](../slides/README.md). The remote-management figure is edited
+directly as standalone SVG.
 The parent documentation contains full procedures, limitations and sources.
 Project ports are listed in the [k3s runbook](../k3s-deployment.md) and
 [HA guide](../home-assistant.md). Diagrams describe the architecture; they do not

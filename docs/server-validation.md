@@ -130,10 +130,47 @@ rules remained unchanged, and the fallback timer was canceled. The
 per-phone DHCP reservation and TFTP option remain for future controlled
 provisioning windows. Job expiry alone would not have closed the firewall.
 
+## Second line, wallpaper and remote management
+
+The same physical phone now independently registers **201 and 202** over TCP,
+using distinct credentials. The original 201 and AMI credentials were preserved.
+An outgoing call from line 202 and an incoming call to it reached `Echo()` on
+600. Both directions of G.711 RTP were observed, with zero reported packet loss
+in these short samples. In the final **202 → 600** test, Connected Line remained
+`None` while Device State was `In use`. The corrected HA Hangup script ended
+the current 202 channel: HA returned to `Not in use`, registration stayed on,
+and the PBX reported zero active channels. This verifies RTP flow and HA call
+control; audible echo on 202 has not been confirmed by the operator. The earlier
+human audio confirmation applies to 201.
+
+The phone's LLDP neighbour, switch forwarding table and LLDP remote-port record
+identified its exact port on a Netgear GS110TP. One controlled five-second PoE
+cycle loaded the configuration. Readback confirmed restored power and unchanged
+configuration of all other switch ports. A separate wallpaper Secret supplied
+the 320 × 212 image and 80 × 53 thumbnail. Authenticated remote keys selected and
+saved the generated Lake dawn artwork; screenshots confirmed both line labels
+and the new background.
+
+Web access, SSH and personalization are enabled. The authenticated CGI callback
+uses separate random credentials, an exact phone/source/nonce match and a
+renewable, bounded maintenance window. Tests exposed and corrected the firmware's
+64-byte Basic credential-pair limit and a callback socket-restart issue. SSH
+accepted its separate generated credentials and the diagnostic login; the
+minimal algorithm lists in [the management guide](phone-control.md) avoid an
+embedded-server buffer error. A minimal legacy TLS handshake also succeeded,
+but the phone's expired MIC certificate does not provide trusted HTTPS.
+
+The image selection persists after leaving Settings. The temporary TFTP Job
+was removed after delivery and the firewall returned to its ordinary phone
+policy. The callback URL remains in the private profile so later remote sessions
+can explicitly renew their window without provisioning the phone again. The
+temporary callback service was stopped, its dedicated firewall rule removed,
+and its listening port confirmed closed after the final call-control test.
+
 ## Remaining acceptance
 
-1. Verify speakerphone audio and DTMF separately from the successful handset
-   echo test on **600**.
+1. Confirm audible echo on **202**, then verify speakerphone audio and DTMF
+   separately from the successful handset echo test on **201 → 600**.
 2. Verify dashboard confirmation behavior by clicking its controls; the
    underlying HA scripts have passed live Originate/Hangup tests.
 3. Inventory and commission a second phone, then test calls in both directions,

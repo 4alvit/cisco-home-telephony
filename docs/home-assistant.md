@@ -116,12 +116,17 @@ enter **actual entity IDs** into the HA package/dashboard generator's local
 inventory. Automatically generated IDs may differ from examples.
 
 1. Check `pjsip show contacts`, HA device states and absence of AMI errors.
-2. Make an internal call between two phones and verify state changes.
+2. Make an internal call between two physical phones and verify state changes.
+   Defer this check for two lines on one handset; they are separate endpoints,
+   not two physical phones. Keep the companion's `call_to:null` in that case.
 3. Place a call through the HA script; hang up only its actual Channel.
 4. Test DTMF during a test call and verify the harmless HA notification.
 5. Dial 630. After the first device discovery in HA, enable **Allow calls** and
-   select a pipeline, then call again. SIP From preserves the phone's extension,
-   so different phones should have distinct device identities.
+   select a pipeline, then call again. VoIP discovery follows the caller's SIP
+   From extension, not the physical handset count. A second line such as 202
+   needs its own discovery and permission/pipeline check only if it calls 630.
+   Inspect the actual discovered identity; preserve 201's working settings and
+   `call_from:"201"` control rather than replacing them with the new line.
 6. Verify STT, TTS response, two-way audio and hangup. Repeat after PBX/HA restart
    and phone cold boot. Start with one phone.
 

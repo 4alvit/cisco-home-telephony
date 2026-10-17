@@ -1,0 +1,19 @@
+{
+  "phones": [
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "REPLACE-WITH-VERIFIED-MAC",
+      "label": "Home phone",
+      "lines": [
+        {"extension": "201", "label": "Home 201"},
+        {"extension": "202", "label": "Home 202"}
+      ],
+      "transport": "tcp",
+      "background_image_access": true,
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "hardware_revision": "READ FROM PHONE",
+      "current_load": "READ FROM PHONE"
+    }
+  ]
+}

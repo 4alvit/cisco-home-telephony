@@ -7,7 +7,9 @@ import os
 from pathlib import Path
 import re
 import secrets
+import string
 import sys
+from urllib.parse import urlsplit
 import xml.etree.ElementTree as ET
 
 
@@ -115,6 +117,66 @@ writetimeout=5000
 """
 
 
+def phone_lines(phone):
+    """Return ordered line definitions; legacy extension occupies button 1."""
+    if "lines" in phone:
+        return phone["lines"]
+    return [{"extension": phone["extension"], "label": phone["label"]}]
+
+
+def authentication_url(value):
+    """Limit the optional management callback to an explicit private IPv4 host."""
+    if not isinstance(value, str) or len(value) > 255 or not value.isascii():
+        raise ValueError("authentication_url must be an ASCII private IPv4 HTTP(S) URL")
+    if any(ord(char) <= 32 or ord(char) == 127 for char in value):
+        raise ValueError("authentication_url cannot contain whitespace or control characters")
+    try:
+        parsed = urlsplit(value)
+        address = ipaddress.IPv4Address(parsed.hostname)
+        port = parsed.port
+    except (ValueError, TypeError):
+        raise ValueError("authentication_url requires a private IPv4 literal and valid port") from None
+    private = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+    if (parsed.scheme not in ("http", "https") or parsed.username is not None
+            or parsed.password is not None or parsed.query or parsed.fragment
+            or "?" in value or "#" in value or port == 0
+            or not any(address in ipaddress.IPv4Network(net) for net in private)
+            or not re.fullmatch(r"/[A-Za-z0-9_/-]{1,255}", parsed.path)
+            or "//" in parsed.path):
+        raise ValueError("authentication_url requires a private HTTP(S) host and plain absolute path without credentials/query/fragment")
+    return value
+
+
+def phone_management_secrets(phones, out):
+    """Preserve separate per-device SSH credentials only when SSH is enabled."""
+    enabled = [phone for phone in phones if phone.get("ssh_enabled", False)]
+    if not enabled:
+        return {}
+    path = out / "phone-management-secrets.json"
+    if path.is_symlink():
+        raise ValueError("phone management secrets cannot be a symlink")
+    saved = read_json(path) if path.exists() else {}
+    if not isinstance(saved, dict):
+        raise ValueError("invalid phone management secrets")
+    for phone in enabled:
+        device = "SEP" + phone["mac"]
+        if device not in saved:
+            saved[device] = {
+                "ssh_username": "u" + secrets.token_hex(5),
+                "ssh_password": ''.join(secrets.choice(string.ascii_letters + string.digits)
+                                        for _ in range(16)),
+            }
+        entry = saved[device]
+        if (not isinstance(entry, dict) or set(entry) != {"ssh_username", "ssh_password"}
+                or not isinstance(entry["ssh_username"], str)
+                or not re.fullmatch(r"[a-z][A-Za-z0-9]{7,15}", entry["ssh_username"])
+                or not isinstance(entry["ssh_password"], str)
+                or not re.fullmatch(r"[A-Za-z0-9]{16}", entry["ssh_password"])):
+            raise ValueError("invalid stored SSH credentials; preserve or rotate explicitly")
+    private_write(path, json.dumps(saved, indent=2) + '\n')
+    return saved
+
+
 def validate(site, inventory, *, pbx_only=False):
     ha_settings(site)
     phone_networks(site)
@@ -128,33 +190,68 @@ def validate(site, inventory, *, pbx_only=False):
         return [], None
     ntp = str(ipaddress.IPv4Address(site["ntp_ipv4"]))
     phones = inventory["phones"]
-    if not 1 <= len(phones) <= 50:
+    if not isinstance(phones, list) or not 1 <= len(phones) <= 50:
         raise ValueError("inventory must contain 1..50 phones")
     seen_mac, seen_ext = set(), set()
+    normalized = []
     for phone in phones:
+        if not isinstance(phone, dict):
+            raise ValueError("each phone must be an object")
         if phone.get("verified") is not True or phone.get("model") != "CP-7945G":
             raise ValueError("each phone requires physical model/MAC verification: CP-7945G, verified:true")
         mac = re.sub(r"[:-]", "", phone["mac"]).upper()
         if not re.fullmatch(r"[0-9A-F]{12}", mac) or int(mac[:2], 16) & 1 or mac == "000000000000":
             raise ValueError("invalid unicast MAC")
-        ext = str(phone["extension"])
-        if not re.fullmatch(r"2[0-9]{2}", ext):
-            raise ValueError("extensions must be in 200..299")
-        if mac in seen_mac or ext in seen_ext:
-            raise ValueError("duplicate MAC or extension")
+        if mac in seen_mac:
+            raise ValueError("duplicate MAC")
         seen_mac.add(mac)
-        seen_ext.add(ext)
-        phone["mac"], phone["extension"] = mac, ext
-        if not re.fullmatch(r"[A-Za-z0-9 _-]{1,24}", phone["label"]):
+        if not isinstance(phone.get("label"), str) or not re.fullmatch(r"[A-Za-z0-9 _-]{1,24}", phone["label"]):
             raise ValueError("phone label must be 1..24 ASCII letters/digits/spaces/_/-")
+        if "extension" in phone and "lines" in phone:
+            raise ValueError("use either legacy extension or lines, not both")
+        if "extension" not in phone and "lines" not in phone:
+            raise ValueError("each phone requires extension or lines")
+        lines = phone_lines(phone)
+        if not isinstance(lines, list) or not 1 <= len(lines) <= 2:
+            raise ValueError("CP-7945G requires 1..2 lines, ordered by button")
+        normalized_lines = []
+        for line in lines:
+            if not isinstance(line, dict) or set(line) != {"extension", "label"}:
+                raise ValueError("each line requires exactly extension and label")
+            ext = str(line["extension"])
+            if not re.fullmatch(r"2[0-9]{2}", ext):
+                raise ValueError("extensions must be in 200..299")
+            if ext in seen_ext:
+                raise ValueError("duplicate extension across phone lines")
+            seen_ext.add(ext)
+            label = line["label"]
+            if not isinstance(label, str) or not re.fullmatch(r"[A-Za-z0-9 _-]{1,24}", label):
+                raise ValueError("line label must be 1..24 ASCII letters/digits/spaces/_/-")
+            normalized_lines.append({"extension": ext, "label": label})
         if phone.get("transport", "tcp") not in ("udp", "tcp"):
             raise ValueError("transport must be udp or tcp")
         if type(phone.get("web_access", False)) is not bool:
             raise ValueError("web_access must be boolean")
+        if "background_image_access" in phone and type(phone["background_image_access"]) is not bool:
+            raise ValueError("background_image_access must be boolean")
+        if "authentication_url" in phone:
+            authentication_url(phone["authentication_url"])
+        for setting in ("ssh_enabled", "phone_personalization"):
+            if setting in phone and type(phone[setting]) is not bool:
+                raise ValueError(f"{setting} must be boolean")
+        if phone.get("phone_personalization", False) and not (
+                phone.get("web_access", False) and phone.get("authentication_url")):
+            raise ValueError("phone_personalization requires web_access and authentication_url")
         load = phone.get("firmware_load", "")
         if not re.fullmatch(r"SIP45\.[A-Za-z0-9-]+", load):
             raise ValueError("firmware_load must be the exact SIP45.* load ID, without .loads")
-    return phones, ntp
+        copy = dict(phone, mac=mac)
+        if "lines" in phone:
+            copy["lines"] = normalized_lines
+        else:
+            copy["extension"] = normalized_lines[0]["extension"]
+        normalized.append(copy)
+    return normalized, ntp
 
 
 def sub(parent, tag, value=None):
@@ -164,7 +261,7 @@ def sub(parent, tag, value=None):
     return node
 
 
-def phone_xml(phone, ip, ntp, password):
+def phone_xml(phone, ip, ntp, passwords, management=None):
     d = ET.Element("device")
     sub(d, "fullConfig", "true")
     sub(d, "deviceProtocol", "SIP")
@@ -196,23 +293,37 @@ def phone_xml(phone, ip, ntp, password):
         sub(stack,k,v)
     for k,v in {"enableVad":"false","natEnabled":"false","voipControlPort":5060,"preferredCodec":"g711ulaw","dtmfAvtPayload":101,"dtmfOutofBand":"avt","dtmfDbLevel":3,"phoneLabel":phone["label"].replace(" ","_")[:12],"stutterMsgWaiting":0,"callStats":"false","silentPeriodBetweenCallWaitingBursts":10,"disableLocalSpeedDialConfig":"false","startMediaPort":16384,"stopMediaPort":16482}.items():
         sub(profile,k,v)
-    line = ET.SubElement(sub(profile,"sipLines"), "line", {"button":"1"})
-    for k,v in {"featureID":9,"featureLabel":phone["label"],"proxy":"USECALLMANAGER","port":5060,"name":phone["extension"],"displayName":phone["label"],"autoAnswer":None}.items():
-        sub(line,k,v)
-    sub(line.find("autoAnswer"),"autoAnswerEnabled",0)
-    for k,v in {"callWaiting":3,"authName":phone["extension"],"authPassword":password,"sharedLine":"false","messageWaitingLampPolicy":1,"messagesNumber":"","ringSettingIdle":4,"ringSettingActive":5,"contact":phone["extension"]}.items():
-        sub(line,k,v)
+    sip_lines = sub(profile,"sipLines")
+    for button, definition in enumerate(phone_lines(phone), start=1):
+        ext, label = definition["extension"], definition["label"]
+        line = ET.SubElement(sip_lines, "line", {"button":str(button)})
+        for k,v in {"featureID":9,"featureLabel":label,"proxy":"USECALLMANAGER","port":5060,"name":ext,"displayName":label,"autoAnswer":None}.items():
+            sub(line,k,v)
+        sub(line.find("autoAnswer"),"autoAnswerEnabled",0)
+        for k,v in {"callWaiting":3,"authName":ext,"authPassword":passwords[ext],"sharedLine":"false","messageWaitingLampPolicy":1,"messagesNumber":"","ringSettingIdle":4,"ringSettingActive":5,"contact":ext}.items():
+            sub(line,k,v)
     sub(profile,"dialTemplate","dialplan.xml")
-    sub(d,"commonProfile")
+    common_profile = sub(d,"commonProfile")
+    if "background_image_access" in phone:
+        sub(common_profile,"backgroundImageAccess",str(phone["background_image_access"]).lower())
     sub(d,"loadInformation",phone["firmware_load"])
     vendor=sub(d,"vendorConfig")
     sub(vendor,"webAccess",0 if phone.get("web_access",False) else 1)
-    sub(vendor,"sshAccess",1)
+    sub(vendor,"sshAccess",0 if phone.get("ssh_enabled",False) else 1)
     sub(vendor,"settingsAccess",1)
     sub(d,"deviceSecurityMode",1)
     sub(d,"transportLayerProtocol",2 if phone.get("transport","tcp")=="udp" else 1)
     sub(d,"certHash","")
     sub(d,"encrConfig","false")
+    if "authentication_url" in phone:
+        sub(d,"authenticationURL",phone["authentication_url"])
+    if "phone_personalization" in phone:
+        sub(d,"phonePersonalization",1 if phone["phone_personalization"] else 0)
+    if phone.get("ssh_enabled",False):
+        if management is None:
+            raise ValueError("SSH-enabled phone requires distinct management credentials")
+        sub(d,"sshUserId",management["ssh_username"])
+        sub(d,"sshPassword",management["ssh_password"])
     ET.indent(d)
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(d,encoding="unicode")+'\n'
 
@@ -236,11 +347,14 @@ def generate(site, inventory, out, *, pbx_only=False):
     secret_path=out/"secrets.json"
     passwords=read_json(secret_path) if secret_path.exists() else {}
     for p in phones:
-        passwords.setdefault(p["extension"],secrets.token_hex(15))
-        if not re.fullmatch(r"[A-Za-z0-9]{24,30}", passwords[p["extension"]]):
-            raise ValueError("secret must be 24..30 alphanumeric characters")
+        for line in phone_lines(p):
+            ext = line["extension"]
+            passwords.setdefault(ext,secrets.token_hex(15))
+            if not isinstance(passwords[ext], str) or not re.fullmatch(r"[A-Za-z0-9]{24,30}", passwords[ext]):
+                raise ValueError("secret must be 24..30 alphanumeric characters")
     if not pbx_only:
         private_write(secret_path,json.dumps(passwords,indent=2)+'\n')
+    management = phone_management_secrets(phones, out)
     ip=site["node_ipv4"]
     ha=ha_settings(site)
     local_nets = ''.join(f'local_net={net}\n' for net in local_networks(site))
@@ -249,10 +363,11 @@ def generate(site, inventory, out, *, pbx_only=False):
     dial=['[general]\nstatic=yes\nwriteprotect=yes\n','[home]\n']
     expected=set()
     for p in phones:
-        ext=p["extension"]
-        pw=passwords[ext]
         transport=p.get("transport","tcp")
-        pjsip.append(f'''[{ext}]
+        for line in phone_lines(p):
+            ext, label = line["extension"], line["label"]
+            pw=passwords[ext]
+            pjsip.append(f'''[{ext}]
 type=endpoint
 transport=transport-{transport}
 context=home
@@ -267,7 +382,7 @@ rtp_symmetric=yes
 force_rport=yes
 rewrite_contact=yes
 dtmf_mode=rfc4733
-callerid={p["label"]} <{ext}>
+callerid={label} <{ext}>
 identify_by=username
 deny=0.0.0.0/0
 {phone_permits}
@@ -284,10 +399,10 @@ max_contacts=1
 remove_existing=yes
 qualify_frequency=60
 ''')
-        dial.append(f'exten => {ext},1,Dial(PJSIP/{ext},25)\n same => n,Hangup()\n')
+            dial.append(f'exten => {ext},1,Dial(PJSIP/{ext},25)\n same => n,Hangup()\n')
         filename=f'SEP{p["mac"]}.cnf.xml'
         expected.add(filename)
-        private_write(out/"tftp"/filename,phone_xml(p,ip,ntp,pw))
+        private_write(out/"tftp"/filename,phone_xml(p,ip,ntp,passwords,management.get("SEP" + p["mac"])))
     # Only remove old generated phone profiles, leaving other operator files intact.
     for old in (out/"tftp").glob('SEP*.cnf.xml'):
         if old.name not in expected:
@@ -302,7 +417,9 @@ exten => 601,1,Answer()
  same => n,Hangup()
 ''')
     if phones:
-        ring='&'.join('PJSIP/'+p['extension'] for p in phones)
+        # Ring a physical handset once through its primary line (button 1).
+        # Secondary lines remain individually callable by their own extension.
+        ring='&'.join('PJSIP/'+phone_lines(p)[0]['extension'] for p in phones)
         dial.append(f'''exten => 620,1,Dial({ring},25)
  same => n,Hangup()
 ''')

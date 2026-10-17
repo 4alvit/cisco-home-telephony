@@ -8,10 +8,17 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
+import struct
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
+import zlib
 
 RFC1918 = tuple(ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+WALLPAPER_FILES = {"List.xml", "home.png", "home-thumb.png"}
+WALLPAPER_MAX_BYTES = 400_000
+WALLPAPER_PATH = "Desktops/320x212x16"
 
 def validate_site(site, with_tftp=False):
     ha = site.get("home_assistant", {})
@@ -71,6 +78,108 @@ def secret(namespace, prefix, files):
     return name, {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": name, "namespace": namespace,
              "labels": {"app.kubernetes.io/part-of": "cisco-home-telephony"}},
              "type": "Opaque", "immutable": True, "data": {k: base64.b64encode(v.encode()).decode() for k, v in files.items()}}
+
+
+def validate_png(data, width, height):
+    """Validate a bounded, non-interlaced RGB8 PNG without image dependencies."""
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("Wallpaper image is not a PNG")
+    offset, chunks, compressed, ended = 8, [], bytearray(), False
+    while offset < len(data):
+        if offset + 12 > len(data):
+            raise ValueError("Truncated wallpaper PNG chunk")
+        size = struct.unpack_from(">I", data, offset)[0]
+        kind = data[offset + 4:offset + 8]
+        end = offset + 12 + size
+        if end > len(data) or not re.fullmatch(b"[A-Za-z]{4}", kind) or kind[2] & 32:
+            raise ValueError("Invalid wallpaper PNG chunk")
+        content = data[offset + 8:offset + 8 + size]
+        crc = struct.unpack_from(">I", data, offset + 8 + size)[0]
+        if zlib.crc32(kind + content) & 0xffffffff != crc:
+            raise ValueError("Wallpaper PNG CRC mismatch")
+        if not chunks and kind != b"IHDR":
+            raise ValueError("Wallpaper PNG must start with IHDR")
+        if kind == b"IHDR":
+            if chunks or size != 13 or struct.unpack(">IIBBBBB", content) != (width, height, 8, 2, 0, 0, 0):
+                raise ValueError(f"Wallpaper PNG must be {width}x{height}, RGB8, non-interlaced")
+        elif kind == b"IDAT":
+            if b"IDAT" in chunks and chunks[-1] != b"IDAT":
+                raise ValueError("Wallpaper PNG IDAT chunks must be consecutive")
+            compressed.extend(content)
+        elif kind == b"IEND":
+            if size or b"IDAT" not in chunks or end != len(data):
+                raise ValueError("Invalid wallpaper PNG end")
+            ended = True
+        elif kind == b"PLTE":
+            if b"PLTE" in chunks or b"IDAT" in chunks or not 0 < size <= 768 or size % 3:
+                raise ValueError("Invalid wallpaper PNG palette")
+        elif not kind[0] & 32:
+            raise ValueError("Unsupported critical wallpaper PNG chunk")
+        chunks.append(kind)
+        offset = end
+    if not ended:
+        raise ValueError("Wallpaper PNG lacks IEND")
+    expected = height * (1 + width * 3)
+    try:
+        decoder = zlib.decompressobj()
+        pixels = decoder.decompress(bytes(compressed), expected + 1)
+    except zlib.error as exc:
+        raise ValueError("Invalid wallpaper PNG compressed data") from exc
+    if len(pixels) != expected or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+        raise ValueError("Wallpaper PNG decompressed size does not match its dimensions")
+    if any(pixels[row * (1 + width * 3)] > 4 for row in range(height)):
+        raise ValueError("Invalid wallpaper PNG scanline filter")
+
+
+def validate_wallpaper(files):
+    if not isinstance(files, dict) or set(files) != WALLPAPER_FILES or any(type(v) is not bytes for v in files.values()):
+        raise ValueError("Wallpaper must contain exactly List.xml, home.png and home-thumb.png as bytes")
+    if sum(map(len, files.values())) > WALLPAPER_MAX_BYTES or len(files["List.xml"]) > 4096:
+        raise ValueError("Wallpaper exceeds its size limit")
+    xml = files["List.xml"]
+    if b"<!DOCTYPE" in xml.upper() or b"<!ENTITY" in xml.upper():
+        raise ValueError("Wallpaper XML declarations are not allowed")
+    try:
+        parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True, insert_pis=True))
+        root = ET.fromstring(xml.decode("utf-8"), parser=parser)
+    except (ET.ParseError, UnicodeError) as exc:
+        raise ValueError("Invalid wallpaper List.xml") from exc
+    expected = {"Image": f"TFTP:{WALLPAPER_PATH}/home-thumb.png", "URL": f"TFTP:{WALLPAPER_PATH}/home.png"}
+    if (root.tag != "CiscoIPPhoneImageList" or root.attrib or (root.text or "").strip()
+            or len(root) != 1 or root[0].tag != "ImageItem" or root[0].attrib != expected
+            or len(root[0]) or (root[0].text or "").strip() or (root[0].tail or "").strip()):
+        raise ValueError("Wallpaper List.xml must contain only the approved ImageItem paths")
+    validate_png(files["home.png"], 320, 212)
+    validate_png(files["home-thumb.png"], 80, 53)
+    return files
+
+
+def read_wallpaper(directory):
+    """Read only the optional three-file sibling directory; never follow symlinks."""
+    directory = Path(directory)
+    if directory.is_symlink():
+        raise ValueError("Wallpaper directory must not be a symlink")
+    if not directory.exists():
+        return None
+    if not directory.is_dir() or {p.name for p in directory.iterdir()} != WALLPAPER_FILES:
+        raise ValueError("Wallpaper directory must contain exactly the three approved files")
+    files = {}
+    for name in sorted(WALLPAPER_FILES):
+        path = directory / name
+        if not stat.S_ISREG(path.lstat().st_mode):
+            raise ValueError("Wallpaper inputs must be regular files, not symlinks")
+        with path.open("rb") as source:
+            files[name] = source.read(WALLPAPER_MAX_BYTES + 1)
+    return validate_wallpaper(files)
+
+
+def binary_secret(namespace, prefix, files):
+    data = {name: base64.b64encode(content).decode("ascii") for name, content in files.items()}
+    checksum = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:16]
+    name = f"{prefix}-{checksum}"
+    return name, {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": name, "namespace": namespace,
+        "labels": {"app.kubernetes.io/part-of": "cisco-home-telephony"}},
+        "type": "Opaque", "immutable": True, "data": data}
 
 
 def pod_base(site):
@@ -138,7 +247,7 @@ def render_core(site, configs):
     return {"apiVersion": "v1", "kind": "List", "items": [namespace, config, deployment]}
 
 
-def render_tftp(site, configs):
+def render_tftp(site, configs, wallpaper=None):
     ns = site["namespace"]
     name, config = secret(ns, "cisco-provision", configs)
     spec = pod_base(site)
@@ -170,10 +279,25 @@ def render_tftp(site, configs):
     spec["volumes"] = [{"name": "config", "secret": {"secretName": name, "defaultMode": 0o440}},
         {"name": "firmware", "hostPath": {"path": "/var/lib/cisco-tftp", "type": "Directory"}},
         {"name": "served", "emptyDir": {"sizeLimit": "512Mi"}}]
+    items = [config]
+    if wallpaper is not None:
+        validate_wallpaper(wallpaper)
+        wallpaper_name, wallpaper_secret = binary_secret(ns, "cisco-wallpaper", wallpaper)
+        items.append(wallpaper_secret)
+        spec["volumes"].append({"name": "wallpaper", "secret": {"secretName": wallpaper_name, "defaultMode": 0o440}})
+        spec["initContainers"][0]["volumeMounts"].append({"name": "wallpaper", "mountPath": "/wallpaper", "readOnly": True})
+        spec["initContainers"][0]["command"][2] += """
+        mkdir -p /served/root/Desktops/320x212x16
+        cp -L /wallpaper/List.xml /served/root/Desktops/320x212x16/List.xml
+        cp -L /wallpaper/home.png /served/root/Desktops/320x212x16/home.png
+        cp -L /wallpaper/home-thumb.png /served/root/Desktops/320x212x16/home-thumb.png
+        chmod 0755 /served/root/Desktops /served/root/Desktops/320x212x16
+        chmod 0644 /served/root/Desktops/320x212x16/List.xml /served/root/Desktops/320x212x16/home.png /served/root/Desktops/320x212x16/home-thumb.png
+        """
     job = {"apiVersion": "batch/v1", "kind": "Job", "metadata": {"name": "cisco-tftp", "namespace": ns},
         "spec": {"backoffLimit": 0, "activeDeadlineSeconds": 3600, "ttlSecondsAfterFinished": 600,
             "template": {"metadata": {"labels": {"app": "cisco-tftp", "app.kubernetes.io/part-of": "cisco-home-telephony"}}, "spec": spec}}}
-    return {"apiVersion": "v1", "kind": "List", "items": [config, job]}
+    return {"apiVersion": "v1", "kind": "List", "items": items + [job]}
 
 
 def private_write(path, content):
@@ -205,7 +329,7 @@ def main():
         core = render_core(site, read_files(root / "asterisk", ".conf"))
         outputs = {"core.yaml": core}
         if args.with_tftp:
-            outputs["tftp.yaml"] = render_tftp(site, read_files(root / "tftp", ".xml"))
+            outputs["tftp.yaml"] = render_tftp(site, read_files(root / "tftp", ".xml"), read_wallpaper(root / "wallpaper"))
         for filename, manifest in outputs.items():
             private_write(root / "rendered" / filename, json.dumps(manifest, indent=2) + "\n")
         print("Rendered private manifests: " + ", ".join(outputs) + ". No cluster changes.")

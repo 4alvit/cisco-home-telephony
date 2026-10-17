@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">Remote management of a Cisco 7945G</title>
+  <desc id="desc">A private management host uses authenticated HTTP CGI for screenshots and keys, and a separate SSH account for diagnostics. The phone asks a time-limited authentication callback to authorize CGI requests. TFTP supplies configuration during a maintenance window. A verified PoE switch port can restart the phone.</desc>
+  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8" fill="#48DDCC"/></marker></defs>
+  <rect width="1280" height="720" fill="#101C34"/>
+  <g font-family="Arial, sans-serif" fill="#F5F7FB">
+    <text x="48" y="65" font-size="36" font-weight="700">Remote access, with a clear boundary</text>
+    <text x="48" y="106" font-size="21" fill="#AAB9D0">Cisco 7945G · private LAN or VPN · separate management credentials</text>
+    <g fill="#172841" stroke-width="2">
+      <rect x="48" y="205" width="330" height="145" rx="14" stroke="#48DDCC"/>
+      <rect x="875" y="205" width="350" height="145" rx="14" stroke="#48DDCC"/>
+      <rect x="450" y="435" width="375" height="135" rx="14" stroke="#F7CB64"/>
+      <rect x="48" y="435" width="330" height="135" rx="14" stroke="#FF836D"/>
+      <rect x="875" y="435" width="350" height="135" rx="14" stroke="#A996FF"/>
+    </g>
+    <g font-size="25" font-weight="600" text-anchor="middle">
+      <text x="213" y="252">Management host</text><text x="1050" y="252">Cisco 7945G</text>
+      <text x="637" y="478">Authentication callback</text><text x="213" y="478">Temporary TFTP</text>
+      <text x="1050" y="478">PoE switch</text>
+    </g>
+    <g font-size="19" fill="#AAB9D0" text-anchor="middle">
+      <text x="213" y="286">Private credentials and evidence</text><text x="213" y="317">One observed action at a time</text>
+      <text x="1050" y="286">HTTP status · authenticated CGI</text><text x="1050" y="317">SSH diagnostics · two SIP lines</text>
+      <text x="637" y="513">Exact phone, nonce and credentials</text><text x="637" y="543">Explicitly renewed, bounded window</text>
+      <text x="213" y="513">SEP configuration and wallpaper</text><text x="213" y="543">Close after delivery</text>
+      <text x="1050" y="513">Match the phone MAC to its port</text><text x="1050" y="543">Power-cycle only that port</text>
+    </g>
+    <g fill="none" stroke="#48DDCC" stroke-width="3" marker-end="url(#arrow)">
+      <path d="M378 240 H870"/><path d="M875 317 H383"/>
+      <path d="M970 350 V390 H637 V430"/><path d="M1050 435 V355"/>
+    </g>
+    <g font-size="20" text-anchor="middle">
+      <text x="625" y="223" fill="#48DDCC">CGI keys / screenshots · SSH</text>
+      <text x="625" y="298" fill="#48DDCC">Phone responses</text>
+      <text x="770" y="379" fill="#F7CB64">Authorize CGI</text>
+    </g>
+    <text x="48" y="633" font-size="21" fill="#F7CB64">Web Access alone does not authorize remote keys.</text>
+    <text x="48" y="673" font-size="19" fill="#AAB9D0">Keep TFTP and the callback off the Internet. Never interrupt firmware transfer with a power cycle.</text>
+  </g>
+</svg>
