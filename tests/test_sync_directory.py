@@ -38,12 +38,13 @@ class SyncDirectoryTests(unittest.TestCase):
     def update(self):
         return sync_directory.update(self.site, self.inventory, self.existing)
 
-    def test_only_rooms_and_softphone_metadata_change_without_mutating_inputs(self):
+    def test_only_directory_metadata_changes_without_mutating_inputs(self):
         before = copy.deepcopy((self.site, self.inventory, self.existing))
         result = self.update()
         expected = copy.deepcopy(self.existing)
         expected['phones'][0]['room'] = 'Living Room'
         expected['softphones'] = [{'extension': '209', 'room': "Operator's Mac"}]
+        expected['services'] = [{'number': '600', 'label': 'Echo test', 'kind': 'diagnostic'}]
         self.assertEqual(result, expected)
         self.assertEqual((self.site, self.inventory, self.existing), before)
         self.assertEqual(sync_directory.update(self.site, self.inventory, result), result)

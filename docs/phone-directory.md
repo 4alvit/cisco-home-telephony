@@ -1,4 +1,4 @@
-# Phone directory: fictional example
+# Phone and service directory
 
 All room names and client display names in this public guide are fictional
 examples, independent of any private household directory. Keep actual room
@@ -60,6 +60,104 @@ client has its own registration status. Neither flag proves physical placement.
 This directory is available through the authenticated gateway API and CLI.
 Adding room metadata does not provision the Cisco handset's built-in
 **Corporate Directory** menu or a phone-side directory XML service.
+
+## Services, radio and approved shortcuts
+
+`cisco directory` includes a **Services and shortcuts** section in addition to
+physical phones and software clients. The authenticated `GET /v1/phones`
+response and `cisco --json directory` expose these entries in a separate
+`services` array. Existing phone entries retain their original schema.
+
+![Private route configuration becomes a validated catalog and local contacts](diagrams/service-catalog.svg)
+
+The generated catalog contains only enabled service routes which are already
+in the gateway's dial allowlist. It never enables a service, adds an external
+destination, or changes dialing permission. Labels come from the versioned
+service definitions; private phone labels still come from your inventory.
+
+- **600 / 601:** echo and milliwatt diagnostics.
+- **620:** all Cisco phones, when physical phones are configured.
+- **621:** the optional incoming-calls group, when enabled.
+- **630:** Home Assistant Assist, when the Assist connection is enabled.
+- **640:** the optional legacy alarm-tone service. It is not a scheduled alarm.
+- **641:** toggle the calling phone's saved alarm, when phone services are enabled.
+- **701–710:** the enabled subset of the [radio catalog](radio-and-alarms.md).
+- **801–803:** approved external SIP shortcuts only when the corresponding
+  account has a configured outbound peer. Registration alone adds no shortcut.
+
+For example, one entry is:
+
+```json
+{"number": "708", "label": "Deti FM: Toddlers", "kind": "radio"}
+```
+
+Kinds are `diagnostic`, `group`, `assistant`, `alert`, `radio`, `external` and
+`automation`. Numbers are unique within the generated number map;
+service numbers cannot collide with either line of a phone or a software
+client. A label may be shared by different services; the number is the identity.
+Service labels are 1–80 printable ASCII characters, starting with a letter or
+digit and without leading or trailing spaces.
+
+Services have no `online` flag: an enabled route does not prove that a stream,
+provider or assistant is currently available. They are destinations, not phone
+control targets. For example, `cisco 213 call 708` can call a permitted radio
+route, while `cisco 708 dnd on` is invalid. Intercom still requires two actual
+Cisco phones; it does not accept service numbers.
+
+`scripts/service_catalog.py` derives these entries using the provisioning
+validators. A newly created gateway gets only the enabled service numbers in
+its allowlist. A directory sync instead preserves the existing allowlist and
+omits services without permission by default. For a reviewed service rollout,
+the explicit `--sync-services` option reconciles the repository-managed service
+numbers in a new candidate file. Deploy that candidate with the matching
+generated dialplan before expecting a new route in the directory.
+
+## Export local contacts
+
+The export helper takes a fresh authenticated directory snapshot and writes a
+new owner-only local file. It uses the same configuration, token protection and
+explicit direct or Kubernetes transport as the [CLI](cli.md). It does not edit
+Zoiper, macOS Contacts or an existing export.
+
+```bash
+umask 077
+mkdir -p .local/contacts
+chmod 700 .local/contacts
+python3 scripts/export_contacts.py --output .local/contacts/contacts.json
+python3 scripts/export_contacts.py --format csv --output .local/contacts/contacts.csv
+```
+
+Use `--config PATH` or `CISCO_CONFIG` for a nondefault private CLI configuration.
+Existing files and symlinks are refused; choose a new filename for each export.
+The command prints counts, not contact labels. `.local/` is ignored by Git;
+actual exports contain your private directory and must stay local.
+
+JSON schema version 1 has `source`, `observed_at` and `contacts`. Each contact
+contains a stable `id`, `label`, `kind` and ordered `numbers` array. A physical
+phone keeps both lines together, a softphone has one number and each service
+has one number. IDs use `cisco:PRIMARY`, `softphone:NUMBER` or `service:NUMBER`;
+they contain no hardware identity. Only contact metadata is exported, without
+addresses, credentials, active call IDs, DND or transient availability.
+
+```json
+{
+  "id": "cisco:212",
+  "label": "Example Room F",
+  "kind": "cisco",
+  "numbers": ["212", "213"]
+}
+```
+
+CSV uses `Contact ID,Name,Phone,Kind`, with one row per number. It is a portable
+exchange file; use the receiving application's field mapping instead of
+assuming every address book accepts the same column names. A later importer
+should preserve unrelated contacts, use stable IDs or exact numbers to avoid
+duplicates, and handle existing entries for diagnostics or local lines.
+
+Zoiper's [XML Contact Service](https://www.zoiper.com/en/support/home/article/201/XML%20Contact%20Service%20in%20Zoiper%205%20PRO)
+requires Pro. Local contacts can be maintained separately in the free client.
+Exporting a catalog does not configure synchronization or demonstrate a
+successful import; verify the receiving client's contacts after importing.
 
 Continue dialing numbers explicitly: in this fictional example, `cisco 213 205`
 calls Example Room C from Example Room F's second line. Room names are descriptive metadata, not CLI dialing
@@ -131,8 +229,26 @@ python3 scripts/preflight.py --site .local/candidate/site.json
 ```
 
 The sync checks exact device, primary-ID and ordered-line membership. It changes
-only room fields and the read-only software-client directory metadata, while
+only room fields and read-only software-client/service directory metadata, while
 preserving callbacks, credentials, API clients, AMI settings and dial permissions.
+
+When intentionally adding or disabling services, use this alternative sync
+command in the candidate workflow above:
+
+```bash
+python3 scripts/sync_directory.py --site .local/candidate/site.json \
+  --phones .local/candidate/phones.json --gateway .local/current/gateway.json \
+  --sync-services --output .local/candidate/gateway.directory.json
+```
+
+This opt-in mode adds only enabled, derived service numbers. It removes disabled
+codes only when they belong to this repository's fixed service definitions,
+radio catalog or external-provider shortcut definitions. It preserves all
+existing local-extension restrictions and unrelated/custom allowed numbers.
+Existing ring permissions are only reduced for disabled managed services;
+no new ring destinations are added. Review the generated allowlist together
+with the dialplan before rendering and deploying. The helper still refuses to
+overwrite an existing output, and it never deploys or calls a phone itself.
 It refuses to overwrite an existing output file. Review the newly rendered
 `gateway.directory.yaml` alongside the candidate's `core.yaml`, and use that
 new gateway manifest for deployment rather than a copied older `gateway.yaml`.

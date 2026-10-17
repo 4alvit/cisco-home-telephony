@@ -216,7 +216,8 @@ def validate_inventory(data, line=None):
     for name in ('dial_allowlist', 'ring_allowlist'):
         require(isinstance(data.get(name), list) and all(isinstance(n, str) and
                 re.fullmatch(r'[0-9]{3,8}', n) for n in data[name]), 'invalid_destination_inventory')
-    validate_softphones(data, seen)
+    softphones = validate_softphones(data, seen)
+    validate_services(data, seen | {phone['extension'] for phone in softphones})
     if line is None:
         return phones
     require(selected is not None, 'line_not_in_cisco_gateway_inventory')
@@ -267,6 +268,26 @@ def validate_softphones(data, used_lines):
     return softphones
 
 
+def validate_services(data, used_lines):
+    services = data.get('services', [])
+    require(isinstance(services, list) and len(services) <= 128, 'invalid_service_inventory')
+    seen = set(used_lines)
+    for item in services:
+        require(isinstance(item, dict) and set(item) == {'number', 'label', 'kind'},
+                'invalid_service_metadata')
+        number, label = item['number'], item['label']
+        require(isinstance(number, str) and re.fullmatch(r'[0-9]{3,8}', number)
+                and number not in seen and number in data['dial_allowlist'],
+                'ambiguous_or_unallowed_service_number')
+        require(isinstance(label, str) and label == label.strip()
+                and re.fullmatch(r'[A-Za-z0-9][ -~]{0,79}', label), 'invalid_service_label')
+        require(isinstance(item['kind'], str) and item['kind'] in
+                ('diagnostic', 'group', 'assistant', 'alert', 'radio', 'external', 'automation'),
+                'invalid_service_kind')
+        seen.add(number)
+    return services
+
+
 def commands(phone):
     result = ['status', 'help', 'directory', 'destinations'] + [value for key, value in COMMANDS.items()
               if key in phone['capabilities']]
@@ -311,6 +332,8 @@ def directory_result(data, selected_line=None):
                         'selected': selected_line == phone['extension']})
     entries.sort(key=lambda phone: int(phone['id']))
     return {'status': 'ok', 'directory': entries, 'selected_line': selected_line,
+            'services': sorted(({key: entry[key] for key in ('number', 'label', 'kind')}
+                                for entry in data.get('services', [])), key=lambda entry: int(entry['number'])),
             'observed_at': data['observed_at'], 'ami_fresh': True}
 
 
@@ -503,7 +526,7 @@ def parser():
         'status': 'Read current phone status and optional HA schedules.',
         'help': 'Show local commands without accessing private configuration or the network.',
         'destinations': 'Read allowed dial and finite-ring destinations.',
-        'directory': 'List Cisco phones and read-only softphone entries, highlighting this selected line.',
+        'directory': 'List Cisco phones, softphones and configured services, highlighting this selected line.',
         'answer': 'Answer one exact ringing call on this line; never answer a timer/alarm alert.',
         'pickup': 'Alias for Answer of one ringing call. Idle use requires explicit speaker toggle.',
         'hangup': 'Hang up one exact observed call; refuse multiple channels or a sibling call.',
@@ -578,6 +601,11 @@ def display(result):
         if result['selected_line'] is not None:
             print(f"* Hosting phone for selected line {result['selected_line']}.")
         print('Online means all assigned lines are available in the fresh gateway snapshot.')
+        if result.get('services'):
+            print('\nServices and shortcuts:')
+            for item in result['services']:
+                print(f"  {item['number']}: {item['label']} ({item['kind']})")
+            print('Configured destinations only; service availability and audio are not monitored here.')
         return
     if 'schedule' in result and 'phone_id' in result:
         print(f"Line {result['selected_line']} / phone {result['phone_id']} — {result['status']}")

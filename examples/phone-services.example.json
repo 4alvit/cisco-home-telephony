@@ -1,0 +1,12 @@
+{
+  "phone_services": {
+    "enabled": true,
+    "home_assistant_url": "http://192.168.50.30:8123",
+    "credentials_file": "/absolute/private/site/ha-phone-services.json",
+    "prompts_directory": "/absolute/private/site/alarm-prompts"
+  },
+  "inbound_ring_group": {
+    "enabled": true,
+    "members": ["201", "203", "209"]
+  }
+}

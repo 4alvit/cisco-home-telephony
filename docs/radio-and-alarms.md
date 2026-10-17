@@ -8,6 +8,25 @@ numbers. All features on this page are disabled unless explicitly enabled.
 
 ![Per-call radio and manually stopped alerts](diagrams/radio-services.svg)
 
+## Printable reference
+
+The [four-page English phone reference](../output/pdf/cisco-phone-reference.pdf)
+contains the generic phone-number layout, radio stations, Home Assistant
+controls, the optional **621** incoming group and **641** saved-alarm toggle,
+and optional external test routes including **803** The Test Call. Optional
+numbers require their corresponding configured services; the handout is not
+a claim that every route is enabled. It contains no real room assignments or
+personal device names. Check `cisco directory` for the current private catalog.
+
+Rebuild it from the repository root with Python and ReportLab:
+
+```bash
+python3 scripts/build-phone-reference.py
+```
+
+See [phone services](phone-services.md) for 621/641 setup and
+the [directory guide](phone-directory.md) for private contact exports.
+
 The revised timer/alarm path rings until manual dismissal, without auto-answer
 or after-answer audio. It requires the matching Asterisk, gateway and HA
 updates. Asterisk, the gateway and Home Assistant were deployed and verified

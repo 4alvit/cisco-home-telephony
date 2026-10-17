@@ -104,6 +104,22 @@ def validate(config):
     require(isinstance(config.get('ring_allowlist', ['640']), list)
             and all(number == '640' or number in config['dial_allowlist']
                     for number in config.get('ring_allowlist', ['640'])), 'bad_ring_allowlist', 400)
+    services = config.get('services', [])
+    require(isinstance(services, list) and len(services) <= 128, 'bad_services', 400)
+    service_numbers = set(lines)
+    for entry in services:
+        require(isinstance(entry, dict) and set(entry) == {'number', 'label', 'kind'},
+                'bad_service_metadata', 400)
+        number, label = entry['number'], entry['label']
+        require(isinstance(number, str) and re.fullmatch(r'[0-9]{3,8}', number)
+                and number not in service_numbers and number in config['dial_allowlist'],
+                'duplicate_or_bad_service_number', 400)
+        require(isinstance(label, str) and label == label.strip()
+                and re.fullmatch(r'[A-Za-z0-9][ -~]{0,79}', label), 'bad_service_label', 400)
+        require(isinstance(entry['kind'], str) and entry['kind'] in {
+            'diagnostic', 'group', 'assistant', 'alert', 'radio', 'external', 'automation'},
+            'bad_service_kind', 400)
+        service_numbers.add(number)
     return config
 
 
@@ -147,7 +163,21 @@ class AMI:
                     fields[key] = value.strip()
             if fields.get('ActionID') != action_id:
                 continue
-            require(fields.get('Response') != 'Error', 'ami_action_rejected', 503)
+            if fields.get('Response') == 'Error':
+                # Preserve the public refusal code while exposing only bounded,
+                # non-secret diagnostics to isolated runtime tests. Never copy
+                # raw AMI messages, response fields, or request headers.
+                error = Refused('ami_action_rejected', 503)
+                error.ami_action = name if re.fullmatch(r'[A-Za-z0-9]{1,64}', name) else 'unknown'
+                message = fields.get('Message', '').strip().lower()
+                error.ami_error = {
+                    'authentication failed': 'authentication_failed',
+                    'login already in use': 'login_in_use',
+                    'permission denied': 'permission_denied',
+                    'no endpoints found': 'no_endpoints',
+                    'could not get endpoints': 'endpoints_unavailable',
+                }.get(message, 'unknown_action' if message.startswith('invalid/unknown command:') else 'other')
+                raise error
             results.append(fields)
             if complete and fields.get('Event') == complete:
                 return results
@@ -312,6 +342,8 @@ class Gateway:
             return {'ami_fresh': True, 'observed_at': time.time(),
                     'dial_allowlist': self.config['dial_allowlist'],
                     'ring_allowlist': self.config.get('ring_allowlist', ['640']),
+                    'services': [{key: entry[key] for key in ('number', 'label', 'kind')}
+                                 for entry in self.config.get('services', [])],
                     'softphones': [
                         {'extension': client['extension'], 'room': client.get('room'),
                          'online': endpoints.get(client['extension']) not in (None, 'Unavailable', 'Invalid')}
@@ -418,14 +450,18 @@ class Gateway:
                                 'intercom_id': root, 'speaker_requested': len(attempted) == 2}
                 time.sleep(0.2)
             raise Refused('intercom_setup_timeout', 503)
-        except Exception:
+        except Exception as error:
             self.db.execute("UPDATE intercoms SET state='stopping' WHERE root=?", (root,))
             self.db.commit()
             try:
                 self.stop_intercom(ami, root)
             except Exception:
                 pass  # The background reconciler retains and retries cleanup.
-            raise Refused('intercom_not_connected_check_status', 503) from None
+            refused = Refused('intercom_not_connected_check_status', 503)
+            for key in ('ami_action', 'ami_error'):
+                if hasattr(error, key):
+                    setattr(refused, key, getattr(error, key))
+            raise refused from None
 
     def resource(self, phone, data, content_type):
         now = time.time()

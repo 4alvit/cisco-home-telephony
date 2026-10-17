@@ -27,12 +27,21 @@ cleanup() {
 }
 trap cleanup EXIT
 python3 - "$test_root" <<'PY'
-import json, pathlib, sys
+import json, math, pathlib, struct, sys, wave
 root=pathlib.Path(sys.argv[1])
+(root/'service-credentials.json').write_text(json.dumps({'token':'synthetic_token_'+'x'*40,'entry_id':'a'*32}))
+(root/'prompts').mkdir(mode=0o700)
+for name in ('enabled','disabled','not-configured','not-confirmed'):
+    with wave.open(str(root/'prompts'/(name+'.wav')), 'wb') as output:
+        output.setparams((1,2,8000,0,'NONE','not compressed'))
+        output.writeframes(b''.join(struct.pack('<h',int(8000*math.sin(2*math.pi*440*n/8000))) for n in range(4000)))
 (root/'site.json').write_text(json.dumps({'node_ipv4':'127.0.0.1','lan_cidr':'127.0.0.0/8','ntp_ipv4':'127.0.0.1',
  'phone_cidrs':['127.0.0.1/32','192.168.60.25/32'],
  'radio':{'enabled':True,'stations':['echo'],'max_seconds':30},
  'alarms':{'enabled':True,'duration_seconds':2},
+ 'inbound_ring_group':{'enabled':True,'members':['201']},
+ 'phone_services':{'enabled':True,'home_assistant_url':'http://192.168.50.30:8123',
+ 'credentials_file':str(root/'service-credentials.json'),'prompts_directory':str(root/'prompts')},
  'gateway':{'enabled':True,'ami_client_ipv4':'127.0.0.1'},
  'home_assistant':{'enabled':True,'ami_client_ipv4':'127.0.0.1','allow_originate':True,
  'assist':{'enabled':True,'host_ipv4':'127.0.0.1','sip_port':5061}}}))
@@ -46,6 +55,13 @@ cat >> "$test_root/generated/asterisk/extensions.conf" <<'RADIO'
 exten => 799,1,Answer()
  same => n,MixMonitor(/tmp/radio-smoke.wav)
  same => n,AGI(radio_fixture_agi.py,echo)
+ same => n,StopMixMonitor()
+ same => n,Hangup()
+
+[phone-services-smoke]
+exten => 798,1,Answer()
+ same => n,MixMonitor(/tmp/phone-service-smoke.wav)
+ same => n,AGI(phone_services.py)
  same => n,StopMixMonitor()
  same => n,Hangup()
 RADIO
@@ -92,6 +108,24 @@ docker exec "$container" asterisk -rx 'pjsip show transports' | grep -E 'transpo
 docker exec "$container" asterisk -rx 'dialplan show 600@home' | grep 'Echo' > /dev/null
 docker exec "$container" asterisk -rx 'dialplan show 601@home' | grep 'Milliwatt' > /dev/null
 docker exec "$container" asterisk -rx 'dialplan show 620@home' | grep 'PJSIP/201' > /dev/null
+docker exec "$container" asterisk -rx 'dialplan show 621@home' | grep 'INBOUND_TARGETS' > /dev/null
+docker exec "$container" asterisk -rx 'dialplan show 641@home' | grep -F 'AGI(phone_services.py)' > /dev/null
+docker exec "$container" asterisk -rx 'channel originate Local/798@phone-services-smoke application Wait 2' > /dev/null
+# Local channels are deliberately unauthorized: the real AGI must play the
+# bounded not-confirmed prompt, without contacting HA or mutating an alarm.
+for attempt in {1..10}; do
+  if docker exec "$container" python3 -c "import wave; assert wave.open('/tmp/phone-service-smoke.wav').getnframes() >= 4000" >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+docker exec -i "$container" python3 - <<'PYSERVICE'
+import struct, wave
+with wave.open('/tmp/phone-service-smoke.wav','rb') as recording:
+    assert recording.getframerate()==8000 and recording.getnframes()>=4000
+    data=recording.readframes(recording.getnframes())
+    samples=struct.unpack('<'+'h'*(len(data)//2),data)
+    assert max(abs(x) for x in samples)>100, 'Phone-service AGI prompt is silent'
+print('Phone-service AGI: unauthorized Local channel played bounded failure audio; no HA request.')
+PYSERVICE
 docker exec "$container" asterisk -rx 'module show like chan_pjsip' | grep -E 'chan_pjsip.so.*Running' > /dev/null
 docker exec "$container" asterisk -rx 'module show like codec_opus_open_source' | grep -E 'codec_opus_open_source.so.*Running' > /dev/null
 docker exec "$container" asterisk -rx 'core show translation paths ulaw' | grep -E '\(ulaw@8000\).*\(opus@48000\)' > /dev/null
@@ -171,4 +205,4 @@ docker exec "$tftp_container" timeout 10 tftp 127.0.0.1 -m binary -c get health.
 docker exec "$tftp_container" cat /tmp/health.txt | grep -x 'tftp-smoke-ok' > /dev/null
 ASTERISK_TEST_IMAGE="$prefix/asterisk:22.11.0" ASTERISK_REQUIRE_UNBOUND=1 \
   python3 -m unittest discover -s tests -p test_external_sip.py -v
-echo 'Isolated smoke passed: Asterisk, AMI permissions/actions, G.711/Opus, Assist, radio AGI/AudioSocket, alarm route, and TFTP RRQ.'
+echo 'Isolated smoke passed: Asterisk, AMI permissions/actions, G.711/Opus, Assist, radio AGI/AudioSocket, alarm/phone-service routes and AGI prompt, and TFTP RRQ.'

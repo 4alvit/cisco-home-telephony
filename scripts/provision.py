@@ -18,6 +18,10 @@ _radio_spec = importlib.util.spec_from_file_location(
 _radio = importlib.util.module_from_spec(_radio_spec)
 _radio_spec.loader.exec_module(_radio)
 radio_settings = _radio.settings
+_services_spec = importlib.util.spec_from_file_location(
+    "cisco_phone_services", Path(__file__).resolve().parents[1] / "containers/asterisk/phone_services.py")
+phone_services = importlib.util.module_from_spec(_services_spec)
+_services_spec.loader.exec_module(phone_services)
 _external_spec = importlib.util.spec_from_file_location(
     "cisco_external_sip", Path(__file__).resolve().with_name("external_sip.py"))
 external_sip = importlib.util.module_from_spec(_external_spec)
@@ -68,6 +72,12 @@ def service_dialplan(site):
  same => n,StopPlayTones()
  same => n(done),Hangup()
 ''')
+    if phone_services.enabled(site):
+        routes.append(phone_services.dialplan(site))
+        numbers.append("641")
+    if phone_services.group_settings(site):
+        routes.append(phone_services.group_dialplan(site))
+        numbers.append("621")
     return ''.join(routes), numbers
 
 
@@ -324,6 +334,8 @@ def validate(site, inventory, *, pbx_only=False):
     radio_settings(site)
     alarm_settings(site)
     gateway_settings(site)
+    phone_services.enabled(site)
+    phone_services.group_settings(site)
     external = external_sip.validate(site)
     softphones.validate(site)
     phone_networks(site)
@@ -402,10 +414,12 @@ def validate(site, inventory, *, pbx_only=False):
         else:
             copy["extension"] = normalized_lines[0]["extension"]
         normalized.append(copy)
-    if external and any(account["inbound_target"] and account["inbound_target"] not in seen_ext
+    if external and any(account["inbound_target"] and account["inbound_target"] not in seen_ext | {"621"}
                         for account in external["accounts"]):
         raise ValueError("External SIP inbound target must be a verified local phone line")
-    softphones.validate(site, seen_ext)
+    clients = softphones.validate(site, seen_ext)
+    phone_services.group_settings(site, [phone_lines(p)[0]["extension"] for p in normalized]
+                                  + [client["extension"] for client in clients])
     return normalized, ntp
 
 
@@ -488,6 +502,10 @@ def generate(site, inventory, out, *, pbx_only=False):
     # Resolve private provider credentials before any output is modified.
     external = external_sip.generate(site)
     clients = softphones.validate(site)
+    line_owners = {line["extension"]: phone_lines(p)[0]["extension"] for p in phones for line in phone_lines(p)}
+    services = phone_services.settings(site, line_owners)
+    phone_services.group_settings(site, [phone_lines(p)[0]["extension"] for p in phones]
+                                  + [client["extension"] for client in clients])
     out=Path(out)
     if pbx_only and any((out/name).exists() or (out/name).is_symlink()
                         for name in ("tftp", "secrets.json")):
@@ -642,6 +660,13 @@ documentation_language = en_US
         stale = out / "asterisk/radio.conf"
         if stale.is_symlink():
             raise ValueError("refusing stale radio config symlink")
+        stale.unlink(missing_ok=True)
+    if services:
+        configs["phone-services.conf"] = json.dumps(services, indent=2) + '\n'
+    else:
+        stale = out / "asterisk/phone-services.conf"
+        if stale.is_symlink():
+            raise ValueError("refusing stale phone service config symlink")
         stale.unlink(missing_ok=True)
     assist = ha.get("assist") if ha else None
     if assist:

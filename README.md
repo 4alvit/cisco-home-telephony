@@ -29,6 +29,12 @@ conversion to MPP is not required.
   to separate power/provisioning, SIP registration, call routing, RTP audio and remote control.
 - **Look up a command:** the [CLI reference](docs/cli.md) covers calls, one-time speaker
   intercom, DND, timers, weekday alarms, text and images.
+- **Find a number:** the [combined directory](docs/phone-directory.md) includes
+  phones, enabled radio stations and service shortcuts, with a private contacts export.
+- **Control a saved alarm by calling:** [641 and incoming group 621](docs/phone-services.md)
+  cover spoken confirmations, missing-alarm behavior and private recipient selection.
+- **Use free external SIP services:** the [provider and practice directory](docs/free-voip-directory.md)
+  lists published test menus, account restrictions and the difference between a SIP identity and an incoming telephone number.
 
 ![CLI setup and first-use flow](docs/diagrams/cli-setup-flow.svg)
 

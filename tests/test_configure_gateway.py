@@ -48,7 +48,7 @@ class ConfigureGatewayTests(unittest.TestCase):
         result = self.prepare()
         self.assertEqual(result['phones'][0].pop('room'), 'Living Room')
         self.assertEqual(result.pop('softphones'), [{'extension': '209', 'room': "Operator's Mac"}])
-        self.assertEqual(result['dial_allowlist'], ['201', '202', '209', '600', '601', '620', '630', '640'])
+        self.assertEqual(result['dial_allowlist'], ['201', '202', '209', '600', '601', '620'])
         result['dial_allowlist'].remove('209')
         self.assertEqual(result, original)
         self.assertEqual((self.site, self.inventory, self.callback, self.ami), before)

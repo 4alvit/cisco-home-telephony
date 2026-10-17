@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="940" viewBox="0 0 1440 940" role="img" aria-labelledby="title desc">
+  <title id="title">A private phone and service catalog, with local contact exports</title>
+  <desc id="desc">Validated private phone inventory and enabled service settings generate a read-only authenticated catalog. Phone entries preserve both extensions and their private labels; service entries contain a number, label and kind, without claiming online status. The CLI lists the catalog and an optional helper exports a private JSON or CSV snapshot. Export does not change an address book or enable any dialing permission.</desc>
+  <defs>
+    <style>
+      text { font-family: Arial, Helvetica, sans-serif; fill: #f3f7ff; }
+      .muted { fill: #b9c8dd; }
+      .teal { fill: #54e1ce; }
+      .gold { fill: #ffda7a; }
+      .purple { fill: #c1acff; }
+      .mono { font-family: 'Courier New', monospace; }
+      .card { fill: #172b47; stroke: #324b6c; stroke-width: 2; }
+    </style>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#54e1ce"/></marker>
+  </defs>
+  <rect width="1440" height="940" rx="20" fill="#0e1b31"/>
+  <rect x="48" y="45" width="64" height="6" rx="3" fill="#54e1ce"/>
+  <text x="48" y="100" font-size="39" font-weight="700">One catalog for phones, services and radio</text>
+  <text x="48" y="143" font-size="23" class="muted">Private labels stay private. Enabled routes determine which service numbers appear.</text>
+
+  <rect class="card" x="48" y="195" width="382" height="343" rx="18"/>
+  <text x="74" y="236" font-size="22" class="teal" font-weight="700">VALIDATED SOURCE SETTINGS</text>
+  <text x="74" y="282" font-size="23" font-weight="700">Private phone inventory</text>
+  <text x="74" y="315" font-size="20" class="muted">Both lines + optional room label</text>
+  <text x="74" y="348" font-size="20" class="muted">Declared software clients</text>
+  <path d="M74 373H404" stroke="#324b6c"/>
+  <text x="74" y="414" font-size="23" font-weight="700">Enabled service routes</text>
+  <text x="74" y="447" font-size="20" class="muted">Diagnostics, groups, Assist, alarms</text>
+  <text x="74" y="480" font-size="20" class="muted">Selected radio stations</text>
+  <text x="74" y="513" font-size="20" class="muted">Approved external peer shortcuts</text>
+
+  <path d="M434 365H498" stroke="#54e1ce" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect class="card" x="512" y="195" width="420" height="343" rx="18" style="stroke:#54e1ce"/>
+  <text x="538" y="236" font-size="22" class="teal" font-weight="700">AUTHENTICATED GATEWAY</text>
+  <text x="538" y="280" font-size="24" class="mono">GET /v1/phones</text>
+  <text x="538" y="329" font-size="22" font-weight="700">Phones + softphones</text>
+  <text x="538" y="362" font-size="20" class="muted">Existing identity and status schema</text>
+  <text x="538" y="413" font-size="22" font-weight="700">Separate services array</text>
+  <text x="538" y="448" font-size="21" class="mono">number · label · kind</text>
+  <text x="538" y="482" font-size="20" class="muted">Only allowed, enabled destinations</text>
+  <text x="538" y="514" font-size="20" class="muted">No service online-state claim</text>
+
+  <path d="M936 365H1000" stroke="#54e1ce" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect class="card" x="1014" y="195" width="378" height="343" rx="18" style="stroke:#c1acff"/>
+  <text x="1040" y="236" font-size="22" class="purple" font-weight="700">LOCAL READ-ONLY CLIENTS</text>
+  <text x="1040" y="282" font-size="24" class="mono">cisco directory</text>
+  <text x="1040" y="315" font-size="20" class="muted">Phone status + service labels</text>
+  <text x="1040" y="348" font-size="20" class="muted">Exact numbers remain callable.</text>
+  <path d="M1040 373H1366" stroke="#324b6c"/>
+  <text x="1040" y="414" font-size="23" font-weight="700">Private contact export</text>
+  <text x="1040" y="447" font-size="20" class="muted">JSON with stable contact IDs</text>
+  <text x="1040" y="480" font-size="20" class="muted">CSV with one row per number</text>
+  <text x="1040" y="513" font-size="20" class="muted">New owner-only files; no overwrite</text>
+
+  <rect x="48" y="580" width="1344" height="151" rx="18" fill="#252744" stroke="#66588b" stroke-width="2"/>
+  <text x="74" y="620" font-size="22" class="purple" font-weight="700">EXAMPLE ENTRIES</text>
+  <text x="74" y="662" font-size="25" class="mono">212 / 213 · Example Room F</text>
+  <text x="776" y="662" font-size="25" class="mono">708 · Deti FM: Toddlers</text>
+  <text x="74" y="702" font-size="20" class="muted">One physical phone, two exact lines</text>
+  <text x="776" y="702" font-size="20" class="muted">One radio destination, no phone controls</text>
+
+  <rect x="48" y="764" width="1344" height="109" rx="18" fill="#253046" stroke="#695a38" stroke-width="2"/>
+  <text x="74" y="803" font-size="22" class="gold" font-weight="700">EXPORT AND ADDRESS-BOOK IMPORT ARE SEPARATE ACTIONS</text>
+  <text x="74" y="841" font-size="20">An importer must preserve unrelated contacts and avoid duplicates. Export never changes Zoiper or enables a route.</text>
+  <text x="48" y="913" font-size="18" class="muted">Fictional phone labels only. Keep actual room names, generated catalogs, addresses and credentials outside public Git.</text>
+</svg>

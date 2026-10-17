@@ -5,6 +5,7 @@ The provisioner imports validate/generate/check. The CLI only writes private
 fragments for review. It does not register, call, deploy, or contact a provider.
 """
 import argparse
+import importlib.util
 import ipaddress
 import json
 import os
@@ -12,6 +13,12 @@ from pathlib import Path
 import re
 import stat
 import sys
+
+
+_services_spec = importlib.util.spec_from_file_location(
+    "external_phone_services", Path(__file__).resolve().parents[1] / "containers/asterisk/phone_services.py")
+_phone_services = importlib.util.module_from_spec(_services_spec)
+_services_spec.loader.exec_module(_phone_services)
 
 
 PREFIX = "external-sip-"
@@ -159,8 +166,9 @@ def validate(site):
         if enabled:
             require(provider == "callcentric", "inbound is supported only for reviewed Callcentric source ranges")
             destination = inbound.get("target")
-            require(isinstance(destination, str) and re.fullmatch(r"2[0-9]{2}", destination),
-                    "external SIP inbound target must be one local 200..299 line")
+            require(isinstance(destination, str) and (re.fullmatch(r"2[0-9]{2}", destination)
+                    or destination == "621" and _phone_services.group_settings(site)),
+                    "external SIP inbound target must be one local 200..299 line or enabled group 621")
             sources = _source_cidrs(inbound.get("source_cidrs"), provider)
         active.append({"provider": provider, "domain": spec["domain"], "number": spec["number"],
                        "target": target, "inbound_target": destination, "source_cidrs": sources,
@@ -257,6 +265,10 @@ qualify_frequency=0
         inbound.append(f"[{name}-inbound]")
         if account["inbound_target"]:
             destination = account["inbound_target"]
+            if destination == "621":
+                inbound.append(f"exten => {user},1,Set(TIMEOUT(absolute)=120)\n same => n,Goto(home,621,1)\n")
+                inbound.append("exten => _.,1,Hangup(21)\nexten => s,1,Hangup(21)\nexten => i,1,Hangup(21)\nexten => t,1,Hangup(21)\n")
+                continue
             dnd = site.get("gateway", {}).get("enabled", False) is True
             first = (f'GotoIf($["${{DB(cisco-dnd/{destination})}}" = "1"]?decline)' if dnd
                      else "NoOp(Allowlisted provider inbound)")

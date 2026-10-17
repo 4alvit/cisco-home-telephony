@@ -29,6 +29,23 @@ helper = module('intercom_fixture_helpers', Path(__file__).with_name('test-alert
 need, await_condition = helper.need, helper.await_condition
 
 
+class ObserverAMI:
+    """Never hold an observer login open across a gateway operation."""
+    def __init__(self, secret):
+        self.secret = secret
+
+    def action(self, action, complete=None, **fields):
+        client = helper.AMI(self.secret)
+        try:
+            return client.action(action, complete=complete, **fields)
+        finally:
+            client.close()
+
+    def channels(self):
+        return [frame for frame in self.action('CoreShowChannels', complete='CoreShowChannelsComplete')
+                if frame.get('Event') == 'CoreShowChannel']
+
+
 class Phone(helper.Phone):
     """One loopback phone with two SIP identities and a redirect trap."""
     def __init__(self, address):
@@ -105,7 +122,7 @@ def test_inside():
     need({name for _, name in socket.if_nameindex()} == {'lo'}, 'fixture requires network-none namespace')
     gateway = module('intercom_gateway', Path(__file__).with_name('phone_gateway.py'))
     secret = json.loads(Path('/etc/asterisk/intercom-fixture-secret.json').read_text())
-    ami = helper.AMI(secret)
+    ami = ObserverAMI(secret)
     peers = {'201': Phone('127.0.0.2'), '203': Phone('127.0.0.3')}
     config = {'persistent_enabled': True, 'bind_ipv4': '192.168.50.10', 'api_port': 18084,
               'api_clients': ['192.168.50.11'], 'api_token': 't' * 48,
@@ -197,7 +214,6 @@ def test_inside():
                     server.stop_intercom(cleanup, root)
         finally:
             server.db.close()
-            ami.close()
             for peer in peers.values():
                 peer.close()
 
@@ -262,9 +278,17 @@ def main():
             def ready():
                 response = subprocess.run(docker + ['exec', container, 'asterisk', '-rx', 'dialplan show 202@cisco-intercom'],
                                           capture_output=True, text=True, timeout=5)
-                return 'PJSIP/202,8,i' in response.stdout
+                if 'PJSIP/202,8,i' not in response.stdout:
+                    return False
+                # pbx_config can finish before the PJSIP configuration is
+                # available. A loaded dialplan alone does not make an AMI
+                # endpoint listing safe to use as the first test operation.
+                response = subprocess.run(docker + ['exec', container, 'asterisk', '-rx', 'pjsip show endpoints'],
+                                          capture_output=True, text=True, timeout=5)
+                return all(re.search(r'^\s*Endpoint:\s+' + line + r'/', response.stdout, re.M)
+                           for line in ('201', '202', '203', '204'))
 
-            await_condition(ready, 25, 'generated intercom dialplan loaded')
+            await_condition(ready, 25, 'generated intercom dialplan and endpoints loaded')
             completed = subprocess.run(docker + ['exec', container, 'python3', '/etc/asterisk/test-intercom-originate.py', '--inside'],
                                        capture_output=True, text=True, timeout=65)
             need(completed.returncode == 0, 'isolated intercom regression failed: ' + completed.stdout[-3000:] + completed.stderr[-3000:])
@@ -280,5 +304,6 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as error:
-        print(json.dumps({'status': 'FAIL', 'error': str(error)}), flush=True)
+        diagnostics = {key: getattr(error, key) for key in ('ami_action', 'ami_error') if hasattr(error, key)}
+        print(json.dumps({'status': 'FAIL', 'error': str(error), **diagnostics}), flush=True)
         raise SystemExit(1)

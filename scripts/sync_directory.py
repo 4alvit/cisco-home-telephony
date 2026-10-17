@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Render directory metadata into a new gateway file without rotating credentials.
 
-Only room names and read-only softphone metadata may change. Physical identities,
-callbacks, tokens, API access, AMI settings and dial permissions remain unchanged.
+By default only room names and read-only softphone/service metadata may change.
+The explicit --sync-services option also reconciles known service permissions.
+Physical identities, local-line permissions, callbacks, tokens and API access stay unchanged.
 """
 import argparse
 import copy
@@ -12,10 +13,11 @@ from pathlib import Path
 
 from phone_control import write_new
 import provision
+import service_catalog
 from render_gateway import gateway
 
 
-def update(site, inventory, existing):
+def update(site, inventory, existing, *, sync_services=False):
     phones, _ = provision.validate(site, inventory)
     gateway.validate(existing)
     mapped = {phone['device']: phone for phone in existing['phones']}
@@ -44,6 +46,25 @@ def update(site, inventory, existing):
     metadata = [{'extension': client['extension'], 'room': client.get('room')} for client in clients]
     if metadata or 'softphones' in result:
         result['softphones'] = metadata
+    services = service_catalog.build(
+        site, has_phones=bool(phones),
+        local_numbers=extensions + [client['extension'] for client in clients],
+        line_owners={line['extension']: provision.phone_lines(phone)[0]['extension']
+                     for phone in phones for line in provision.phone_lines(phone)},
+        group_members=[provision.phone_lines(phone)[0]['extension'] for phone in phones]
+                      + [client['extension'] for client in clients],
+        allowed_numbers=None if sync_services else existing['dial_allowlist'])
+    if sync_services:
+        known = service_catalog.managed_numbers()
+        enabled = {entry['number'] for entry in services}
+        # Preserve restrictions on local extensions and unrelated custom routes.
+        # Only the explicitly managed service codes may be removed or added.
+        result['dial_allowlist'] = [number for number in existing['dial_allowlist']
+                                    if number not in known or number in enabled]
+        result['dial_allowlist'].extend(sorted(enabled - set(result['dial_allowlist']), key=int))
+        result['ring_allowlist'] = [number for number in existing.get('ring_allowlist', ['640'])
+                                    if number not in known or number in enabled]
+    result['services'] = services
     return gateway.validate(result)
 
 
@@ -53,12 +74,18 @@ def main():
     parser.add_argument('--phones', type=Path, required=True)
     parser.add_argument('--gateway', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--sync-services', action='store_true',
+                        help='explicitly reconcile enabled managed service permissions; preserve local-line restrictions')
     args = parser.parse_args()
     os.umask(0o077)
     result = update(json.loads(args.site.read_text()), json.loads(args.phones.read_text()),
-                    json.loads(args.gateway.read_text()))
+                    json.loads(args.gateway.read_text()), sync_services=args.sync_services)
     write_new(args.output, (json.dumps(result, indent=2) + '\n').encode())
-    print('New private gateway directory rendered; credentials, callbacks and dial permissions are unchanged.')
+    if args.sync_services:
+        print('New private gateway directory rendered with synchronized service permissions; '
+              'credentials, callbacks and local-line permissions are unchanged.')
+    else:
+        print('New private gateway directory rendered; credentials, callbacks and dial permissions are unchanged.')
 
 
 if __name__ == '__main__':

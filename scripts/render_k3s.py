@@ -33,7 +33,7 @@ def validate_site(site, with_tftp=False):
         raise ValueError("home_assistant must be an object with boolean enabled")
     if not isinstance(ha.get("assist", {}), dict):
         raise ValueError("home_assistant.assist must be an object")
-    for key in ("radio", "gateway", "alarms", "external_sip"):
+    for key in ("radio", "gateway", "alarms", "external_sip", "phone_services", "inbound_ring_group"):
         config = site.get(key, {})
         if not isinstance(config, dict) or type(config.get("enabled", False)) is not bool:
             raise ValueError(f"{key} must be an object with boolean enabled")
@@ -263,6 +263,15 @@ def render_core(site, configs):
             "; test -x /var/lib/asterisk/agi-bin/radio.py; command -v ffmpeg >/dev/null"
             "; asterisk -rx 'module show like app_audiosocket'"
             " | grep -Eq '^[[:space:]]*app_audiosocket[.]so[[:space:]].*[[:space:]][0-9]+[[:space:]]+Running([[:space:]]|$)'"
+        )
+    if site.get("phone_services", {}).get("enabled"):
+        probe = spec["containers"][0]["readinessProbe"]
+        probe["timeoutSeconds"] = 5
+        probe["exec"]["command"][2] += (
+            "; test -x /var/lib/asterisk/agi-bin/phone_services.py"
+            "; test -r /etc/asterisk/phone-services.conf"
+            "; asterisk -rx 'module show like res_agi'"
+            " | grep -Eq '^[[:space:]]*res_agi[.]so[[:space:]].*[[:space:]][0-9]+[[:space:]]+Running([[:space:]]|$)'"
         )
     if site.get("external_sip", {}).get("enabled"):
         probe = spec["containers"][0]["readinessProbe"]

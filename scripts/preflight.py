@@ -10,10 +10,10 @@ import sys
 import xml.etree.ElementTree as ET
 from render_k3s import load_site, read_files, read_wallpaper, render_core, render_tftp
 from verify_firmware import verify as verify_firmware
-from provision import ha_settings, phone_networks, local_networks, radio_settings, service_dialplan, gateway_settings, external_sip, alert_dialplan, intercom_dialplan, softphones
+from provision import ha_settings, phone_networks, local_networks, radio_settings, service_dialplan, gateway_settings, external_sip, alert_dialplan, intercom_dialplan, softphones, phone_services, phone_lines
 
 
-def check_service_config(site, configs):
+def check_service_config(site, configs, inventory=None):
     expected = radio_settings(site)
     actual = json.loads(configs["radio.conf"]) if "radio.conf" in configs else None
     if expected != actual:
@@ -28,6 +28,29 @@ def check_service_config(site, configs):
         raise ValueError("Disabled alarms have stale routes; rerun provision.py")
     generic = {client['extension'] for client in softphones.validate(site)}
     extensions = sorted(set(re.findall(r'^\[(2[0-9]{2})\]$', configs.get('pjsip.conf', ''), re.M)) - generic)
+    service_config = json.loads(configs["phone-services.conf"]) if "phone-services.conf" in configs else None
+    if phone_services.enabled(site):
+        owners = service_config.get("line_owners", {}) if isinstance(service_config, dict) else {}
+        if (set(owners) != set(extensions) or any(primary not in owners or owners[primary] != primary
+                                                for primary in owners.values())):
+            raise ValueError("Phone service inventory differs from local endpoints; rerun provision.py")
+        if inventory is not None:
+            expected_owners = {str(line["extension"]): str(phone_lines(phone)[0]["extension"])
+                               for phone in inventory["phones"] for line in phone_lines(phone)}
+            if owners != expected_owners:
+                raise ValueError("Phone service ownership differs from inventory; rerun provision.py")
+        if service_config != phone_services.settings(site, owners):
+            raise ValueError("Phone service inputs differ from generated config; rerun provision.py")
+    elif service_config is not None or "AGI(phone_services.py)" in dialplan or "exten => 641," in dialplan:
+        raise ValueError("Disabled phone services have stale configuration; rerun provision.py")
+    group_candidates = ([str(phone_lines(phone)[0]["extension"]) for phone in inventory["phones"]]
+                        if inventory is not None else extensions) + list(generic)
+    if phone_services.group_settings(site, group_candidates) is None and "exten => 621," in dialplan:
+        raise ValueError("Disabled inbound ring group has a stale route; rerun provision.py")
+    for number, feature in (("621", bool(phone_services.group_settings(site))),
+                            ("641", phone_services.enabled(site))):
+        if feature and len(re.findall(r"^exten => " + number + r",1,", dialplan, re.M)) != 1:
+            raise ValueError("Phone service route is missing or duplicated; rerun provision.py")
     alerts = alert_dialplan(site, extensions)
     if alerts and dialplan.count(alerts) != 1:
         raise ValueError('Alert helper differs from inventoried endpoints; rerun provision.py')
@@ -163,7 +186,9 @@ def main():
         configs = read_files(root / "asterisk", ".conf")
         check_phone_config(site, configs)
         check_ha_config(site, configs)
-        check_service_config(site, configs)
+        inventory = (json.loads((root / "phones.json").read_text())
+                     if phone_services.enabled(site) or phone_services.group_settings(site) else None)
+        check_service_config(site, configs, inventory)
         render_core(site, configs)
         if args.with_tftp:
             xmls = read_files(root / "tftp", ".xml")

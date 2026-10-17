@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import secrets
 import softphones
+import service_catalog
 
 from phone_control import load_config, write_new
 from render_gateway import gateway
@@ -42,13 +43,18 @@ def prepare(site, inventory, callbacks, ami, clients, api_port=18084):
         phones.append(phone)
     clients_metadata = [{'extension': client['extension'], 'room': client.get('room')}
                         for client in softphones.validate(site, [line for phone in phones for line in phone['lines']])]
-    numbers = ([line for phone in phones for line in phone['lines']]
-               + [client['extension'] for client in clients_metadata]
-               + ['600', '601', '620', '630', '640'])
+    local_numbers = ([line for phone in phones for line in phone['lines']]
+                     + [client['extension'] for client in clients_metadata])
+    services = service_catalog.build(site, has_phones=bool(phones), local_numbers=local_numbers,
+                                     line_owners={line: phone['id'] for phone in phones for line in phone['lines']},
+                                     group_members=[phone['id'] for phone in phones]
+                                     + [client['extension'] for client in clients_metadata])
+    numbers = local_numbers + [entry['number'] for entry in services]
     result = {'persistent_enabled': True, 'bind_ipv4': site['node_ipv4'], 'api_port': api_port,
               'api_clients': clients, 'api_token': secrets.token_urlsafe(36),
               'ami': {'host': site['node_ipv4'], 'port': 5038, 'username': ami['username'], 'secret': ami['secret']},
-              'phones': phones, 'dial_allowlist': numbers, 'ring_allowlist': ['640']}
+              'phones': phones, 'dial_allowlist': numbers,
+              'ring_allowlist': ['640'] if '640' in numbers else [], 'services': services}
     if clients_metadata:
         result['softphones'] = clients_metadata
     return gateway.validate(result)
