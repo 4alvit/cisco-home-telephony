@@ -77,6 +77,62 @@ class ExternalSipTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             external.generate(self.site)
 
+    def test_null_target_registers_all_providers_without_outbound_routes(self):
+        for provider in external.PROVIDERS:
+            with self.subTest(provider=provider):
+                account = self.site['external_sip']['accounts'][0]
+                account.update(provider=provider, target=None)
+                result = external.generate(self.site)
+                self.assertEqual(result['numbers'], [])
+                self.assertIn(f'[external-sip-{provider}-registration]', result['pjsip'])
+                self.assertIn('type=registration', result['pjsip'])
+                self.assertNotIn('Dial(', result['dialplan'])
+                self.assertNotIn(f"exten => {external.PROVIDERS[provider]['number']},", result['dialplan'])
+                self.assertIn('Hangup(21)', result['dialplan'])
+
+    def test_linphone_missing_target_registers_without_guessing_peer(self):
+        self.site['external_sip']['accounts'][0]['provider'] = 'linphone'
+        result = external.generate(self.site)
+        self.assertEqual(result['numbers'], [])
+        self.assertIn('[external-sip-linphone-registration]', result['pjsip'])
+        self.assertNotIn('Dial(', result['dialplan'])
+
+    def test_null_target_is_not_false_empty_or_an_unsafe_type(self):
+        for target in ['', False, 0, [], {}]:
+            with self.subTest(target=target):
+                self.site['external_sip']['accounts'][0]['target'] = target
+                with self.assertRaises(ValueError):
+                    external.generate(self.site)
+
+    def test_registration_only_provision_keeps_phone_dialplan_unchanged(self):
+        scripts = str(Path(__file__).parents[1] / 'scripts')
+        sys.path.insert(0, scripts)
+        try:
+            import provision
+            import preflight
+        finally:
+            sys.path.remove(scripts)
+        self.site['ntp_ipv4'] = '192.168.50.1'
+        account = self.site['external_sip']['accounts'][0]
+        account['provider'] = 'sip2sip'
+        inventory = {'phones': [{'model': 'CP-7945G', 'verified': True, 'mac': '020000000001',
+                                'extension': '201', 'label': 'Office', 'firmware_load': 'SIP45.9-4-2SR4-3S'}]}
+        output = self.root / 'generated'
+        provision.generate(self.site, inventory, output)
+        before = {p.name: p.read_bytes() for p in (output / 'tftp').glob('*') if p.is_file()}
+        self.site['external_sip']['accounts'] += [
+            {'provider': provider, 'enabled': True, 'target': None,
+             'credentials_file': str(self.credential)} for provider in ['callcentric', 'linphone']]
+        provision.generate(self.site, inventory, output)
+        after = {p.name: p.read_bytes() for p in (output / 'tftp').glob('*') if p.is_file()}
+        self.assertEqual(before, after)
+        configs = {p.name: p.read_text() for p in (output / 'asterisk').glob('*.conf')}
+        preflight.check_phone_config(self.site, configs)
+        external.check(self.site, configs)
+        self.assertIn('exten => 802,', configs['extensions.conf'])
+        for number in ['801', '803']:
+            self.assertNotIn(f'exten => {number},', configs['extensions.conf'])
+
     def test_password_injection_is_rejected_without_echoing_secret(self):
         for password in ['safe_enough_123;evil', 'safe_enough_123\n[evil]', 'safe_enough_123\\evil', 'short']:
             self.credential.write_text(json.dumps({'username': '17770000001', 'password': password}))
@@ -238,6 +294,24 @@ class ExternalSipRuntimeTest(unittest.TestCase):
                 endpoint = subprocess.run(docker + ['exec', container, 'asterisk', '-rx', 'pjsip show endpoint external-sip-' + provider], capture_output=True, text=True, check=True)
                 self.assertIn('external-sip-' + provider, endpoint.stdout)
                 self.assertNotIn('Unable to find object', endpoint.stdout)
+            # Keep registrations/endpoints loaded while removing the blocked
+            # Callcentric and peerless Linphone routes, matching the live pilot.
+            for account in self.site['external_sip']['accounts']:
+                if account['provider'] in ('callcentric', 'linphone'):
+                    account['target'] = None
+            registration_only = external.generate(self.site)
+            self.assertEqual(registration_only['pjsip'], result['pjsip'])
+            (folder / 'extensions.conf').write_text('[general]\nstatic=yes\n[home]\nexten => 600,1,Hangup()\nexten => _X!,1,Hangup(1)\n' + registration_only['dialplan'])
+            subprocess.run(docker + ['cp', str(folder / 'extensions.conf'), container + ':/etc/asterisk/extensions.conf'], capture_output=True, check=True)
+            subprocess.run(docker + ['exec', container, 'asterisk', '-rx', 'dialplan reload'], capture_output=True, check=True)
+            for number in ['801', '802', '803']:
+                route = subprocess.run(docker + ['exec', container, 'asterisk', '-rx', 'dialplan show ' + number + '@home'], capture_output=True, text=True, check=True)
+                if number == '802':
+                    self.assertIn('Dial(', route.stdout)
+                else:
+                    self.assertIn('Hangup(1)', route.stdout)
+                    self.assertNotIn("'" + number + "' =>", route.stdout)
+                    self.assertNotIn('Dial(', route.stdout)
             registrations = subprocess.run(docker + ['exec', container, 'asterisk', '-rx', 'pjsip show registrations'], capture_output=True, text=True, check=True)
             self.assertIn('Objects found: 3', registrations.stdout)
             if os.environ.get('ASTERISK_REQUIRE_UNBOUND') == '1':

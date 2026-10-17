@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 750" role="img" aria-labelledby="title desc">
+<title id="title">Home Assistant phone control, alarms and private notifications</title>
+<desc id="desc">Home Assistant schedules alarms and sends authenticated requests to a local gateway. Fresh Asterisk call identity guards dial, answer and hangup operations. Four Cisco phones authenticate callbacks on separate source-restricted ports. Text and resized images remain on the private network.</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0 0L8 4L0 8Z" fill="#59d9cc"/></marker></defs>
+<rect width="1240" height="750" fill="#112338"/>
+<g font-family="Arial, sans-serif" fill="#f3f7fb">
+<text x="44" y="57" font-size="32" font-weight="700">Home Assistant controls every phone</text>
+<text x="44" y="91" font-size="19" fill="#b6cadd">Private network · explicit actions · fresh call identity · persistent alarm settings</text>
+<g fill="#1c3650" stroke="#59d9cc" stroke-width="2">
+<rect x="44" y="146" width="318" height="242" rx="14"/>
+<rect x="446" y="146" width="350" height="242" rx="14"/>
+<rect x="880" y="146" width="316" height="242" rx="14"/>
+</g>
+<g stroke="#59d9cc" stroke-width="3" marker-end="url(#arrow)"><path d="M364 262H437"/><path d="M798 262H871"/><path d="M620 390V462"/></g>
+<text x="68" y="183" font-size="24" font-weight="700">Home Assistant</text>
+<text x="68" y="224" font-size="19">Alarm time + selected weekdays</text>
+<text x="68" y="258" font-size="19">Timer duration + start / cancel</text>
+<text x="68" y="292" font-size="19">Dial · answer · hang up · DND</text>
+<text x="68" y="326" font-size="19">Text pages + local photos</text>
+<text x="68" y="364" font-size="16" fill="#b6cadd">Source restriction + bearer token</text>
+<text x="470" y="183" font-size="24" font-weight="700">Local phone gateway</text>
+<text x="470" y="224" font-size="19">Allowlisted numbers and actions</text>
+<text x="470" y="258" font-size="19">Durable operation IDs prevent retries</text>
+<text x="470" y="292" font-size="19">Idle / ringing / DND checks</text>
+<text x="470" y="326" font-size="19">Opt-in auto-answer; off by default</text>
+<text x="470" y="364" font-size="16" fill="#b6cadd">Separate AMI account · no CLI privilege</text>
+<text x="904" y="183" font-size="24" font-weight="700">Asterisk</text>
+<text x="904" y="224" font-size="19">Eight registered lines: 201-208</text>
+<text x="904" y="258" font-size="19">Exact channel + Uniqueid</text>
+<text x="904" y="292" font-size="19">DND blocks direct/group calls</text>
+<text x="904" y="326" font-size="19">640 alarm · 701-707 radio</text>
+<text x="904" y="364" font-size="16" fill="#b6cadd">630 Assist uses existing Silero Baya</text>
+<rect x="44" y="472" width="1152" height="178" rx="14" fill="#1c3650" stroke="#edc26c" stroke-width="2"/>
+<text x="68" y="513" font-size="25" font-weight="700" fill="#edc26c">Four Cisco 7945G phones</text>
+<text x="68" y="552" font-size="19">Each phone has its own authentication callback, random credentials and exact source IP.</text>
+<text x="68" y="585" font-size="19">Text / PNG pages are served only to the intended phone. Pictures fit a 298 × 156 pixel Services pane.</text>
+<text x="68" y="618" font-size="18" fill="#b6cadd">Press Exit to dismiss a page. Speaker toggles a physical key; its hardware state is not invented in HA.</text>
+<text x="44" y="697" font-size="18" fill="#b6cadd">Local display notifications are not SMS/MMS. Free SIP accounts do not provide unrestricted free PSTN calling.</text>
+<text x="44" y="726" font-size="17" fill="#b6cadd">No public gateway endpoint · no automatic replay after ambiguous failures · no account secrets in the public repository</text>
+</g></svg>

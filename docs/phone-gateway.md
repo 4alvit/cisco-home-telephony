@@ -1,5 +1,7 @@
 # Persistent phone control from Home Assistant
 
+![Private phone control architecture](diagrams/phone-control.svg)
+
 The optional gateway connects HA to the existing local Cisco phones. It supports
 numeric dialing, answering a selected ringing line, exact-channel hangup,
 explicit speaker-button toggling, PBX Do Not Disturb, opt-in auto-answer, text
@@ -56,7 +58,14 @@ Review host firewall changes before applying. The API port (default TCP18084)
 admits the actual HA source. The node itself may complete TCP health probes;
 HTTP API requests still require the HA source and bearer token. Each callback
 port admits only its exact phone IP. Keep the dedicated AMI account restricted to the node's
-source address. The gateway uses host networking; ordinary Kubernetes network
+source address. Also admit that exact node `/32` to **TCP 5038 in the host's raw
+telephony guard**, alongside the existing HA exception. A connection from the
+node to its own private address can traverse local/loopback routing and still
+be blocked by raw PREROUTING; host networking does not bypass that rule. Match
+the gateway's actual source address rather than opening AMI to a subnet or all
+loopback traffic. Asterisk's AMI user ACL must independently permit the same
+source. A healthy gateway TCP listener does not prove its AMI connection works;
+verify authenticated inventory/state requests too. Ordinary Kubernetes network
 policy alone does not provide this boundary.
 
 `scripts/gateway_firewall.py` manages only its own `CISCO_PHONE_MGMT` INPUT

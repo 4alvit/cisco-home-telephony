@@ -108,6 +108,20 @@ To disable radio, set `radio.enabled` to `false`, regenerate and redeploy at an
 idle window. The generator removes stale runtime radio configuration and
 routes. Do not remove or regenerate unrelated secret files.
 
+## Live network verification
+
+On **2026-10-17**, all seven catalog stations also passed a passive probe inside
+our running Asterisk pod, using its installed worker and FFmpeg 5.1.9. Each
+station produced 251 nonzero-signal PCM frames, about five seconds of audio,
+through a synthetic loopback AudioSocket session. Every probe released its
+concurrency slot, stopped its worker thread and reaped its exact FFmpeg child.
+The installed worker and catalog hashes matched the repository sources.
+
+This verifies stream reachability and decoding from the deployed network.
+The probes created no Asterisk calls and saved no audio. They do not establish
+AGI dialplan execution, SIP/RTP delivery, speaker output, or human audibility on
+a physical phone. Those still require the separate handset checks above.
+
 ## Audio and network lifecycle
 
 An AGI process starts for one station ID. It acquires a local concurrency slot,
@@ -167,8 +181,9 @@ Timeout: 20000
 Async: true
 ```
 
-The phone rings normally for at most 20 seconds and must be answered. It is not
-configured for remote auto-answer. The scheduler/gateway must check a fresh
+By default, the phone rings normally for at most 20 seconds and must be
+answered. Optional per-phone auto-answer can be enabled explicitly through the
+gateway; it is off by default. The scheduler/gateway must check a fresh
 registered, idle endpoint and DND state immediately before originating. Busy,
 unregistered, DND or missed alarms must be reported rather than interrupting
 another call or retrying indefinitely. Test one immediate alarm before enabling

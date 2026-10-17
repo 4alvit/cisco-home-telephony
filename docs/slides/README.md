@@ -2,12 +2,13 @@
 
 [Open PDF](cisco-home-telephony.pdf) · [Download editable PowerPoint](cisco-home-telephony.pptx)
 
-![Overview of all 14 slides](preview.webp)
+![Overview of all 18 slides](preview.webp)
 
-14 English slides cover the purchased batch of ten 7945G phones, home network
+18 English slides cover the purchased batch of ten 7945G phones, home network
 architecture, PoE, SCCP/SIP conversion, TFTP, Asterisk PJSIP, Home Assistant over
 AMI, Assist on extension 630 with G.711 ↔ Opus, deployment, call acceptance,
-backups and batch rollout. PPTX labels and diagrams are editable objects.
+backups and batch rollout. Four new slides cover eight lines on four phones,
+120 Home Assistant control entities, alarms and radio, and free SIP account status. PPTX labels and diagrams are editable objects.
 Speaker notes link to primary sources. The PDF is suitable for reading and printing.
 
 The presentation accompanies the [k3s runbook](../k3s-deployment.md),
@@ -19,10 +20,11 @@ packages, dashboard, installation and acceptance procedures live in the
 Before flashing, check each phone's App Load and hardware revision. HW 13.0+
 must not run firmware below 9.3(1)SR3. Follow the chosen release's upgrade notes.
 
-The slides distinguish server preparation from adding verified hardware and
-physical acceptance. They do not establish that home deployment or a real call
-has been completed. Successful container/runtime checks do not replace tests of
-two-way audio, DTMF, call control and Assist on physical phones.
+The slides distinguish implemented features, verified local call results and
+remaining live acceptance. The status snapshot reflects October 17, 2026.
+Account activation does not establish SIP registration or working external audio.
+Successful container/runtime checks do not replace human-audible phone tests.
+See the [dated validation record](../server-validation.md) for detailed results.
 
 ## Sources
 

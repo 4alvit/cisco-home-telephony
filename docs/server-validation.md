@@ -1,16 +1,18 @@
 # Live server validation — October 17, 2026
 
-The server is installed in the existing home k3s cluster. Three physical 7945G
-phones powered through PoE have converted from SCCP to SIP and independently
-registered **201–206**. The operator confirmed handset echo on **201 → 600**
-and Russian spoken replies from Assist on **201 → 630**. Each of **203–206**
-also passed an active Echo call, bidirectional RTP and HA Hangup checks. The
-operator reports that the second and third phones work well; this does not
-establish spoken Assist acceptance for their new caller identities. Native
-VoIP discovery, call permissions and pipeline settings for **203/205** passed
-verification. A fourth phone has requested its new **207/208** profile, with
-SIP verification still pending. Speakerphone, DTMF and
-calls between two phones require separate acceptance testing.
+The server is installed in the existing home k3s cluster. Four physical 7945G
+phones powered through PoE have converted from SCCP to SIP and registered
+**201–208**, with two lines per phone. The operator confirmed handset echo on
+**201 → 600**, Russian spoken Assist replies on **201 → 630**, and that the
+second and third phones work well. Active call checks also verified the other
+lines, while native VoIP discovery and Assist pipeline selection were checked
+for all four primary identities, **201/203/205/207**.
+
+The records below distinguish human audio confirmation, observed live calls,
+configuration checks and isolated tests. A registration or successful control
+request alone does not prove that someone heard audio. Subsequent service
+expansion and acceptance results are recorded separately from initial
+commissioning.
 
 ## Verified on the live system
 
@@ -23,7 +25,8 @@ calls between two phones require separate acceptance testing.
 - Readiness checks both SIP transports, AMI LISTEN on the configured IPv4:5038,
   Opus, and the Assist endpoint/route. Successful rollout does not replace a call.
 - Persistent firewall restrictions on PBX and HA nodes, including IPv6. Only the
-  actual HA source can reach AMI; access from the workstation was rejected.
+  actual HA source and the explicitly admitted local phone-gateway source can
+  reach AMI; access from the workstation was rejected.
   Other firewall rules were preserved. TFTP is closed during ordinary operation;
   the separately controlled commissioning windows are described below.
 - Pinned TECH7Fox integration **1.0.5** installed in existing **Home Assistant
@@ -48,7 +51,7 @@ calls between two phones require separate acceptance testing.
   the three mapped Connected Line/DTMF sensors. The original main configuration
   and Recorder include files were unchanged.
 
-Images were built on a standard GitHub `ubuntu-24.04` runner and passed
+The initial commissioning images were built on a standard GitHub `ubuntu-24.04` runner and passed
 [native AMD64 build and isolated smoke tests](https://github.com/4alvit/cisco-home-telephony/actions/runs/39029793014)
 from commit `f5cb1546ed93c53d4792817d0bb1ba0f3a929821`. Archive checksums,
 architecture and registry manifest/config digests were checked before deployment.
@@ -235,22 +238,37 @@ completed, that TFTP Job was deleted. Any later window needs its own exact
 phone scope and cleanup plan; old timers must not close a newer session.
 See [the repeatable expansion runbook](adding-phones.md) for the full procedure.
 
-## Fourth phone: profile requested, SIP verification pending
+## Fourth phone: SIP, wallpaper and remote management verified
 
-A fourth CP-7945G was identified through independent device and network
-observations. Its mapping is **207/208**. The isolated configuration candidate,
-scoped DHCP changes and exact-source firewall migration preserved the three
-working phones and their credentials. The four-phone PBX configuration was
-deployed at **19:40 UTC**, and all **16 served-file hashes** matched the prepared
-files. After the user confirmed erasing its old ITL, the phone automatically
-received the new DHCP/TFTP settings and requested the plain SEP profile.
-**No additional PoE cycle was performed on this phone.**
+The fourth CP-7945G, hardware revision13.0, now runs
+**SIP45.9-4-2SR4-3S** and registers **207/208**. Its old ITL was erased by the
+operator; DHCP/TFTP then delivered the prepared profile and signed firmware.
+No additional PoE cycle or factory reset was performed. All16 served-file
+hashes matched the prepared files. The temporary TFTP Job was removed after
+transfer/flash completion and the normal closed-TFTP firewall policy restored.
 
-At this checkpoint, its final SIP load, two authenticated registrations,
-wallpaper, remote management,
-Echo/HA Hangup and native Assist have **not yet been verified**. The
-[four-phone diagram](diagrams/four-phones.svg) describes the intended
-architecture, not completed acceptance.
+Both lines passed separate **600/Echo** tests with the correct originating
+identity, bidirectional RTP, zero reported loss in the observed samples and
+exact-channel HA Hangup. Authenticated screenshots confirmed the saved
+LakeDawn wallpaper and numeric line labels. Two-stage SSH authentication and
+independently pinned host-key checks passed.
+
+HA now includes all eight line mappings and12 telephony scripts while preserving
+224 pre-existing script/automation entities and67 Recorder exclusions. A first
+630 call discovered the real native207 identity, which was explicitly enabled.
+The older phone voice profile selected a male Chatterbox voice. All four primary
+identities **201/203/205/207** now select the existing **Local Russian Home**
+pipeline, whose backend voice is **Silero Baya**. The Echo devices and global
+pipeline definitions were preserved. Selecting the voice is distinct from
+human-audible acceptance of a new call. HA-originated Assist calls on
+**203/205/207** subsequently passed: actual incoming Ringing state, one guarded
+answer, the630 route, native satellite listening, bidirectional RTP with zero
+reported loss, and exact-channel HA Hangup. The last check ended at
+**19:54:22 UTC**, with all eight lines idle and zero active PBX calls.
+
+The [four-phone diagram](diagrams/four-phones.svg) shows the installed topology.
+The extended radio/control deployment is documented separately and must be
+verified after its new container image is installed.
 
 ## Remaining acceptance
 
@@ -260,14 +278,13 @@ architecture, not completed acceptance.
    underlying HA scripts have passed live Originate/Hangup tests.
 3. Complete human-audible Assist tests for **203/205** using their verified
    native VoIP permissions and pipeline settings.
-4. Verify **207/208** registration and per-line Echo/HA Hangup, then wallpaper,
-   remote management and the intended native Assist identity on the fourth phone.
+4. Confirm a spoken request and audible Silero Baya reply from the fourth phone.
 5. Test calls between physical phones in both directions, two-way audio, DTMF,
    hold/transfer and group ringing. Echo calls do not replace these checks.
 6. Repeat relevant tests after controlled phone/PBX restarts and AMI
    reconnection, then commission the remaining phones in small groups.
 
-The six registered lines and service endpoint `ha-assist` do not establish that
+The eight registered lines and service endpoint `ha-assist` do not establish that
 the whole batch is ready. A working transcoder and listening socket do not prove
 network quality on another phone. Human-confirmed Russian Assist applies to
 the pilot and its selected pipeline; the per-line RTP and call-control results

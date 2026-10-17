@@ -11,3 +11,6 @@ node_modules/
 .build/
 
 .slides-build/
+
+# Local PDF render previews
+tmp/pdfs/

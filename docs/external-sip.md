@@ -1,11 +1,20 @@
 # Optional external SIP accounts
 
 The provisioner supports three **disabled-by-default, SIP-network-only** account
-profiles. These are prepared configuration, not evidence of a registered account
-or a successful external call. No provider account was created and no external
-call was made for this implementation. See the [research and current cost
-boundaries](extended-services-research.md) for provider terms checked on
-2026-10-17.
+profiles. Generated configuration alone does not prove provider registration or
+a successful external call. As of **2026-10-17**, a SIP2SIP account has been
+created and its settings email received; live SIP registration and two-way audio
+still require the deployment acceptance below. A Callcentric IP Freedom account
+was created at $0, but its provider risk review currently blocks outbound calls
+and account changes. No support ticket was automatically opened and no support
+message has been sent. Linphone email activation is complete; no verified fixed
+test peer has been selected. Both can be staged for registration only, without
+801/803 call routes. A relaunched FWD account was created,
+but calling requires identity verification whose next step presented a
+**Verification Fee** checkout; no payment or identity document was supplied, and
+no FWD profile is enabled. Account identifiers and credentials remain private.
+See the [research and current cost boundaries](extended-services-research.md)
+for provider terms and limitations.
 
 ## Routes and account requirements
 
@@ -26,13 +35,21 @@ boundaries](extended-services-research.md) for provider terms checked on
   verification. Third-party SIP devices are supported by the service.
   [Official FAQ](https://www.linphone.org/en/faq/).
 
-Only enabled profiles add their number to Asterisk and the Cisco exact-match
-`dialplan.xml`. Each profile has one fixed destination. Callcentric destinations
+Only enabled profiles with a non-null target add their number to Asterisk and
+the Cisco exact-match `dialplan.xml`. Each call route has one fixed destination. Callcentric destinations
 must be `1777…` account identifiers; SIP2SIP allows its documented test numbers
 or a letter-first peer name; Linphone allows a letter-first peer name. These
 conservative constraints intentionally exclude some numeric SIP usernames.
 Arbitrary URIs, dial strings, PSTN numbers and caller-supplied routing expressions
 are rejected. Do not select a peer whose forwarding behavior you have not reviewed.
+
+Set an account's `"target": null` to generate its SIP registration and endpoint
+without an outbound call route or phone dialplan entry. This supports credential
+and registration checks while a provider review or a verified peer is pending.
+Omitting `target` preserves the Callcentric and SIP2SIP test defaults; for
+Linphone, omitting it also means registration only. Inbound is a separate opt-in
+setting and must remain disabled for a registration-only pilot. A missing route
+is not a provider-wide calling ban for an administrator with direct AMI/CLI access.
 
 ## Prepare private configuration
 
@@ -61,7 +78,7 @@ could alter Asterisk configuration. Set/reset a compatible SIP password at the
 provider if necessary; do not silently change an existing password before using
 it. Use the SIP password, which may differ from the provider website password.
 
-After adding the real account, reviewed target, public IPv4 and network plan,
+After adding the real account, reviewed target (or explicit null), public IPv4 and network plan,
 enable the global switch and only that account. This local preparation command
 creates two mode-0600 fragments in a new mode-0700 directory and makes **no
 network connections**:
@@ -161,6 +178,8 @@ for an actual incoming pilot are a separate, explicit network operation.
 4. Read `pjsip show registrations`, `pjsip show endpoint external-sip-callcentric`
    (or the selected provider) and `dialplan show 801@home` (or 802/803). Verify the
    intended account is registered; avoid publishing account identifiers.
+   For a null target, verify that its 801/802/803 route does not exist and stop
+   at registration acceptance. Keep the provider review/peer blocker recorded.
 5. Place one user-authorized SIP-only test call, verify both audio directions and
    remote/local hangup, then verify the channel count returns to zero. Routes cap
    call duration at 120 seconds and ignore SIP forwarding requests.
@@ -191,5 +210,7 @@ test copies synthetic fixtures into a disposable `--network none` container; it
 does not mount production secrets, contact DNS/providers, register live accounts
 or reach phones. It verifies all three profiles and appended routes load, a
 loopback SIP call accepts the remote BYE, and a fresh unsolicited INVITE gets a
-401 response. It is not a test of real DNS discovery, account registration, RTP
+401 response. It also removes the Callcentric/Linphone targets and reloads the
+dialplan: all three registration objects remain, only 802 has a call route,
+and the generated phone XML stays unchanged. It is not a test of real DNS discovery, account registration, RTP
 audio or provider billing.

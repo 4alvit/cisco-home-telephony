@@ -6,6 +6,146 @@ not a claim that every feature below has passed a physical-phone test. Deploymen
 acceptance belongs in [server-validation.md](server-validation.md); the existing
 authenticated CGI and SSH procedures are in [phone-control.md](phone-control.md).
 
+The disabled provider profiles and exact deployment boundary are documented in
+[external-sip.md](external-sip.md). The historical providers supplied by the
+operator were rechecked on **2026-10-17** below; a familiar old name does not
+establish that its old free plan or login still works.
+
+## Historical account list: current status
+
+### SIPNET — active site, but not a verified free signup
+
+The [free-calling FAQ](https://www.sipnet.ru/faq/oplata/besplatnye-zvonki) still
+states that calls between SIPNET SIP IDs are unmetered. That is a statement about
+in-network calls, not the total account cost. The current
+[registration page and homepage](https://www.sipnet.ru/) show paid plans, identity
+verification, and a requirement to acquire a SIPNET number for individual
+customers. The page also showed a restoration-work notice warning that
+registration and calls may be unavailable. Its footer says the Russian operator
+provides service only to subscribers located in the Russian Federation.
+
+Consequently SIPNET is **not included as a ready free profile**. An existing
+account's actual plan, eligibility and continuing charges must be checked before
+reuse. No signup, payment, identity verification or network workaround was
+attempted. Technical settings are documented in the operator's
+[connection recommendations](https://wikijs.sipnet.ru/ru/home/Connection_recommendations):
+`sipnet.ru`, the full SIP ID, account password, DNS service discovery, and SIP on
+5060 UDP/TCP or 5061 TLS. Do not pin a current proxy IP. The
+[SIP ID specification](https://wikijs.sipnet.ru/ru/home/%D0%9B%D0%B8%D1%87%D0%BD%D1%8B%D0%B9_%D0%BA%D0%B0%D0%B1%D0%B8%D0%BD%D0%B5%D1%82/SIPID)
+describes seven- or ten-digit IDs with significant leading zeroes. A future
+profile should allow only a separately verified SIP ID, not unrestricted numeric
+destinations. It would still require an account-specific test.
+
+### Free World Dialup — a new 2026 service, different signup
+
+The old `account2.freeworlddialup.com` did not resolve during this check. However,
+FWD has announced a return: see founder Jeff Pulver's
+[2026-04-23 announcement](https://thejeffpulver.substack.com/p/free-world-dialup-returns)
+and the current [FWD site](https://www.fwdialup.com/). Do not infer that an old
+account or password was migrated.
+
+The new [signup form](https://www.fwdialup.com/sign-up) requests a full name and
+email, then an emailed one-time code. Its [onboarding description](https://www.fwdialup.com/how-it-works)
+adds identity verification and number assignment. The
+[FAQ](https://www.fwdialup.com/faq) says that SIP credentials, server settings and
+codec guidance are available after login. Public pages describe a non-commercial
+experimental network, but do not establish a complete permanent $0 price/usage
+contract or a free PSTN service. The [mission statement](https://www.fwdialup.com/mission)
+requires account verification before calls can originate.
+
+A user-authorized signup was completed on 2026-10-17 through name/email and an
+emailed code. The account dashboard issued SIP settings, but its identity
+verification action opened a **Verification Fee** checkout; no amount was
+visible in the observed checkout. No payment, card details or identity document
+were supplied. The account is therefore recorded as created but not verified
+for calling. A genuinely free usable calling path has not been demonstrated;
+no FWD registration, outbound call or PBX profile was enabled. This observed
+activation boundary takes precedence over assuming that the service name or
+experimental description guarantees free activation.
+
+FWD advertises AMR-WB with narrowband fallback and
+[no server-side wideband/narrowband transcoding](https://www.fwdialup.com/hd-voice).
+The 7945G does not gain AMR-WB from this project. Confirm a mutually supported
+narrowband codec in the new account's settings; the current Asterisk image does
+not claim an AMR-WB transcoder. No FWD profile is generated while the required
+verification fee and usable free-call terms remain unresolved. Historical FWD
+echo numbers are not assumed to exist on the relaunched network.
+
+### IPKall — discontinued
+
+IPKall's own [preserved homepage from 2016-03-04](https://web.archive.org/web/20160304001939id_/http://www.ipkall.com/)
+announces discontinuation effective **2016-05-01**. This archived operator notice
+was retrieved and read; the current `phone.ipkall.com/login.asp` hostname did not
+resolve. The historical free Washington inbound number is not a current signup
+or a reusable trunk. No replacement login was invented.
+
+### MySIPSwitch and SIPSorcery — predecessor and existing-account service
+
+The developer's [2009 migration-era explanation](https://sipsorcery.wordpress.com/2009/07/14/incoming-call-processing/)
+describes MySIPSwitch as the predecessor of SIPSorcery. The old MySIPSwitch site
+did not provide a usable current signup during this check. Use the successor's
+current account process rather than an old tutorial.
+
+SIPSorcery's [current pricing page](https://www.sipsorcery.com/mainsite/Home/Pricing)
+says it is **not accepting new users**. Its
+[operator announcement](https://www.sipsorcery.com/mainsite) schedules migration
+of existing accounts for **2026-11-01 at 14:00 UTC**. Accounts, SIP credentials,
+providers and dialplans were copied, but provider registrations on the new
+platform start disabled. The operator identifies `do.sipsorcery.com` for testing
+the new platform before the cutover; retain DNS names rather than hardcoding
+either server IP. Suspended and some duplicate-email accounts were not migrated.
+
+The new dialplan engine does not support the old Google Voice bridge or the
+listed legacy database/web helpers. Its
+[FAQ](https://www.sipsorcery.com/mainsite/Home/FAQ) explicitly says it does not
+provide PSTN origination/termination, a DID, free calls to countries, or Google
+Voice support. An existing account may still be useful for SIP routing, but its
+actual plan must be reviewed. It cannot supply the missing free PSTN carrier.
+
+### SIP Broker — available directory/interconnect, no account needed to call
+
+The [operator wiki](https://faq.sipbroker.com/tiki-index.php) describes a free SIP
+interconnect requiring no signup. Its
+[member form](https://www.sipbroker.com/sipbroker/action/memberRegister) is still
+available, but requires an **existing SIP URI**, a separate SIP Broker password,
+and an email confirmation. Membership does not create a standalone SIP account
+or private incoming telephone number.
+
+The [operator's Asterisk example](https://faq.sipbroker.com/Asterisk+Configuration)
+uses `sipbroker.com`, leaves registration blank, and lists `*011188888` as its
+test announcement. Those examples use obsolete chan_sip syntax and broad
+fallback routes; do not copy them into this PJSIP system. A future implementation
+can expose one fixed test route on a separate outbound-only endpoint, retaining
+the same no-relay restrictions as the current profiles. It must not import the
+example's automatic fallback to a paid carrier. No live test was made, so an
+available page is not proof of current media reachability. Public PSTN access
+numbers are shared dial-in gateways; the caller's telephone operator may charge.
+
+### FreeDigits — no verified current service
+
+`freedigits.com` did not resolve during the bounded check, and no current
+operator signup, support contract or authoritative shutdown notice was found.
+Classify the historical Iowa-number service as **unavailable/unverified**, not
+as a working free option. No exact closure date or successor is claimed. Do not
+send old credentials to a similarly named service.
+
+### sipgate Germany — legacy free base plan, paid new service
+
+The official [starter pricing explanation](https://help.sipgate.de/cloud-telefonanlage/accountverwaltung/vertrage-rechnungen-und-preise/was-sind-die-anrufkosten-fuer-sipgate-starter)
+states that new starter signups ended on **2022-09-08**. Existing starter/basic
+customers can retain a plan without a monthly base fee, but calls and additional
+services may be charged. The current
+[service description](https://www.sipgate.de/leistungsbeschreibung) explicitly
+marks starter as a legacy contract. Inspect an old account's actual contract
+before considering its existing number; do not create a paid replacement.
+
+New customers are offered a
+[30-day trial](https://help.sipgate.de/cloud-telefonanlage/erste-schritte/readme/wie-funktioniert-die-kostenlose-testphase)
+with temporary numbers and limited included minutes. It ends automatically and
+its configuration is deleted on expiry. This is not a permanent free household
+trunk. New paid plans and identity/location checks must not be represented as
+the historical free basic service.
+
 ## What can be implemented locally
 
 - **Text notifications:** a Cisco XML service using `CiscoIPPhoneText`, opened
@@ -38,8 +178,10 @@ SIP/PSTN services.
 The countries below identify the provider/operator, not a promise of a free
 national telephone number. A SIP address is not a PSTN number. No ongoing,
 general-purpose **free PSTN trunk for this Asterisk deployment** was verified.
-Published offers were checked; no accounts were created or live provider calls
-made during this research.
+Published offers were checked, then user-authorized SIP2SIP, Callcentric and
+Linphone accounts were created. Signup is separate from SIP registration and
+voice acceptance; current account restrictions are recorded below. No paid plan,
+card, telephone number or PSTN credit was ordered.
 
 ### United States: Callcentric IP Freedom
 
@@ -47,6 +189,16 @@ The [IP Freedom plan](https://www.callcentric.com/rate/plans/ip_freedom/) is
 $0 setup and $0/month, requires no credit card, and supports free calls within
 Callcentric and compatible SIP networks. It explicitly excludes calls to normal
 landline/mobile numbers. It is a concrete option for an external SIP pilot.
+
+The account created on 2026-10-17 shows IP Freedom at $0 and no payment card.
+Its dashboard also reports a risk-review restriction: outbound calling and
+account changes are blocked, and inbound/outbound SMS is disabled. It requests
+additional account details through support; no existing ticket or specific
+document request was present. No support message was sent. Stage registration
+only with `target: null`; keep route 801 absent until the provider clears the
+restriction. The [signup FAQ](https://www.callcentric.com/faq/29/213) identifies
+the initial signup password as the initial SIP password; actual SIP authentication
+must still be verified independently.
 
 Callcentric's [PJSIP configuration guide](https://www.callcentric.com/support/device/asterisk/17_pjsip)
 supplies an Asterisk-compatible contract: registration server
@@ -80,6 +232,9 @@ funding process requires a bank transfer **greater than 20 USD/EUR**. Free signu
 therefore does not provide free arbitrary PSTN minutes. No payment or support
 email was sent.
 
+The account was created and its settings email received on 2026-10-17. This
+confirms signup, not successful SIP registration or two-way audio.
+
 ### France: Linphone / Belledonne Communications
 
 The [French operator](https://www.linphone.org/en/belledonne-communications-company-overview/)
@@ -89,7 +244,11 @@ passwords, compatibility with third-party SIP hardware/software, and email or
 phone validation at signup. It explicitly says the free account cannot be
 associated with a virtual telephone number. This is another SIP-to-SIP option,
 not a free PSTN trunk. Use the current account settings supplied after signup and
-verify PJSIP registration and two-way audio before making it an enabled provider.
+verify PJSIP registration and two-way audio before enabling a call route.
+Email activation completed on 2026-10-17 and the account dashboard displays the
+assigned SIP address. No official echo/test URI was verified. Register with a
+null target if desired, leaving route 803 absent until an operator-controlled
+or explicitly approved peer is available; do not guess an echo address.
 
 ### How to connect a provider without changing the phones
 

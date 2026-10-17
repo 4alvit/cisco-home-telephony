@@ -1,0 +1,17 @@
+[Unit]
+Description=Stateful return-path guard for outbound external SIP
+Requires=cisco-telephony-guard.service
+After=cisco-telephony-guard.service cisco-phone-gateway-guard.service
+Before=k3s-agent.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/cisco-external-sip-guard apply --config /etc/cisco-external-sip-guard.json
+ExecReload=/usr/local/sbin/cisco-external-sip-guard apply --config /etc/cisco-external-sip-guard.json
+ExecStop=/usr/local/sbin/cisco-external-sip-guard rollback --config /etc/cisco-external-sip-guard.json
+TimeoutStartSec=120
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

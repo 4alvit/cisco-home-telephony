@@ -285,7 +285,7 @@ Assist still requires a first call from each intended SIP identity.
 For Assist, start with each physical phone's **primary line: 201, 203, 205, 207**.
 Dial **630** from that specific line to discover its native VoIP identity, then
 enable **Allow calls** and choose the intended working language/pipeline for
-that device. Preserve the pilot's selected pipeline. Native VoIP identity
+that device. Choose the intended current pipeline for each phone; the installed home setup uses Local Russian Home with Silero Baya. Preserve unrelated Echo/device selections and global pipeline definitions. Native VoIP identity
 follows the SIP From extension, so approval for 201 does not approve 203, 205 or
 207; secondary lines need their own discovery only if Assist is wanted there.
 Call again and confirm a spoken request, an audible answer and clean hangup.
@@ -313,7 +313,8 @@ resources. Cancel the old timer before recreating TFTP or renewing callbacks;
 a scheduled fallback is not evidence that cleanup has actually completed.
 
 Stop temporary CGI callback listeners and remove only their owned temporary
-rules. Preserve each configured authentication URL and its private credentials
+rules. If the persistent [HA gateway](phone-gateway.md) is explicitly enabled,
+hand those ports over to its exact-source listeners instead of closing them. Preserve each configured authentication URL and its private credentials
 for an explicit future renewal. Confirm all expected SIP contacts, no remaining
 test calls, and the original pilot's unchanged operation. A later cold boot
 may require a fresh reviewed TFTP window; test that behavior for the actual

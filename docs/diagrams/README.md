@@ -30,3 +30,7 @@ The parent documentation contains full procedures, limitations and sources.
 Project ports are listed in the [k3s runbook](../k3s-deployment.md) and
 [HA guide](../home-assistant.md). Diagrams describe the architecture; they do not
 establish that home deployment or physical acceptance has been completed.
+
+## Phone controls and alarms
+
+[phone-control.svg](phone-control.svg) shows the HA entities, private API, fresh AMI guards and per-phone callback boundaries. [radio-services.svg](radio-services.svg) shows radio decoding and the finite alarm route.

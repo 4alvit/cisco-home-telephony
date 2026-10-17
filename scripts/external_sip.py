@@ -150,7 +150,7 @@ def validate(site):
             pattern = r"(?:3333|4444|[A-Za-z][A-Za-z0-9_.-]{0,63})"
         else:
             pattern = r"[A-Za-z][A-Za-z0-9_.-]{0,63}"
-        require(isinstance(target, str) and re.fullmatch(pattern, target),
+        require(target is None or (isinstance(target, str) and re.fullmatch(pattern, target)),
                 "target must be a free-network peer name, not a PSTN number or arbitrary SIP URI")
         inbound = account.get("inbound", {})
         _object(inbound, ("enabled", "target", "source_cidrs"), "external SIP inbound has unknown fields")
@@ -244,9 +244,12 @@ qualify_frequency=0
         if account["source_cidrs"]:
             matches = "\n".join("match=" + value for value in account["source_cidrs"])
             pjsip.append(f"[{name}-identify]\ntype=identify\nendpoint={name}\n{matches}\n")
-        number = account["number"]
-        result["numbers"].append(number)
-        routes.append(f"""exten => {number},1,NoOp(Allowlisted external SIP peer)
+        # A null target permits registration verification without an outbound
+        # route. It must not silently select the provider's default destination.
+        if account["target"] is not None:
+            number = account["number"]
+            result["numbers"].append(number)
+            routes.append(f"""exten => {number},1,NoOp(Allowlisted external SIP peer)
  same => n,Set(TIMEOUT(absolute)=120)
  same => n,Dial(PJSIP/{name}/sip:{account['target']}@{domain},30,i)
  same => n,Hangup()

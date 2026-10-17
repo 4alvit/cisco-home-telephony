@@ -18,6 +18,7 @@ conversion to MPP is not required.
 - Separate Asterisk and temporary TFTP containers, with declarative k3s deployment.
 - Dry-run defaults, explicit Kubernetes context/node selection, and image digests.
 - Local firmware integrity checks, acceptance procedures, backup and rollback.
+- [Printable English phone reference](output/pdf/cisco-phone-reference.pdf): the dial table, alarms and HA controls.
 - [SVG diagrams](docs/diagrams/) and [color slides](docs/slides/), all in English.
 - [Home Assistant](docs/home-assistant.md): phone states, DTMF, call control and
   Assist on extension **630**.
@@ -38,8 +39,9 @@ register **201-208** over TCP. All four have two numeric line labels,
 LakeDawn wallpaper and verified two-stage SSH access. The first phone passed
 human-audible echo and Russian Assist; additional lines have automated echo,
 RTP and HA hangup checks recorded in the validation log. The phone voice
-profile now uses the existing **Silero Baya** backend; fourth-phone Assist
-acceptance is being completed separately.
+profile now uses the existing **Silero Baya** backend. HA-originated Assist
+answer/route/RTP/hangup checks also passed for 203/205/207; human listening
+remains a separate acceptance step.
 Speakerphone, DTMF and calls between phones still need separate acceptance.
 Cisco firmware is not included: obtain an authorized copy and verify the upgrade path.
 The [second-line and wallpaper guide](docs/second-line-and-wallpaper.md) covers
@@ -151,3 +153,16 @@ repository. It is managed through the existing
 For Assist, the image includes an Opus transcoder built from source: Cisco uses
 G.711 while native Home Assistant VoIP uses Opus. AMI is disabled by default;
 `deploy/site.ha.example.json` shows how to enable it explicitly.
+
+## Print the quick reference
+
+Print the [two-page English reference](output/pdf/cisco-phone-reference.pdf)
+on US Letter paper at actual size. Page one lists phone lines and service
+numbers; page two explains Home Assistant calls, messages, timers and alarms.
+The [radio catalog](containers/asterisk/radio-catalog.json) supplies the station names.
+
+To regenerate it after changing the catalog, install `reportlab` in a local
+virtual environment and run `python3 scripts/build-phone-reference.py`.
+Review both rendered pages before printing. The guide describes configured
+features; the [deployment record](docs/server-validation.md) records what has
+actually passed live acceptance.

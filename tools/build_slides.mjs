@@ -91,8 +91,8 @@ function diagramSlide(name,notes){const d=diagrams[name],sl=base(d.title,notes);
 diagramSlide('architecture',`The design uses one Asterisk replica on a designated LAN node with hostNetwork and a static LAN IP. Keep the existing router DHCP service. Run TFTP only when needed. HA opens TCP AMI to Asterisk. For Assist, Asterisk opens SIP to HA VoIP and audio flows in both directions. Home Assistant may run on another LAN node or across the existing VPN. HTTP Ingress does not transport these protocols. Kubernetes: ${S.kube}\nPJSIP: ${S.pjsip}\nHA: ${S.ha}\nVoIP: ${S.voip}\nSee docs/k3s-deployment.md and docs/home-assistant.md.`);
 // 04: Ports as flat typographic rows.
 {
- const sl=base('Signaling and audio ports',`PBX ports in this project: SIP TCP 5060 by default, optional UDP 5060, RTP UDP 10000–10199. tftpd-hpa uses UDP 69 and UDP 20000–20031. Allow AMI TCP 5038 only from the actual HA source IP/32. HA VoIP listens on SIP UDP 5060 or the selected port, plus dynamic RTP/RTCP UDP ports restricted to the PBX. Cisco RTP uses UDP 16384–16482. Firewall rules must account for both directions. NetworkPolicy alone does not protect hostNetwork. PJSIP: ${S.pjsip}\nVoIP: ${S.voip}\nSee docs/home-assistant.md.`);
- const rows=[['5060','TCP / UDP','SIP: Cisco TCP, HA UDP',C.teal],['10000–10199','UDP on PBX','RTP / audio',C.teal],['5038','TCP on PBX','AMI: HA source IP /32',C.yellow],['69 + 20000–20031','UDP on PBX','Temporary TFTP',C.coral]];
+ const sl=base('Signaling and audio ports',`PBX ports in this project: SIP TCP 5060 by default, optional UDP 5060, RTP UDP 10000–10199. tftpd-hpa uses UDP 69 and UDP 20000–20031. Allow AMI TCP 5038 only from the actual HA and optional phone-gateway source IPs/32. HA VoIP listens on SIP UDP 5060 or the selected port, plus dynamic RTP/RTCP UDP ports restricted to the PBX. Cisco RTP uses UDP 16384–16482. Firewall rules must account for both directions. NetworkPolicy alone does not protect hostNetwork. PJSIP: ${S.pjsip}\nVoIP: ${S.voip}\nSee docs/home-assistant.md.`);
+ const rows=[['5060','TCP / UDP','SIP: Cisco TCP, HA UDP',C.teal],['10000–10199','UDP on PBX','RTP / audio',C.teal],['5038','TCP on PBX','AMI: HA / gateway /32',C.yellow],['69 + 20000–20031','UDP on PBX','Temporary TFTP',C.coral]];
  rows.forEach((r,i)=>{const y=170+i*102;text(sl,r[0],60,y,490,60,r[0].length>11?33:41,r[3],true);text(sl,r[1],570,y+7,225,45,26,C.white);text(sl,r[2],805,y+7,420,60,25,C.muted);});
  foot(sl,'HA uses dynamic RTP / RTCP ports. Restrict firewall rules to the required source IPs.');
 }
@@ -109,9 +109,9 @@ diagramSlide('commissioning',`The appropriate reset procedure depends on the cur
 }
 // 08: Local SIP config.
 {
- const sl=base('Asterisk: one extension per phone',`PJSIP examples: ${S.pjsip}\nProject baseline: a separate endpoint, auth and AOR for each phone, a unique password, and matching transport in the phone XML. TCP is the default. Enable UDP for phones explicitly. Use G.711 ulaw/alaw and direct_media=no to keep RTP flowing through Asterisk. Add NAT settings only when needed. The initial configuration supports internal calls without a PSTN/SIP trunk. Test extensions: 600 echo, 601 tone, 620 ring group, and 630 Assist when HA integration is enabled.`);
- text(sl,'201',60,195,310,100,74,C.teal,true);text(sl,'202',470,195,310,100,74,C.coral,true);text(sl,'…210',880,195,335,100,74,C.yellow,true);
- para(sl,'TCP with a separate endpoint, auth and AOR\nA unique password for each phone',60,355,1100,31,C.white,100);
+ const sl=base('Asterisk: independent SIP lines',`PJSIP examples: ${S.pjsip}\nProject baseline: one or two SIP lines per physical Cisco 7945G. Each line has a separate endpoint, auth, AOR and unique password. The phone XML preserves line button order and uses the matching transport. Legacy single-line inventory remains supported. Keep existing secrets when adding a second line. Omit lineIndex to avoid CUCM bulk-registration behavior. TCP is the default. Enable UDP for phones explicitly. Use G.711 ulaw/alaw and direct_media=no to keep RTP flowing through Asterisk. Add NAT settings only when needed. The initial configuration supports internal calls without a PSTN/SIP trunk. Test extensions: 600 echo, 601 tone, 620 ring group, and 630 Assist when HA integration is enabled.`);
+ text(sl,'201 / 202',60,195,550,100,72,C.teal,true);text(sl,'one phone',730,207,485,85,49,C.coral,true);
+ para(sl,'One endpoint, auth and AOR per line\nA unique password for each line',60,355,1100,31,C.white,100);
  para(sl,'G.711 ulaw / alaw\ndirect_media=no keeps RTP on Asterisk',60,495,1100,29,C.muted,100);
  foot(sl,'600 echo, 601 tone, 620 ring group. Extension 630 requires Assist.');
 }
@@ -134,8 +134,8 @@ diagramSlide('assist',`Official HA VoIP integration: ${S.voip}\nInstallation and
 }
 // 12: Physical phone acceptance remains explicit.
 {
- const sl=base('Acceptance tests on real phones',`These are project acceptance criteria. Record actual household installation results separately. Use two physical phones with verified inventory. Check pjsip show contacts, calls from 201 to 202 and from 202 to 201, two-way audio, DTMF/echo, hold/transfer and the clock. Then check HA states, Originate, Hangup using the actual active Channel, and a harmless DTMF notification. Determine DTMF Sent/Received direction on the pilot. For 630: Allow calls, pipeline selection, a separate identity for each phone, STT, TTS and hangup. Repeat after a phone cold boot and controlled PBX/HA restarts. Automated runtime and smoke tests do not replace physical acceptance. ${S.ha}/blob/main/docs/acceptance.md`);
- const steps=[['Telephony','201 and 202: registration, two-way audio, hold / transfer',C.teal],['Home Assistant','States, Originate, Hangup on the correct Channel, DTMF',C.yellow],['Assist 630','Speech recognition, spoken reply and hangup',C.coral]];
+ const sl=base('Acceptance tests on real phones',`These are project acceptance criteria. Record actual household installation results separately. Use two physical phones with verified inventory. Check pjsip show contacts, calls between different physical handsets, such as 201 to 203 and 203 to 201, two-way audio, DTMF/echo, hold/transfer and the clock. Then check HA states, Originate, Hangup using the actual active Channel, and a harmless DTMF notification. Determine DTMF Sent/Received direction on the pilot. For 630: Allow calls, pipeline selection, a separate identity for each phone, STT, TTS and hangup. Repeat after a phone cold boot and controlled PBX/HA restarts. Automated runtime and smoke tests do not replace physical acceptance. ${S.ha}/blob/main/docs/acceptance.md`);
+ const steps=[['Telephony','201 and 203: cross-phone audio, hold / transfer',C.teal],['Home Assistant','States, Originate, Hangup on the correct Channel, DTMF',C.yellow],['Assist 630','Speech recognition, spoken reply and hangup',C.coral]];
  steps.forEach((a,i)=>{const y=177+i*139;label(sl,a[0],60,y,1110,a[2],34);para(sl,a[1],60,y+61,1110,27,C.white,63);});
  foot(sl,'Repeat after phone, PBX and HA restarts. Readiness does not verify audio.');
 }
@@ -155,11 +155,45 @@ diagramSlide('assist',`Official HA VoIP integration: ${S.voip}\nInstallation and
  para(sl,'Phone inventory, a two-party call and Assist\nAdd the remaining phones after acceptance',60,466,1110,29,C.white,100);
  foot(sl,'Physical acceptance is a separate step. Keep the results in the private deployment log.');
 }
+// 15: The installed four-handset layout, with independent line identities.
+{
+ const sl=base('Four phones, eight independent lines', `Four Cisco 7945G phones now use two separately authenticated SIP identities each: 201/202, 203/204, 205/206 and 207/208. All eight contacts registered and local Echo600/HA Hangup checks passed. LakeDawn wallpaper and SSH authentication were verified on the added handsets. See docs/adding-phones.md and docs/server-validation.md for the dated evidence and outstanding human-audible and cross-phone checks. Ring group620 calls only the primary line of each physical phone and excludes PBX DND. Each primary identity has its own native HA VoIP device and selected Russian Assist pipeline. No private network or device identifiers appear here.`);
+ const phones=[['A','201','202',C.teal],['B','203','204',C.coral],['C','205','206',C.yellow],['D','207','208',C.teal]];
+ phones.forEach((a,i)=>{const x=60+i*302;text(sl,'PHONE '+a[0],x,170,265,42,25,C.muted,true);text(sl,a[1],x,238,265,88,67,a[3],true);text(sl,a[2],x,340,265,88,67,a[3],true);});
+ label(sl,'620 rings the primary line of each phone',60,490,1150,C.white,32);
+ para(sl,'201, 203, 205 and 207 share the group. DND skips that phone.',60,551,1150,26,C.muted,48);
+ foot(sl,'Eight registrations and local call checks passed. Broader acceptance continues.');
+}
+// 16: Capabilities are explicit, while live acceptance remains a separate claim.
+{
+ const sl=base('Home Assistant phone controls', `The four-phone control integration exposes 120 entities. It preserves the separate TECH7Fox Asterisk and native HA VoIP integrations. Timers and weekday alarms persist and record each occurrence before a single ring request. Missed events, busy phones, DND and ambiguous API results do not retry automatically. DND is a persistent gateway/PBX preference restored after Asterisk restart. Gateway auto-answer is opt-in, off by default, and acts only on one fresh incoming Ringing channel. Text and local approved images use authenticated phone CGI with short-lived source-restricted content. Exclude text and countdown entities from Recorder. Live feature acceptance remains underway. Sources: ${S.ha}/blob/main/docs/phone-controls.md and https://github.com/4alvit/cisco-home-telephony/blob/main/docs/phone-gateway.md`);
+ text(sl,'120',60,180,390,175,126,C.teal,true);text(sl,'control entities',65,358,390,55,30,C.muted);
+ const rows=[['Call controls','Line, dial, answer and exact-channel hangup',C.white],['Personal settings','PBX DND and opt-in gateway auto-answer',C.yellow],['Schedules','Countdown timers and chosen weekdays',C.coral],['Phone screen','Authenticated text and approved images',C.teal]];
+ rows.forEach((a,i)=>{const y=165+i*103;text(sl,a[0],485,y,730,45,30,a[2],true);text(sl,a[1],485,y+48,730,45,24,C.muted);});
+ foot(sl,'Fresh call-state checks protect active calls. Live feature acceptance remains underway.');
+}
+// 17: Public station names and dial numbers, without stream credentials or private URLs.
+{
+ const sl=base('Radio and scheduled calls', `Alarm640 plays a finite local tone on answer, capped at 30 seconds, then hangs up. HA rings for up to 20 seconds and does not retry busy, DND or missed events. Radio is opt-in and starts a bounded FFmpeg/AudioSocket worker only for the active call. The default limit is 30 minutes, with 2 concurrent streams. Stream host allowlists and network validation prevent arbitrary URL fetching. The seven official stream sources decoded successfully in the worker probe on October 17, 2026. That is distinct from each handset's live audio acceptance, which remains underway. Source documentation: https://github.com/4alvit/cisco-home-telephony/blob/main/docs/radio-and-alarms.md . Official stations: https://matryoshka.fm/ , https://echofm.online/ , https://streams.radiobob.de/ , https://somafm.com/poptron/directstreamlinks.html , https://www.radyoviva.com.tr/ .`);
+ text(sl,'640',60,174,380,120,93,C.coral,true);label(sl,'Alarm tone',60,305,390,C.white,33);
+ para(sl,'Up to 30 seconds\nEnds after playback',60,368,395,29,C.muted,100);
+ para(sl,'Radio fetches only\nduring an active call',60,500,410,28,C.teal,95);
+ const stations=[['701','Matryoshka Radio'],['702','Echo online'],['703','RADIO BOB! Rock'],['704','RADIO BOB! Metal'],['705','RADIO BOB! Gothic'],['706','SomaFM PopTron'],['707','Radyo Viva / Turkish']];
+ stations.forEach((a,i)=>{const y=173+i*60;text(sl,a[0],530,y,110,45,30,i%2?C.yellow:C.teal,true);text(sl,a[1],678,y+3,535,43,28,C.white);});
+ foot(sl,'Official streams decoded successfully. Handset radio and alarm tests continue.');
+}
+// 18: Account setup, SIP registration and usable media are different milestones.
+{
+ const sl=base('Free SIP account status', `Status snapshot: October 17, 2026. SIP2SIP and Linphone account activation completed. Callcentric IP Freedom account activation completed with a $0 plan and $0 balance. The provider dashboard blocks outbound calls pending risk review by support. The profile stays disabled. SIP credential verification and PBX registration remain pending. Free accounts do not imply free PSTN calls. SIP2SIP 802 uses the official 4444 echo destination. Callcentric 801 uses its official 17771234567 test account once enabled. Linphone requires an explicitly verified free peer, with no invented echo number. FWD issued credentials but its mandatory identity-verification flow opened a Verification Fee checkout, so activation stopped. Google Voice supplies no official free generic Asterisk SIP trunk. Working external calls require actual REGISTER, answer and bidirectional RTP evidence. Sources: https://sip2sip.info/help/ ; https://www.callcentric.com/rate/plans/ip_freedom/ ; https://www.callcentric.com/support/device/asterisk/17_pjsip ; https://www.linphone.org/en/faq/ ; https://www.fwdialup.com/mission ; https://knowledge.workspace.google.com/admin/voice/sip-link-requirements ; docs/external-sip.md and docs/extended-services-research.md.`);
+ const rows=[['SIP2SIP','Account active, 802 echo checks underway',C.teal],['Callcentric','Account active, outbound review required',C.yellow],['Linphone','Account active, verified peer still needed',C.teal],['FWD','Stopped at mandatory Verification Fee',C.coral],['Google Voice','No official free Asterisk SIP trunk',C.muted]];
+ rows.forEach((a,i)=>{const y=170+i*79;text(sl,a[0],60,y,335,48,30,a[2],true);text(sl,a[1],435,y+2,790,57,27,C.white);});
+ foot(sl,'Account activation, SIP registration and a working audio call need separate evidence.');
+}
 const candidate=path.join(build,'candidate.pptx');await (await PresentationFile.exportPptx(p)).save(candidate);
 const final=path.join(out,'cisco-home-telephony.pptx');
 if(process.env.PRESENTATION_SKILL_DIR){
  const sd=process.env.PRESENTATION_SKILL_DIR;const {finalizePresentation}=await import(pathToFileURL(path.join(sd,'container_tools/artifact_tool_utils.mjs')).href);const validatedDir=path.join(build,'finalized'); await fs.mkdir(validatedDir,{recursive:true}); const validated=path.join(validatedDir,`validated-${Date.now()}.pptx`);
- const result=await finalizePresentation({workspaceDir:root,candidatePath:candidate,finalPath:validated,pythonExecutable:process.env.RUNTIME_PYTHON??'python3',integrityValidatorPath:path.join(sd,'container_tools/inspect_presentation_package_integrity.py'),layoutValidatorPath:path.join(sd,'container_tools/inspect_presentation_layout_geometry.py'),layoutArgs:['--expected-slide-size-emu','12192000,6858000','--validate-bullet-geometry','--validate-heading-fit'],explicitTotalSlideCount:14,requiredNativeTableOwnerSlides:[],requiredNativeChartOwnerSlides:[],fontPolicy:{basis:'design',families:[FONT]},verifyArtifactToolImport:true,receiptPath:path.join(build,`validation-${Date.now()}.json`)});
+ const result=await finalizePresentation({workspaceDir:root,candidatePath:candidate,finalPath:validated,pythonExecutable:process.env.RUNTIME_PYTHON??'python3',integrityValidatorPath:path.join(sd,'container_tools/inspect_presentation_package_integrity.py'),layoutValidatorPath:path.join(sd,'container_tools/inspect_presentation_layout_geometry.py'),layoutArgs:['--expected-slide-size-emu','12192000,6858000','--validate-bullet-geometry','--validate-heading-fit'],explicitTotalSlideCount:18,requiredNativeTableOwnerSlides:[],requiredNativeChartOwnerSlides:[],fontPolicy:{basis:'design',families:[FONT]},verifyArtifactToolImport:true,receiptPath:path.join(build,`validation-${Date.now()}.json`)});
  await fs.copyFile(validated,final);console.log('PPTX structural validation and import passed.');
 }else await fs.copyFile(candidate,final);
 for(const [i,sl] of p.slides.items.entries())await bytes(path.join(build,`slide-${String(i+1).padStart(2,'0')}.png`),await p.export({slide:sl,format:'png',scale:1}));
@@ -176,4 +210,4 @@ try {
  } catch (pdfErr) { throw new Error('PPTX created. PDF export needs a working LibreOffice: set SOFFICE to its executable.',{cause:pdfErr}); }
 }
 await fs.writeFile(path.join(build,'content.ndjson'),(await p.inspect({kind:'slide,textbox,shape,notes',maxChars:2000000})).ndjson);
-console.log('Created 14-slide PPTX + PDF and 4 editable SVG diagrams.');
+console.log('Created 18-slide PPTX + PDF and 4 editable SVG diagrams.');
