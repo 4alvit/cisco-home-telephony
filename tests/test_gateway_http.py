@@ -7,7 +7,7 @@ import threading
 import unittest
 from urllib.parse import urlencode
 from unittest.mock import patch
-from test_phone_gateway import config, gateway
+from test_phone_gateway import FakeAMI, config, gateway
 
 
 class HTTPTests(unittest.TestCase):
@@ -73,6 +73,53 @@ class HTTPTests(unittest.TestCase):
             headers['Transfer-Encoding'] = 'chunked'
             self.assertEqual(self.request(self.api, '/v1/phones/201/dial', 'POST', b'{}', headers)[0], 400)
             mutate.assert_not_called()
+
+    def test_alert_stop_reaches_gateway_through_authenticated_http(self):
+        headers = {'Authorization': 'Bearer ' + config()['api_token'], 'Content-Type': 'application/json'}
+        FakeAMI.channels, FakeAMI.calls = [], []
+        FakeAMI.endpoints = {'201': 'Not in use', '202': 'Not in use'}
+        with patch.object(gateway, 'AMI', FakeAMI), patch.object(gateway, 'execute') as execute:
+            status, raw, _ = self.request(self.api, '/v1/phones/201/alert', 'POST',
+                json.dumps({'kind': 'timer', 'idempotency_key': 'http-alert-create'}), headers)
+            self.assertEqual(status, 200)
+            alert_id = json.loads(raw)['alert_id']
+            root = 'cisco-alert-' + alert_id
+            FakeAMI.channels = [
+                {'Channel': 'Local/201@cisco-alert-a1;1', 'Uniqueid': root + '-a',
+                 'Linkedid': root + '-a', 'ChannelStateDesc': 'Up'},
+                {'Channel': 'PJSIP/201-a1', 'Uniqueid': '123.45',
+                 'Linkedid': root + '-a', 'ChannelStateDesc': 'Ringing'}]
+            unrelated = {'Channel': 'PJSIP/203-a2', 'Uniqueid': '999.1',
+                         'Linkedid': '999.1', 'ChannelStateDesc': 'Up'}
+            FakeAMI.channels.append(unrelated)
+
+            def hangup(_ami, name, **values):
+                self.assertEqual((name, values['Channel']), ('Hangup', 'Local/201@cisco-alert-a1;1'))
+                FakeAMI.calls.append((name, values))
+                FakeAMI.channels = [unrelated]
+                return [{'Response': 'Success'}]
+
+            body = json.dumps({'alert_id': alert_id, 'idempotency_key': 'http-alert-stop'})
+            with patch.object(FakeAMI, 'action', hangup):
+                status, raw, _ = self.request(self.api, '/v1/phones/201/alert_stop', 'POST', body, headers)
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(raw)['state'], 'ended')
+                self.assertEqual(json.loads(raw)['alert_id'], alert_id)
+                self.assertEqual(self.request(self.api, '/v1/phones/201/alert_stop', 'POST', body, headers)[0], 200)
+            self.assertEqual(FakeAMI.channels, [unrelated])
+            self.assertEqual(sum(name == 'Hangup' for name, _ in FakeAMI.calls), 1)
+            execute.assert_not_called()
+
+    def test_underscore_routes_keep_authentication_and_action_allowlist(self):
+        body = json.dumps({'alert_id': 'a' * 32, 'idempotency_key': 'http-rejected-stop'})
+        headers = {'Authorization': 'Bearer ' + config()['api_token'], 'Content-Type': 'application/json'}
+        with patch.object(self.gateway, 'mutate') as mutate:
+            self.assertEqual(self.request(self.api, '/v1/phones/201/alert_stop', 'POST', body)[0], 403)
+            for action in ('alert__stop', '_alert_stop', 'alert_stop_', 'alert_stop/extra'):
+                self.assertEqual(self.request(self.api, '/v1/phones/201/' + action, 'POST', body, headers)[0], 404)
+            mutate.assert_not_called()
+        status, raw, _ = self.request(self.api, '/v1/phones/201/not_an_action', 'POST', body, headers)
+        self.assertEqual((status, json.loads(raw)['reason']), (404, 'unknown_action'))
 
 
 if __name__ == '__main__': unittest.main()

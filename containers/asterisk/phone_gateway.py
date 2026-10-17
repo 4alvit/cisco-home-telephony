@@ -575,7 +575,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.command == 'GET':
             require(self.path == '/v1/phones' and not self.body(0), 'not_found', 404)
             return self.reply(200, gateway.listing())
-        match = re.fullmatch(r'/v1/phones/(2[0-9]{2})/([a-z]+)', self.path)
+        match = re.fullmatch(r'/v1/phones/(2[0-9]{2})/([a-z]+(?:_[a-z]+)*)', self.path)
         require(match, 'not_found', 404)
         require(self.headers.get('Content-Type', '').split(';')[0] == 'application/json', 'json_required', 400)
         try:
