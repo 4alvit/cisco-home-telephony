@@ -334,6 +334,20 @@ firmware is verified. Do not switch to HTTPS-only before a trusted client can
 successfully authenticate and retrieve a screenshot, and do not present a
 certificate-verification bypass as secure HTTPS support.
 
+## Other access and restart paths
+
+TCP 23 was closed on the tested phone. No supported, verified Telnet enablement
+setting was established for this firmware, so the generator does not emit a
+guessed Telnet option. SSH is the verified diagnostic access path.
+
+SIP NOTIFY examples using `check-sync` or `service-control` are not an accepted
+restart procedure in this deployment: no such request was used to refresh the
+pilot. Support and required event/body details vary with firmware and call
+control environment. A server-side NOTIFY definition alone would not prove
+that the phone accepted it. The confirmed remote restart used the
+[verified single PoE port](#recover-through-a-verified-poe-port); keep that
+procedure available when the phone has not yet loaded its CGI callback URL.
+
 ## Inspect, then issue one key
 
 The controller makes requests only to `http://{phone_ipv4}/CGI/Screenshot` or
