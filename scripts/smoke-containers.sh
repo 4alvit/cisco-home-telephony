@@ -34,7 +34,9 @@ root=pathlib.Path(sys.argv[1])
 for name in ('enabled','disabled','not-configured','not-confirmed'):
     with wave.open(str(root/'prompts'/(name+'.wav')), 'wb') as output:
         output.setparams((1,2,8000,0,'NONE','not compressed'))
-        output.writeframes(b''.join(struct.pack('<h',int(8000*math.sin(2*math.pi*440*n/8000))) for n in range(4000)))
+        # MixMonitor may attach or detach between audio frames. A full second
+        # leaves room to require at least half a second of captured prompt.
+        output.writeframes(b''.join(struct.pack('<h',int(8000*math.sin(2*math.pi*440*n/8000))) for n in range(8000)))
 (root/'site.json').write_text(json.dumps({'node_ipv4':'127.0.0.1','lan_cidr':'127.0.0.0/8','ntp_ipv4':'127.0.0.1',
  'phone_cidrs':['127.0.0.1/32','192.168.60.25/32'],
  'radio':{'enabled':True,'stations':['echo'],'max_seconds':30},
@@ -120,7 +122,8 @@ done
 docker exec -i "$container" python3 - <<'PYSERVICE'
 import struct, wave
 with wave.open('/tmp/phone-service-smoke.wav','rb') as recording:
-    assert recording.getframerate()==8000 and recording.getnframes()>=4000
+    rate, frames = recording.getframerate(), recording.getnframes()
+    assert rate==8000 and frames>=4000, {'rate': rate, 'frames': frames}
     data=recording.readframes(recording.getnframes())
     samples=struct.unpack('<'+'h'*(len(data)//2),data)
     assert max(abs(x) for x in samples)>100, 'Phone-service AGI prompt is silent'

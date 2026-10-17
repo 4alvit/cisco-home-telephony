@@ -128,6 +128,64 @@ class IntercomTests(unittest.TestCase):
         self.server.stop_intercom(self.ami, root)
         self.assertEqual(self.ami.ended, {ch['Channel'] for ch in channels})
 
+    def test_cleanup_accepts_exact_peer_disappearing_between_snapshot_and_hangup(self):
+        self.call()
+        original = self.ami.action
+        attempts = []
+
+        def disappears(name, **fields):
+            if name == 'Hangup':
+                attempts.append(fields['Channel'])
+                if len(attempts) == 2:
+                    self.ami.ended.add(fields['Channel'])
+                    raise gateway.Refused('ami_action_rejected', 503)
+            return original(name, **fields)
+
+        with patch.object(self.ami, 'action', disappears):
+            self.server.stop_intercom(self.ami, self.ami.root)
+        self.assertEqual(attempts, ['PJSIP/202-000000ab', 'PJSIP/204-000000ab'])
+        self.assertEqual(self.ami.snapshot()[1], [])
+
+    def test_cleanup_refuses_unconfirmed_hangup_without_retry(self):
+        self.call()
+        attempts = []
+
+        def refuses(name, **fields):
+            self.assertEqual(name, 'Hangup')
+            attempts.append(fields['Channel'])
+            raise gateway.Refused('ami_action_rejected', 503)
+
+        with patch.object(self.ami, 'action', refuses):
+            with self.assertRaisesRegex(gateway.Refused, 'intercom_hangup_not_confirmed'):
+                self.server.stop_intercom(self.ami, self.ami.root)
+        self.assertEqual(attempts, ['PJSIP/202-000000ab'])
+        self.assertEqual(len(self.ami.snapshot()[1]), 2)
+
+    def test_cleanup_waits_for_channel_cache_after_no_such_channel(self):
+        self.call()
+        original_action, original_snapshot = self.ami.action, self.ami.snapshot
+        pending, attempts = {}, []
+
+        def stale_snapshot():
+            for channel in list(pending):
+                pending[channel] -= 1
+                if not pending[channel]:
+                    self.ami.ended.add(channel)
+                    del pending[channel]
+            return original_snapshot()
+
+        def already_gone(name, **fields):
+            if name == 'Hangup':
+                attempts.append(fields['Channel'])
+                pending[fields['Channel']] = 3
+                raise gateway.Refused('ami_action_rejected', 503)
+            return original_action(name, **fields)
+
+        with patch.object(self.ami, 'action', already_gone), patch.object(self.ami, 'snapshot', stale_snapshot):
+            self.server.stop_intercom(self.ami, self.ami.root)
+        self.assertEqual(attempts, ['PJSIP/202-000000ab', 'PJSIP/204-000000ab'])
+        self.assertEqual(self.ami.snapshot()[1], [])
+
     def test_same_handset_softphone_service_and_unlisted_destinations_refused(self):
         for destination in ('201', '202', '209', '600', '911', 'sip:204@example.invalid'):
             with self.subTest(destination=destination), self.assertRaises(gateway.Refused):

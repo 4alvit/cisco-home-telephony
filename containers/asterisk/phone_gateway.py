@@ -174,6 +174,7 @@ class AMI:
                     'authentication failed': 'authentication_failed',
                     'login already in use': 'login_in_use',
                     'permission denied': 'permission_denied',
+                    'no such channel': 'no_such_channel',
                     'no endpoints found': 'no_endpoints',
                     'could not get endpoints': 'endpoints_unavailable',
                 }.get(message, 'unknown_action' if message.startswith('invalid/unknown command:') else 'other')
@@ -377,7 +378,23 @@ class Gateway:
             if any(item.get('Channel') == candidate.get('Channel')
                    and item.get('Uniqueid') == candidate.get('Uniqueid')
                    for item in self.intercom_channels(root, current)):
-                ami.action('Hangup', Channel=candidate['Channel'], Cause='16')
+                try:
+                    ami.action('Hangup', Channel=candidate['Channel'], Cause='16')
+                except Refused:
+                    # Stopping one bridged leg can end the other after its
+                    # fresh ownership check. CoreShowChannels can briefly
+                    # retain a terminated channel while its cache catches up.
+                    # Only poll for that identity's absence; never repeat
+                    # Hangup against a potentially recycled channel name.
+                    deadline = time.monotonic() + 2
+                    while True:
+                        _, current = ami.snapshot()
+                        if not any(item.get('Uniqueid') == candidate.get('Uniqueid')
+                                   for item in current):
+                            break
+                        require(time.monotonic() < deadline,
+                                'intercom_hangup_not_confirmed', 503)
+                        time.sleep(.05)
 
     def reconcile_intercoms(self, ami, channels):
         for root, state, created in self.db.execute('SELECT root,state,created FROM intercoms').fetchall():
