@@ -67,6 +67,14 @@ separate immutable Secret. Vendor firmware remains on its existing read-only
 mount; wallpaper is not treated as firmware. Without `wallpaper/`, deployment
 behavior is unchanged.
 
+Only the init container mounts the wallpaper Secret. It copies the three files
+into the temporary served directory; the TFTP container sees that directory
+read-only. Updating the source files or Secret does not update an already
+running Job's copied files. After confirming that no transfer or flash is in
+progress, close the old window and create a fresh TFTP Job through the deployment
+procedure. Do not edit the firmware directory to install artwork or attempt to
+patch an active Job's immutable Pod template.
+
 Use a controlled TFTP window with the existing phone-only firewall permission.
 Cancel any cleanup timer belonging to an older window before opening a new one.
 Keep the same working SIP load; adding a line or wallpaper does not require a

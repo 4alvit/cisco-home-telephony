@@ -63,6 +63,16 @@ normal DC input. Voltage, polarity, connector size, power capacity and Ethernet
 speed must all match. Select a splitter only from that model's specifications.
 The identified 7945G phones do not need one.
 
+## Remote restart through PoE
+
+The pilot was successfully restarted through its verified Netgear GS110TP port.
+Use the [single-port recovery procedure](phone-control.md#recover-through-a-verified-poe-port):
+identify the phone through LLDP and the forwarding table, preserve all port
+settings, disable power briefly, restore it even after an ambiguous timeout,
+then verify power delivery and SIP registration. Do not interrupt an upgrade.
+For configuration delivery, prepare TFTP before the cycle and close its window
+after the phone finishes. Switching off the whole switch is unnecessary.
+
 ## UPS
 
 Power the switch, PBX node, router and, when using an external SIP provider,

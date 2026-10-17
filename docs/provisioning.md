@@ -18,6 +18,15 @@ characters for initial setup. The top-level `phoneLabel` is automatically
 shortened to 12 characters, with spaces replaced by `_`. Passwords are limited
 to 30 characters by this generation's SEP format.
 
+For two independent numbers on one physical 7945G, use
+[`phones.two-lines.example.json`](../examples/phones.two-lines.example.json) and
+the [second-line guide](second-line-and-wallpaper.md). Replace the legacy
+`extension` field with an ordered `lines` list of one or two extension/label
+pairs; do not specify both forms. Extensions must remain unique across the
+whole inventory. Keep the existing private secrets when adding a line: the
+generator reuses the first line's password and creates one for the new line.
+Group 620 rings the first line of each physical phone only.
+
 `verified:true` means the model and MAC were checked against the actual phone;
 it does not verify firmware compatibility. `firmware_load` is the exact `.loads`
 filename **without its extension**, for example `SIP45.9-4-2SR4-3S`, only if that
@@ -35,6 +44,16 @@ After changing this field, regenerate and deploy the profile, then restart the
 phone so it retrieves the updated configuration. Check its status pages at
 `http://PHONE_IP/` from the management network. The option does not enable SSH
 or change authentication settings.
+
+Additional optional phone fields are documented in
+[remote management](phone-control.md): `ssh_enabled` creates a separate SSH
+credential, `authentication_url` points to the private callback, and
+`phone_personalization` requires both that URL and web access.
+`background_image_access` controls access to the wallpaper menu. The enable flags
+require actual JSON booleans; `authentication_url` is a URL string. Setting a flag does not itself install a
+wallpaper or start the callback: follow the corresponding deployment and
+verification steps. Keep a configured callback URL in the inventory; omitting
+it from a later generation omits its XML element.
 
 ## 2. Configure site.json
 
@@ -79,6 +98,12 @@ Output:
 - `.local/asterisk/*.conf`: PJSIP endpoint/auth/AOR, dialplan, RTP and runtime paths.
 - `.local/tftp/SEP<MAC>.cnf.xml`: one profile per phone.
 - `.local/tftp/dialplan.xml`: extensions 2xx, 600, 601 and 620.
+
+With the corresponding features enabled, output also includes the separate
+`phone-management-secrets.json` for SSH and `ha-ami-secret.json` for Home
+Assistant; Assist adds route 630. Include these private credential files in
+the backup. The controller's `control.json` is created separately by
+`phone_control.py init` and is not a SIP or SSH credential file.
 
 Directories use mode 0700 and files 0600. Passwords are not printed. When a phone
 is removed from the inventory, the generator removes its old generated SEP

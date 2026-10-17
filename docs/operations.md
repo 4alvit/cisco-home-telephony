@@ -98,6 +98,14 @@ the agreed rollback window; retain Secrets referenced by active ReplicaSets.
 
 ## Troubleshooting
 
+For authenticated screenshots, remote key presses, callback renewal, legacy
+SSH/HTTPS failures and single-port PoE recovery, use the
+[remote-management runbook](phone-control.md). For the second line and the
+required wallpaper sizes/catalogue, use the
+[two-line and wallpaper guide](second-line-and-wallpaper.md). The
+[live validation record](server-validation.md) distinguishes what worked on the
+pilot from acceptance checks still needed for other phones.
+
 **Dark screen with a steady green Display button:** the 7945G uses this light
 for screen sleep. The separate Display button has overlapping-rectangle symbols
 and sits to the right of the four softkeys below the screen. Press it once to

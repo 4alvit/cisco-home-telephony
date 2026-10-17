@@ -5,6 +5,13 @@ personalization. `scripts/phone_control.py` supplies the authentication callback
 one keypad action per invocation, and screenshots. Start an attended maintenance
 window with the phone idle; active-call keys require an explicit override.
 
+The phone's HTTP home page provides status and logs, not a settings editor.
+`web_access: true` alone does not authorize changing a line or selecting a
+wallpaper. Persistent line definitions, callback URLs and SSH settings come
+from the provisioned `SEP…cnf.xml`. Authenticated CGI can operate the visible
+menus and select a wallpaper that has been supplied through TFTP. SSH opens a
+diagnostic interface; it is not the configuration editor for those settings.
+
 ![Remote management paths](diagrams/remote-management.svg)
 
 The callback accepts only the configured phone source IPv4 address and nonce
@@ -104,6 +111,97 @@ remain in `TIME_WAIT`; a second live listener on the same address is refused.
 The phone's existing callback URL remains valid without another provisioning
 cycle. Reopen only the same narrow firewall rule for the new window.
 
+### Run a bounded window on a systemd management host
+
+Choose one canonical `control.json`; the following procedure keeps it on the
+callback host. Stage the current `phone_control.py` and this file in a private
+directory owned by the existing service account. Use mode `0700` for the
+directory and `0600` for the JSON, and copy over SSH with the host key checked.
+The examples use the synthetic SSH alias `voice-node`, account/group `operator`,
+directory `/home/operator/.local/share/cisco-phone-control`, and unit
+`cisco-phone-control-pilot.service`. Substitute your recorded values together.
+
+For each later window, stop the previous unit if it exists, then run renewal
+on the canonical copy as its owner:
+
+```sh
+# On the callback host; omit stop only after confirming the unit is not loaded.
+sudo systemctl stop cisco-phone-control-pilot.service
+python3 /home/operator/.local/share/cisco-phone-control/phone_control.py \
+  --config /home/operator/.local/share/cisco-phone-control/control.json \
+  renew --ttl-seconds 2700
+```
+
+If a separate workstation runs the controller, securely copy that exact renewed
+file back before issuing requests. Do not independently run `init` or renew two
+copies: the server and controller need the same credentials and expiry. Preserve
+the working callback path and the phone's inventory URL. From the workstation:
+
+```sh
+scp -p -o StrictHostKeyChecking=yes \
+  voice-node:/home/operator/.local/share/cisco-phone-control/control.json \
+  .local/phone-control/control.json
+chmod 0600 .local/phone-control/control.json
+```
+
+Use the same script version on both hosts and compare the private copies if
+authentication or expiry differs. Keep host clocks synchronized. Updating a
+file does not update a running callback: stop, renew, synchronize, then start.
+
+Before starting, record the exact temporary firewall rule and its prior absence.
+On a host already managed through `iptables`, this synthetic guard rejects
+every other source at the callback's exact bound address and port:
+
+```sh
+sudo iptables -C INPUT -d 192.168.50.10/32 ! -s 192.168.50.21/32 \
+  -p tcp --dport 18080 -m comment --comment cisco-phone-control-pilot -j DROP
+# Add only if the check confirms this exact rule is absent.
+sudo iptables -I INPUT 1 -d 192.168.50.10/32 ! -s 192.168.50.21/32 \
+  -p tcp --dport 18080 -m comment --comment cisco-phone-control-pilot -j DROP
+```
+
+Do not insert a duplicate or treat a permission/backend error as an absent rule.
+The phone's own traffic still follows the existing firewall policy. If that
+policy denies it, add and record a separate narrow allow rule through the
+existing manager; an allow rule alone would not exclude other sources on a
+default-accept host. If the host uses a different firewall manager, use its
+equivalent owned rule;
+do not mix managers or flush a chain. This callback rule is separate from the
+temporary TFTP permission. Retain the exact rule specification for cleanup.
+
+Start the callback as the unprivileged owner of its files:
+
+```sh
+sudo systemd-run --unit=cisco-phone-control-pilot --collect \
+  --service-type=exec --uid=operator --gid=operator \
+  --property=RuntimeMaxSec=2700 --property=Restart=no \
+  --property=TimeoutStopSec=5s --property=NoNewPrivileges=yes \
+  --property=ProtectSystem=strict --property=ProtectHome=read-only \
+  --property=PrivateTmp=yes --property=UMask=0077 \
+  /usr/bin/python3 /home/operator/.local/share/cisco-phone-control/phone_control.py \
+  --config /home/operator/.local/share/cisco-phone-control/control.json serve
+sudo systemctl show cisco-phone-control-pilot.service \
+  --property=ActiveState --property=SubState --property=Result
+sudo ss -lnt 'sport = :18080'
+```
+
+Require a listener at the configured private address and an authenticated
+screenshot before sending a key. A successful `systemd-run` command alone does
+not prove that the callback bound its socket. The JSON deadline can expire
+earlier than `RuntimeMaxSec`; neither restarting the service nor reconnecting
+SSH renews it. Inspect only this unit's journal when startup fails, and keep
+any diagnostic output private.
+
+A stopped or expired transient unit can disappear, especially with `--collect`.
+`Unit not found` after its completion does not mean the script or private
+configuration was lost. Confirm there is no remaining listener, renew and sync
+the files, then recreate the unit with the full command above. Do not rely on
+`systemctl restart` finding a collected unit, create a permanent enabled service,
+or configure automatic renewal. See systemd's
+[transient-unit lifecycle](https://github.com/systemd/systemd/blob/v249/man/systemd-run.xml),
+[runtime limit](https://github.com/systemd/systemd/blob/v249/man/systemd.service.xml)
+and [execution protection settings](https://github.com/systemd/systemd/blob/v249/man/systemd.exec.xml).
+
 ## Optional SSH diagnostics and personalization
 
 Per-phone `ssh_enabled: true` enables the SSH server through
@@ -176,6 +274,15 @@ password in shell arguments. The exact lists above are deliberate replacements,
 not `+algorithm` additions, and apply only to this legacy device. An unknown
 host-key failure after key exchange is a separate, expected verification step;
 it must not be bypassed to diagnose the earlier buffer error.
+
+The pilot's `help` output identifies `help commands` for listing available
+commands, `show ?` for exploring show arguments, and `help COMMAND` or
+`COMMAND ?` for command-specific help. These are the next read-only discovery
+steps; no particular `show` subcommand has been accepted by this project yet.
+Build a status-command allowlist from this firmware's help. Commands that enable
+debug logging, clear logs, modify files or reset the phone are separate actions,
+not read-only inspection. Do not import router IOS commands or newer phone
+models' Linux-shell instructions into this diagnostic prompt.
 
 Per-phone `phone_personalization: true` writes the device-level
 `phonePersonalization=1`. It requires both `web_access: true` and a valid
@@ -315,6 +422,29 @@ If permanently retiring remote control, remove its URL and disable the optional
 management features in the inventory, regenerate and apply the phone profile,
 then remove the obsolete credentials. SSH, when explicitly enabled, is independent
 of the callback lifetime and remains available until disabled on the phone.
+
+For the systemd/iptables example above, stop the unit if still loaded and delete
+only the exact rule owned by this window:
+
+```sh
+sudo systemctl stop cisco-phone-control-pilot.service
+sudo iptables -D INPUT -d 192.168.50.10/32 ! -s 192.168.50.21/32 \
+  -p tcp --dport 18080 -m comment --comment cisco-phone-control-pilot -j DROP
+sudo ss -lnt 'sport = :18080'
+sudo iptables -C INPUT -d 192.168.50.10/32 ! -s 192.168.50.21/32 \
+  -p tcp --dport 18080 -m comment --comment cisco-phone-control-pilot -j DROP
+```
+
+Completion means no callback listener and the exact rule check reports absence;
+handle a missing, already-collected unit without skipping the firewall cleanup.
+Remove any separate allow rule created by this window using its recorded exact
+specification as well.
+Never delete a rule by a stale numeric position, flush INPUT, or remove the
+ordinary SIP/RTP policy. A runtime timeout stops the process but does not remove
+the firewall rule. Record these checks, TFTP cleanup, registered line states and
+zero remaining test-call channels in the private deployment receipt. Retaining
+the callback URL and private files is intentional; the closed window should
+have no listening callback service.
 
 ## Protocol references
 
