@@ -30,8 +30,8 @@ Check each label before a batch rollout.
 At the initial research date, individual App Load/VID values, an authorized
 firmware archive and home hardware parameters had not been verified. Subsequent
 server deployment and the first phone's SIP conversion are recorded separately in
-[live validation](server-validation.md). Real phone calls remain untested;
-generated configuration alone is not proof of physical deployment.
+[live validation](server-validation.md), including the successful handset echo
+test. Generated configuration alone is not proof of physical deployment.
 
 Follow the [full conversion procedure](sip-conversion.md). Cisco documentation
 establishes hardware capabilities, but does not guarantee this Asterisk

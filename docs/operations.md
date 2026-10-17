@@ -98,6 +98,13 @@ the agreed rollback window; retain Secrets referenced by active ReplicaSets.
 
 ## Troubleshooting
 
+**Dark screen with a steady green Display button:** the 7945G uses this light
+for screen sleep. The separate Display button has overlapping-rectangle symbols
+and sits to the right of the four softkeys below the screen. Press it once to
+wake the display; lifting the handset also wakes it. Check this before assuming
+a power or firmware failure. See the [Cisco 7945G/7965G user guide, printed
+pages 9–11 and 15](https://www.cisco.com/en/US/docs/voice_ip_comm/cuipph/7965g_7945g/6_1/english/user/guide/65enu61.pdf).
+
 **Pod Pending:** check the exact node name, Ready/cordon/taints, requests and free
 memory. Strict node selection is intentional. Do not remove unrelated taints
 or move the Pod to OCI without changing the architecture.
@@ -149,6 +156,14 @@ current IP against that list and the separate host firewall. The initial SIP 401
 is usually a normal digest challenge; repeated 401/403 without a successful
 REGISTER require a credentials/configuration check. CUCM and MPP provisioning
 procedures do not apply to this CP-7945G setup.
+
+**Echo test rings or returns no speech:** end the current call, start a new call
+and enter **600** explicitly. Check the dialed number on the display and actual
+Asterisk execution before diagnosing RTP. The generated route must execute
+`600@home`, then `Answer()` and `Echo()`. A log showing `201@home` and a call to
+`PJSIP/201` is a self-call when the caller is also 201; it does not reach the
+echo test. Review the recent Asterisk logs and `dialplan show 600@home`; confirm the call reached `Echo()`
+before moving to the audio checks below.
 
 **Calls connect, but audio is missing or one-way:** SIP 5060 and RTP are separate
 flows. Check UDP 10000–10199 toward Asterisk and return traffic to the phone's

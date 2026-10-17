@@ -26,8 +26,9 @@ conversion to MPP is not required.
 Assistant AMI and VoIP integrations, and a telephony dashboard are installed.
 See [live deployment validation](docs/server-validation.md).
 The first physical 7945G now runs **SIP45.9-4-2SR4-3S**, registers to Asterisk
-over TCP as **201**, and appears registered in Home Assistant. Real audio,
-Assist and two-phone acceptance tests are still pending. Cisco firmware is not
+over TCP as **201**, and appears registered in Home Assistant. Handset echo on **600**,
+Russian Assist on **630**, and HA-initiated calling and hangup passed live tests.
+Speakerphone, DTMF and two-phone acceptance remain. Cisco firmware is not
 included: obtain an authorized copy and verify the upgrade path.
 The [firmware archive guide](docs/firmware-archive.md) records a working preserved
 SR4-3 copy, byte-level checks, extraction steps and provenance limitations.

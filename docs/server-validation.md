@@ -2,8 +2,10 @@
 
 The server is installed in the existing home k3s cluster. One physical 7945G
 powered through PoE has successfully converted from SCCP to SIP and registered
-as extension **201**. Full phone acceptance remains incomplete: real audio,
-echo, Assist and calls between two phones still require testing.
+as extension **201**. The operator confirmed a working handset echo test on
+**600** and Russian spoken replies from Assist on **630**. Live checks also
+verified calls initiated and ended from Home Assistant. Speakerphone, DTMF and calls between two phones
+still require separate acceptance testing.
 
 ## Verified on the live system
 
@@ -27,13 +29,19 @@ echo, Assist and calls between two phones still require testing.
   received the expected denial. HA service `asterisk.send_action` accepted Ping;
   that service response alone does not prove calling works.
 - A dedicated administrative telephony dashboard contains the actual AMI sensor,
-  five entities for extension 201, first-phone instructions and documentation
-  links. Its English configuration was verified by reading it back through the
-  API. Registration was subsequently checked independently on Asterisk and HA,
-  as described below.
+  five entities for extension 201, native VoIP permission/pipeline controls,
+  Assist-call and guarded Hangup buttons, first-phone instructions and
+  documentation links. Its English configuration was verified by reading it
+  back through the API. Registration was checked independently on Asterisk
+  and HA, as described below.
 - HA configuration and `.storage` were backed up locally before installation.
   Following HA's internal restart, it returned to `RUNNING` with safe mode off;
-  all **120 automations and 94 scripts** were preserved.
+  all **120 automations and 94 scripts** were preserved. A later restart loaded
+  two phone-control scripts and one disabled DTMF test automation; all 214 prior
+  entities and the prior automation on/off states remained intact. The Recorder
+  configuration retained its 43 existing entity exclusions and added exactly
+  the three mapped Connected Line/DTMF sensors. The original main configuration
+  and Recorder include files were unchanged.
 
 Images were built on a standard GitHub `ubuntu-24.04` runner and passed
 [native AMD64 build and isolated smoke tests](https://github.com/4alvit/cisco-home-telephony/actions/runs/39029793014)
@@ -45,8 +53,10 @@ local. Later readiness changes did not modify these images' Dockerfiles.
 
 The subsequent [CI run for the current implementation](https://github.com/4alvit/cisco-home-telephony/actions/runs/39051675792)
 passed on `main` at commit `e33b9996e728576ff55ef8c622520fcfeb8b9d1e`, including
-the image builds and isolated smoke tests. These checks complement the live
-results; they do not establish handset audio quality.
+the image builds and isolated smoke tests. The subsequent documentation-only
+[run at `2a5cc3a`](https://github.com/4alvit/cisco-home-telephony/actions/runs/39052869779)
+also passed. These checks complement the live results; they do not establish
+handset audio quality.
 
 ## First physical phone
 
@@ -86,7 +96,24 @@ all five `.sbn` components. After the update, the phone's web interface reported
 Asterisk then showed extension **201** with a **TCP contact in `Avail` state**.
 Home Assistant showed its registered sensor on and state **`Not in use`**,
 while **`AMI Connected`** remained on. This verifies SIP boot and registration
-for the pilot phone. It does not verify audio, DTMF or Assist.
+for the pilot phone. A subsequent call to **600** executed `Answer()` and
+`Echo()` on Asterisk, and the operator confirmed hearing their voice returned
+through the handset. This verifies that call's two-way audio path. Speakerphone,
+DTMF and calls between phones remain separate acceptance checks.
+
+The first call to **630** discovered the native Home Assistant VoIP device.
+Calls were then enabled for that device and the existing Russian voice pipeline
+selected. A subsequent call reached the satellite's `listening`, `processing`
+and `responding` states. The operator confirmed an audible spoken answer in
+Russian, both when dialing **630** and after answering a call initiated from HA.
+
+The generated Assist-call script was invoked through HA's service API. The
+phone rang, answered and connected to Assist. A separate call then verified
+the generated guarded Hangup script: the current `PJSIP/201-…` channel was
+checked immediately before invoking the script, the phone returned to
+`Not in use`, Connected Line became `None`, and Asterisk showed no active
+channels. These are live service/script checks; the dashboard was verified
+by API readback, rather than by clicking its controls in a browser.
 
 The phone also logged `Error Updating Locale` after unsuccessful requests for
 `/be-sip.jar` and `/g3-tones.xml`, which are not in the staged firmware bundle.
@@ -103,19 +130,18 @@ rules remained unchanged, and the fallback timer was canceled. The
 per-phone DHCP reservation and TFTP option remain for future controlled
 provisioning windows. Job expiry alone would not have closed the firewall.
 
-## Remaining physical acceptance
+## Remaining acceptance
 
-1. Dial **600** on the pilot and verify echo, handset/speakerphone audio and DTMF.
-2. For **630** Assist, enable calls for the actual VoIP device after its first
-   call, choose a working STT/TTS pipeline and verify speech recognition, spoken
-   responses and hangup.
-3. Verify HA call control against the pilot's actual active Channel using the
-   [companion acceptance guide](https://github.com/ha-homelab/asterisk-telephony/blob/main/docs/acceptance.md).
-4. Inventory and commission a second phone, then test calls in both directions,
+1. Verify speakerphone audio and DTMF separately from the successful handset
+   echo test on **600**.
+2. Verify dashboard confirmation behavior by clicking its controls; the
+   underlying HA scripts have passed live Originate/Hangup tests.
+3. Inventory and commission a second phone, then test calls in both directions,
    two-way audio, DTMF, hold/transfer and group ringing.
-5. Repeat relevant tests after controlled phone/PBX/HA restarts, then commission
-   the remaining phones in small groups.
+4. Repeat relevant tests after controlled phone/PBX restarts and AMI
+   reconnection, then commission the remaining phones in small groups.
 
 The registered pilot and service endpoint `ha-assist` do not establish that the
 whole batch is ready. A working transcoder and listening socket do not prove
-network quality, Assist pipeline behavior or audio in a handset.
+network quality on other phones. The observed voice results apply to this
+pilot and the selected pipeline; they are not a load or endurance test.

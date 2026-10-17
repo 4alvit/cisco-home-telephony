@@ -216,7 +216,9 @@ deep-reset sequences or bypass signature checks.
 For each phone, verify:
 
 1. `pjsip show contacts` shows the expected extension and LAN address.
-2. `600` returns your speech through echo.
+2. Start a new call and dial `600` explicitly; it returns your speech through
+   echo. If it only rings, confirm the actual dialed extension and Asterisk's
+   `Answer()`/`Echo()` execution using the [troubleshooting guide](operations.md).
 3. `601` plays the test tone; use moderate volume.
 4. A call between two phones has two-way speech, DTMF, hold/resume, transfer,
    speakerphone and handset operation.
