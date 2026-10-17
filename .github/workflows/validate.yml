@@ -38,6 +38,9 @@ jobs:
           printf '{"source_commit":"%s","run_id":"%s","platform":"linux/amd64"}\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" > .build/image-artifacts/source.json
           cd .build/image-artifacts
           sha256sum asterisk-amd64.tar.gz tftp-amd64.tar.gz images.json source.json > SHA256SUMS
+          total_bytes=$(du -sb . | cut -f1)
+          printf 'Verified image artifact size: %s bytes (limit: 400 MiB)\n' "$total_bytes"
+          test "$total_bytes" -lt $((400 * 1024 * 1024))
       - name: Upload verified amd64 images
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

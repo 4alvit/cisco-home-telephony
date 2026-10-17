@@ -104,9 +104,12 @@ Cisco и границы поддержки Asterisk.
 [GitHub Actions](https://github.com/4alvit/cisco-home-telephony/actions) проверяет
 Python, shell, сборку Asterisk/TFTP и запуск контейнеров на стандартном
 `ubuntu-24.04`. Для публичного репозитория эти runner minutes бесплатны.
-Workflow не использует платные larger runners, внешние платные сервисы,
-artifact uploads или увеличенные cache quotas. Бесплатность не распространяется
-на все продукты GitHub: [правила оплаты Actions](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
+Workflow не использует платные larger runners, внешние платные сервисы или
+увеличенные cache quotas. После успешного smoke только push в `main` сохраняет
+проверенные amd64-образы: суммарно меньше 400 MiB, срок хранения один день.
+После подтверждённого скачивания и импорта удаляйте именно этот deployment
+artifact. Хранение artifacts имеет отдельную квоту и не относится к бесплатным
+runner minutes: [правила оплаты Actions](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
 
 ## Home Assistant
 
