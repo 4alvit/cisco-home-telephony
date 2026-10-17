@@ -27,8 +27,9 @@ pending.
   received the expected denial. HA service `asterisk.send_action` accepted Ping;
   that service response alone does not prove calling works.
 - A dedicated administrative telephony dashboard contains the actual AMI sensor,
-  first-phone instructions and documentation links. Its configuration was verified
-  by reading it back through the API.
+  five entities for extension 201, first-phone instructions and documentation
+  links. Its English configuration was verified by reading it back through the
+  API. Adding the card does not establish that the phone is registered.
 - HA configuration and `.storage` were backed up locally before installation.
   Following HA's internal restart, it returned to `RUNNING` with safe mode off;
   all **120 automations and 94 scripts** were preserved.
