@@ -1,0 +1,501 @@
+#!/usr/bin/env python3
+"""Private-LAN Cisco 7945G control gateway. Never expose this service publicly.
+
+The API is bearer-authenticated and source-restricted. Phone authentication and
+short-lived XML/image resources are served on separate, per-phone listeners.
+Key/Dial URIs are immediate: all control decisions use fresh AMI observations.
+"""
+import argparse
+import base64
+import hashlib
+import hmac
+import io
+import ipaddress
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import socket
+import sqlite3
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib import parse, request
+import xml.etree.ElementTree as ET
+
+MAX_BODY = 3 * 1024 * 1024
+
+
+class Refused(Exception):
+    def __init__(self, reason, status=409):
+        self.reason, self.status = reason, status
+
+
+def require(value, reason, status=409):
+    if not value:
+        raise Refused(reason, status)
+
+
+def constant(left, right):
+    return hmac.compare_digest(hashlib.sha256(left.encode()).digest(),
+                               hashlib.sha256(right.encode()).digest())
+
+
+def private_ip(value):
+    address = ipaddress.IPv4Address(value)
+    require(any(address in ipaddress.ip_network(net) for net in
+                ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16')), 'private_ipv4_required', 400)
+    return str(address)
+
+
+def validate(config):
+    require(config.get('persistent_enabled') is True, 'explicit_persistent_mode_required', 400)
+    private_ip(config['bind_ipv4'])
+    require(type(config['api_port']) is int and 1024 <= config['api_port'] <= 65535, 'bad_port', 400)
+    require(re.fullmatch(r'[A-Za-z0-9_-]{32,128}', config['api_token']), 'bad_api_token', 400)
+    require(config['api_clients'] and len(config['api_clients']) <= 8, 'bad_api_clients', 400)
+    for value in config['api_clients']:
+        private_ip(value)
+    private_ip(config['ami']['host'])
+    require(type(config['ami']['port']) is int and 1 <= config['ami']['port'] <= 65535, 'bad_ami_port', 400)
+    for key in ('username', 'secret'):
+        require(isinstance(config['ami'][key], str) and 1 <= len(config['ami'][key]) <= 128
+                and not re.search(r'[\r\n\x00]', config['ami'][key]), 'bad_ami_credentials', 400)
+    ports, addresses, lines = {config['api_port']}, set(), set()
+    require(1 <= len(config['phones']) <= 32, 'bad_phone_count', 400)
+    for phone in config['phones']:
+        require(phone['id'] == phone['lines'][0] and 1 <= len(phone['lines']) <= 2, 'bad_line_mapping', 400)
+        private_ip(phone['ipv4'])
+        require(phone['ipv4'] not in addresses, 'duplicate_phone_ip', 400)
+        addresses.add(phone['ipv4'])
+        require(re.fullmatch(r'SEP[0-9A-F]{12}', phone['device']), 'bad_device', 400)
+        require(type(phone['port']) is int and 1024 <= phone['port'] <= 65535
+                and phone['port'] not in ports, 'duplicate_or_bad_port', 400)
+        ports.add(phone['port'])
+        require(re.fullmatch(r'/auth/[a-f0-9]{64}', phone['auth_path']), 'bad_auth_path', 400)
+        for key in ('username', 'password'):
+            require(re.fullmatch(r'[A-Za-z0-9_-]{24,96}', phone[key]), 'bad_phone_credentials', 400)
+        require(len(phone['username']) + len(phone['password']) + 1 <= 64, 'phone_credentials_too_long', 400)
+        for line in phone['lines']:
+            require(re.fullmatch(r'2[0-9]{2}', line) and line not in lines, 'duplicate_or_bad_line', 400)
+            lines.add(line)
+    require(all(isinstance(number, str) and re.fullmatch(r'[0-9]{3,8}', number)
+                for number in config['dial_allowlist']), 'bad_dial_allowlist', 400)
+    require(isinstance(config.get('ring_allowlist', ['640']), list)
+            and all(number == '640' or number in config['dial_allowlist']
+                    for number in config.get('ring_allowlist', ['640'])), 'bad_ring_allowlist', 400)
+    return config
+
+
+class AMI:
+    """One bounded, event-filtered AMI session per fresh operation."""
+    def __init__(self, config):
+        self.config = config
+
+    def __enter__(self):
+        self.sock = socket.create_connection((self.config['host'], self.config['port']), timeout=5)
+        self.file = self.sock.makefile('rb')
+        try:
+            require(self.file.readline(1024).startswith(b'Asterisk Call Manager/'), 'bad_ami_banner', 503)
+            self.action('Login', Username=self.config['username'], Secret=self.config['secret'], Events='off')
+        except Exception:
+            self.file.close()
+            self.sock.close()
+            raise
+        return self
+
+    def __exit__(self, *_):
+        self.file.close()
+        self.sock.close()
+
+    def action(self, name, complete=None, **headers):
+        action_id = secrets.token_hex(12)
+        data = {'Action': name, 'ActionID': action_id, **headers}
+        require(all(not re.search(r'[\r\n\x00]', str(value)) for value in data.values()), 'invalid_ami_header', 400)
+        self.sock.sendall(('\r\n'.join(f'{key}: {value}' for key, value in data.items()) + '\r\n\r\n').encode())
+        results, total, deadline = [], 0, time.monotonic() + 8
+        while time.monotonic() < deadline:
+            fields = {}
+            while True:
+                line = self.file.readline(16385)
+                total += len(line)
+                require(line and len(line) <= 16384 and total <= 1024 * 1024, 'invalid_ami_response', 503)
+                if line in (b'\r\n', b'\n'):
+                    break
+                key, separator, value = line.decode('utf-8', 'replace').partition(':')
+                if separator:
+                    fields[key] = value.strip()
+            if fields.get('ActionID') != action_id:
+                continue
+            require(fields.get('Response') != 'Error', 'ami_action_rejected', 503)
+            results.append(fields)
+            if complete and fields.get('Event') == complete:
+                return results
+            if not complete and fields.get('Response') in ('Success', 'Follows'):
+                return results
+        raise Refused('ami_timeout', 503)
+
+    def snapshot(self):
+        endpoints = self.action('PJSIPShowEndpoints', complete='EndpointListComplete')
+        channels = self.action('CoreShowChannels', complete='CoreShowChannelsComplete')
+        return ({item['ObjectName']: item.get('DeviceState', 'Unavailable') for item in endpoints
+                 if item.get('Event') == 'EndpointList'},
+                [item for item in channels if item.get('Event') == 'CoreShowChannel'])
+
+
+class NoRedirect(request.HTTPRedirectHandler):
+    def redirect_request(self, *_args, **_kwargs):
+        raise Refused('phone_redirect_refused', 502)
+
+
+def execute(phone, uri, priority=0):
+    root = ET.Element('CiscoIPPhoneExecute')
+    ET.SubElement(root, 'ExecuteItem', {'Priority': str(priority), 'URL': uri})
+    payload = parse.urlencode({'XML': ET.tostring(root, encoding='unicode')}).encode()
+    auth = base64.b64encode((phone['username'] + ':' + phone['password']).encode()).decode()
+    req = request.Request('http://' + phone['ipv4'] + '/CGI/Execute', data=payload,
+                          headers={'Authorization': 'Basic ' + auth,
+                                   'Content-Type': 'application/x-www-form-urlencoded'})
+    opener = request.build_opener(request.ProxyHandler({}), NoRedirect())
+    with opener.open(req, timeout=10) as response:
+        data = response.read(65537)
+    require(len(data) <= 65536 and b'<!' not in data, 'invalid_phone_response', 502)
+    document = ET.fromstring(data)
+    items = document.findall('ResponseItem')
+    require(document.tag == 'CiscoIPPhoneResponse' and len(items) == 1
+            and items[0].get('Status') == '0' and items[0].get('URL') == uri,
+            'phone_did_not_confirm_action', 502)
+
+
+def own_channels(phone, channels):
+    return [item for item in channels if any(re.fullmatch(r'PJSIP/' + re.escape(line) + r'-[0-9a-f]+',
+                                                        item.get('Channel', '')) for line in phone['lines'])]
+
+
+def text(value, limit):
+    require(isinstance(value, str) and 1 <= len(value) <= limit
+            and not any(ord(char) < 32 and char not in '\n\t' for char in value), 'bad_text', 400)
+    return value
+
+
+class Gateway:
+    def __init__(self, config, state_directory):
+        self.config = validate(config)
+        self.phones = {phone['id']: phone for phone in config['phones']}
+        self.lock = threading.RLock()
+        self.resources = {}
+        self.stopped = threading.Event()
+        self.auto_attempts = set()
+        self.last_pbx_start = None
+        directory = Path(state_directory)
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.db = sqlite3.connect(directory / 'gateway.sqlite3', check_same_thread=False)
+        self.db.execute('CREATE TABLE IF NOT EXISTS preferences (phone TEXT PRIMARY KEY, dnd INTEGER, autoanswer INTEGER)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS operations (key TEXT PRIMARY KEY, digest TEXT, response TEXT, created REAL)')
+        for phone in self.phones:
+            self.db.execute('INSERT OR IGNORE INTO preferences VALUES (?, 0, 0)', (phone,))
+        self.db.commit()
+
+    def preference(self, phone_id):
+        row = self.db.execute('SELECT dnd,autoanswer FROM preferences WHERE phone=?', (phone_id,)).fetchone()
+        return {'dnd': bool(row[0]), 'autoanswer': bool(row[1])}
+
+    def sync_dnd(self, ami):
+        # Restore after an Asterisk restart; never rely on ephemeral AstDB alone.
+        for phone in self.phones.values():
+            value = '1' if self.preference(phone['id'])['dnd'] else '0'
+            for line in phone['lines']:
+                ami.action('DBPut', Family='cisco-dnd', Key=line, Val=value)
+
+    def listing(self):
+        with self.lock, AMI(self.config['ami']) as ami:
+            endpoints, channels = ami.snapshot()
+            return {'ami_fresh': True, 'observed_at': time.time(), 'phones': [
+                {'id': phone['id'], 'lines': phone['lines'], **self.preference(phone['id']),
+                 'online': all(endpoints.get(line) not in (None, 'Unavailable', 'Invalid') for line in phone['lines']),
+                 'channels': [{'name': item['Channel'], 'uniqueid': item.get('Uniqueid'),
+                               'state': item.get('ChannelStateDesc'), 'line': item['Channel'].split('/')[1].split('-')[0]}
+                              for item in own_channels(phone, channels)],
+                 'capabilities': ['dial', 'answer', 'hangup', 'speaker_toggle', 'message', 'image', 'dnd', 'autoanswer', 'ring']}
+                for phone in self.phones.values()]}
+
+    def resource(self, phone, data, content_type):
+        now = time.time()
+        self.resources = {key: value for key, value in self.resources.items() if value[0] > now}
+        require(len(self.resources) < 64, 'too_many_pending_messages', 429)
+        path = '/content/' + secrets.token_urlsafe(24)
+        self.resources[(phone['id'], path)] = (now + 120, data, content_type)
+        return f'http://{self.config["bind_ipv4"]}:{phone["port"]}{path}'
+
+    def notify(self, phone, action, body):
+        title = text(body.get('title', 'Home phone'), 48)
+        if action == 'message':
+            root = ET.Element('CiscoIPPhoneText')
+            ET.SubElement(root, 'Title').text = title
+            ET.SubElement(root, 'Prompt').text = 'Press Exit to return'
+            ET.SubElement(root, 'Text').text = text(body.get('text'), 2000)
+        else:
+            from PIL import Image, ImageOps
+            try:
+                encoded = body['image_base64']
+                require(isinstance(encoded, str) and len(encoded) <= MAX_BODY - 1024, 'image_too_large', 413)
+                raw = base64.b64decode(encoded, validate=True)
+                require(len(raw) <= 2 * 1024 * 1024, 'image_too_large', 413)
+                image = Image.open(io.BytesIO(raw))
+                require(image.format in ('PNG', 'JPEG') and image.width * image.height <= 16_000_000,
+                        'unsupported_image', 400)
+                image = ImageOps.exif_transpose(image).convert('RGB')
+                image = ImageOps.contain(image, (298, 156))
+                output = io.BytesIO()
+                image.save(output, format='PNG')
+            except (ValueError, OSError, KeyError):
+                raise Refused('invalid_image', 400) from None
+            image_url = self.resource(phone, output.getvalue(), 'image/png')
+            root = ET.Element('CiscoIPPhoneImageFile')
+            ET.SubElement(root, 'Title').text = title
+            ET.SubElement(root, 'Prompt').text = 'Press Exit to return'
+            ET.SubElement(root, 'LocationX').text = '-1'
+            ET.SubElement(root, 'LocationY').text = '-1'
+            ET.SubElement(root, 'URL').text = image_url
+        key = ET.SubElement(root, 'SoftKeyItem')
+        ET.SubElement(key, 'Name').text = 'Exit'
+        ET.SubElement(key, 'URL').text = 'SoftKey:Exit'
+        ET.SubElement(key, 'Position').text = '1'
+        uri = self.resource(phone, ET.tostring(root, encoding='utf-8', xml_declaration=True), 'text/xml; charset=utf-8')
+        # Unlike Key:/Dial:, an HTTP URI obeys Priority=2 (idle-only).
+        execute(phone, uri, priority=2)
+
+    def mutate(self, phone_id, action, body):
+        require(phone_id in self.phones, 'unknown_phone', 404)
+        require(action in ('dial', 'answer', 'hangup', 'speaker', 'message', 'image', 'dnd', 'autoanswer', 'ring'),
+                'unknown_action', 404)
+        require(isinstance(body, dict), 'json_object_required', 400)
+        key = body.get('idempotency_key')
+        require(isinstance(key, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{8,128}', key), 'idempotency_key_required', 400)
+        digest = hashlib.sha256(json.dumps([phone_id, action, body], sort_keys=True).encode()).hexdigest()
+        with self.lock:
+            previous = self.db.execute('SELECT digest,response FROM operations WHERE key=?', (key,)).fetchone()
+            if previous:
+                require(previous[0] == digest, 'idempotency_key_conflict')
+                require(previous[1] is not None, 'previous_action_outcome_unknown')
+                return json.loads(previous[1])
+            self.db.execute('DELETE FROM operations WHERE created < ?', (time.time() - 30 * 86400,))
+            self.db.execute('INSERT INTO operations VALUES (?, ?, NULL, ?)', (key, digest, time.time()))
+            self.db.commit()  # Persist intent BEFORE any phone or AMI mutation.
+            try:
+                result = self._mutate(self.phones[phone_id], action, body)
+                result.update(status='accepted', action_id=key)
+            except Refused as error:
+                # Keep ambiguous I/O outcomes claimed; a retry must not dial again.
+                if error.status < 500:
+                    self.db.execute('DELETE FROM operations WHERE key=?', (key,))
+                    self.db.commit()
+                raise
+            self.db.execute('UPDATE operations SET response=? WHERE key=?', (json.dumps(result), key))
+            self.db.commit()
+            return result
+
+    def _mutate(self, phone, action, body):
+        line = body.get('line', phone['id'])
+        require(line in phone['lines'], 'line_does_not_belong_to_phone', 400)
+        if action in ('dnd', 'autoanswer'):
+            require(type(body.get('enabled')) is bool, 'enabled_boolean_required', 400)
+            if action == 'dnd':
+                with AMI(self.config['ami']) as ami:
+                    for endpoint in phone['lines']:
+                        ami.action('DBPut', Family='cisco-dnd', Key=endpoint, Val='1' if body['enabled'] else '0')
+            # Column is selected from the fixed action allowlist, never from arbitrary input.
+            self.db.execute('UPDATE preferences SET ' + action + '=? WHERE phone=?', (int(body['enabled']), phone['id']))
+            self.db.commit()
+            return {action: body['enabled']}
+        with AMI(self.config['ami']) as ami:
+            endpoints, channels = ami.snapshot()
+            require(all(endpoints.get(endpoint) not in (None, 'Unavailable', 'Invalid') for endpoint in phone['lines']),
+                    'phone_unavailable', 503)
+            owned = own_channels(phone, channels)
+            if action in ('message', 'image'):
+                require(not owned, 'phone_busy')
+                self.notify(phone, action, body)
+                return {'resource_ttl_seconds': 120}
+            if action in ('dial', 'ring'):
+                require(not owned and all(endpoints.get(endpoint) == 'Not in use' for endpoint in phone['lines']), 'phone_busy')
+                require(not self.preference(phone['id'])['dnd'], 'do_not_disturb')
+                if action == 'ring':
+                    destination = body.get('destination', '640')
+                    require(destination in self.config.get('ring_allowlist', ['640']), 'ring_destination_not_allowed', 400)
+                    ami.action('Originate', Channel='PJSIP/' + line, Context='home', Exten=destination, Priority='1',
+                               Timeout='20000', Async='true', CallerID='Home alarm <640>')
+                    return {'ring_timeout_seconds': 20, 'destination': destination}
+                number = body.get('number')
+                require(number in self.config['dial_allowlist'], 'number_not_allowed', 400)
+                index = phone['lines'].index(line) + 1
+                # The Dial URI has NO line-selector suffix. Select the real
+                # line key first, then submit only a numeric dial sequence.
+                execute(phone, 'Key:Line' + str(index))
+                execute(phone, 'Dial:' + number)
+                return {'line': line, 'number': number}
+            if action == 'speaker':
+                require(body.get('mode') == 'toggle', 'only_explicit_toggle_supported', 400)
+                require(not owned, 'speaker_toggle_requires_idle_phone')
+                execute(phone, 'Key:Speaker')
+                return {'speaker_state': 'unknown', 'operation': 'toggle'}
+            selected = [item for item in owned if item['Channel'].startswith('PJSIP/' + line + '-')]
+            require(len(selected) == 1 and len(owned) == 1, 'exactly_one_selected_phone_channel_required')
+            channel = selected[0]
+            require(channel.get('Uniqueid'), 'channel_identity_missing')
+            require(body.get('channel') == channel['Channel'] and body.get('uniqueid') == channel['Uniqueid'],
+                    'channel_identity_changed')
+            if action == 'answer':
+                require(channel.get('ChannelStateDesc') == 'Ringing', 'phone_not_ringing')
+                execute(phone, 'Key:Line' + str(phone['lines'].index(line) + 1))
+            else:
+                ami.action('Hangup', Channel=channel['Channel'], Cause='16')
+            return {'line': line, 'channel': channel['Channel'], 'uniqueid': channel['Uniqueid']}
+
+    def background(self):
+        while not self.stopped.wait(2):
+            try:
+                with self.lock, AMI(self.config['ami']) as ami:
+                    status = ami.action('CoreStatus')[0]
+                    started = (status.get('CoreStartupDate'), status.get('CoreStartupTime'))
+                    require(all(started), 'pbx_start_identity_missing', 503)
+                    if started != self.last_pbx_start:
+                        self.sync_dnd(ami)
+                        self.last_pbx_start = started
+                    endpoints, channels = ami.snapshot()
+                    active = {item.get('Uniqueid') for item in channels}
+                    self.auto_attempts.intersection_update(active)
+                    for phone in self.phones.values():
+                        pref = self.preference(phone['id'])
+                        owned = own_channels(phone, channels)
+                        if not pref['autoanswer'] or pref['dnd'] or len(owned) != 1:
+                            continue
+                        item = owned[0]
+                        identity = item.get('Uniqueid')
+                        if not identity or identity in self.auto_attempts or item.get('ChannelStateDesc') != 'Ringing':
+                            continue
+                        self.auto_attempts.add(identity)  # One attempt, including ambiguous timeout.
+                        line = item['Channel'].split('/')[1].split('-')[0]
+                        self.mutate(phone['id'], 'answer', {'line': line, 'channel': item['Channel'],
+                                    'uniqueid': identity, 'idempotency_key': 'autoanswer:' + identity})
+            except Exception:
+                # No credentials, text, image data or raw remote responses in logs.
+                pass
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = 'CiscoHomeGateway'
+    sys_version = ''
+    protocol_version = 'HTTP/1.0'
+
+    def log_message(self, *_):
+        pass  # Authentication callback URLs contain credentials.
+
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(12)
+
+    def reply(self, status, data, content_type='application/json'):
+        if not isinstance(data, bytes):
+            data = json.dumps(data).encode()
+        self.send_response(status)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        self.wfile.write(data)
+
+    def body(self, limit):
+        require('Transfer-Encoding' not in self.headers and len(self.headers.get_all('Content-Length', [])) <= 1,
+                'invalid_framing', 400)
+        length = self.headers.get('Content-Length', '0')
+        require(length.isdigit() and int(length) <= limit, 'request_too_large', 413)
+        data = self.rfile.read(int(length))
+        require(len(data) == int(length), 'truncated_request', 400)
+        return data
+
+    def handle_request(self):
+        gateway, phone = self.server.gateway, self.server.phone
+        source = self.client_address[0]
+        if phone:
+            require(source == phone['ipv4'], 'forbidden', 403)
+            target = parse.urlsplit(self.path)
+            require(not target.scheme and not target.netloc and not target.fragment, 'bad_target', 400)
+            if target.path == phone['auth_path']:
+                if self.command == 'GET':
+                    require(not self.body(0), 'bad_auth_body', 400)
+                    encoded = target.query
+                else:
+                    require(not target.query and self.headers.get('Content-Type') == 'application/x-www-form-urlencoded',
+                            'bad_auth_content_type', 400)
+                    encoded = self.body(4096).decode('ascii')
+                pairs = parse.parse_qsl(encoded, keep_blank_values=True, strict_parsing=True)
+                values = dict(pairs)
+                require(len(pairs) == 3 and set(values) == {'UserID', 'Password', 'devicename'}, 'bad_auth_fields', 403)
+                allowed = (constant(values['UserID'], phone['username']) and constant(values['Password'], phone['password'])
+                           and constant(values['devicename'], phone['device']))
+                return self.reply(200, b'AUTHORIZED' if allowed else b'UNAUTHORIZED', 'text/plain')
+            require(self.command == 'GET' and not target.query and not self.body(0), 'not_found', 404)
+            # Separate resource lock would deadlock an Execute call awaiting its
+            # phone callback; dict lookups are atomic and resources immutable.
+            item = gateway.resources.get((phone['id'], target.path))
+            require(item and item[0] > time.time(), 'expired_or_unknown_resource', 404)
+            return self.reply(200, item[1], item[2])
+        require(source in gateway.config['api_clients'], 'forbidden', 403)
+        require(len(self.headers.get_all('Authorization', [])) == 1
+                and constant(self.headers.get('Authorization', ''), 'Bearer ' + gateway.config['api_token']), 'forbidden', 403)
+        if self.command == 'GET':
+            require(self.path == '/v1/phones' and not self.body(0), 'not_found', 404)
+            return self.reply(200, gateway.listing())
+        match = re.fullmatch(r'/v1/phones/(2[0-9]{2})/([a-z]+)', self.path)
+        require(match, 'not_found', 404)
+        require(self.headers.get('Content-Type', '').split(';')[0] == 'application/json', 'json_required', 400)
+        try:
+            data = json.loads(self.body(MAX_BODY))
+        except (ValueError, UnicodeError):
+            raise Refused('invalid_json', 400) from None
+        return self.reply(200, gateway.mutate(match[1], match[2], data))
+
+    def do_GET(self):
+        try:
+            self.handle_request()
+        except Refused as error:
+            self.reply(error.status, {'status': 'refused', 'reason': error.reason})
+        except Exception:
+            self.reply(503, {'status': 'unknown', 'reason': 'operation_failed_do_not_retry_blindly'})
+
+    do_POST = do_GET
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config', required=True)
+    parser.add_argument('--state-directory', required=True)
+    args = parser.parse_args()
+    os.umask(0o077)
+    config_path = Path(args.config)
+    # Kubernetes projects Secrets using symlinks. The read-only Secret volume,
+    # restricted pod identity and fixed operator-supplied path are the boundary.
+    require(config_path.is_file() and config_path.stat().st_size <= 128 * 1024, 'invalid_config_file', 400)
+    gateway = Gateway(json.loads(config_path.read_text()), args.state_directory)
+    servers = []
+    for phone in [None, *gateway.phones.values()]:
+        server = ThreadingHTTPServer((gateway.config['bind_ipv4'], phone['port'] if phone else gateway.config['api_port']), Handler)
+        server.daemon_threads = True
+        server.gateway, server.phone = gateway, phone
+        servers.append(server)
+    threading.Thread(target=gateway.background, daemon=True).start()
+    for server in servers:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        while True:
+            time.sleep(60)
+    except KeyboardInterrupt:
+        gateway.stopped.set()
+        for server in servers:
+            server.shutdown()
+
+
+if __name__ == '__main__':
+    main()

@@ -11,12 +11,21 @@
   active injector connected to an ordinary switch.
 - [remote-management.svg](remote-management.svg): authenticated CGI, SSH,
   a bounded authentication callback, temporary TFTP and a verified PoE port.
+- [four-phones.svg](four-phones.svg): four phones with independent lines
+  201–208, first-line group 620 and per-identity Assist 630. The
+  [expansion runbook](../adding-phones.md) separates the intended architecture
+  from current acceptance results.
+- [three-phones.svg](three-phones.svg): the earlier three-phone architectural
+  example with independent lines 201–206.
+- [radio-services.svg](radio-services.svg): per-call radio workers, approved
+  broadcaster streams, and finite alarms scheduled through Home Assistant.
+  See the [radio and alarms guide](../radio-and-alarms.md) for limits and tests.
 
 Each file is a standalone SVG containing editable text and vector objects.
 There are no MAC addresses, passwords or delivery details. Diagram sources and
 rebuild instructions for the presentation figures are in the
-[presentation guide](../slides/README.md). The remote-management figure is edited
-directly as standalone SVG.
+[presentation guide](../slides/README.md). The remote-management and multi-phone
+figures are edited directly as standalone SVG.
 The parent documentation contains full procedures, limitations and sources.
 Project ports are listed in the [k3s runbook](../k3s-deployment.md) and
 [HA guide](../home-assistant.md). Diagrams describe the architecture; they do not

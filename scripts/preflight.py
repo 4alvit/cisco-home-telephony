@@ -3,18 +3,36 @@
 import argparse
 import configparser
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from render_k3s import load_site, read_files, read_wallpaper, render_core, render_tftp
 from verify_firmware import verify as verify_firmware
-from provision import ha_settings, phone_networks, local_networks
+from provision import ha_settings, phone_networks, local_networks, radio_settings, service_dialplan, gateway_settings, external_sip
+
+
+def check_service_config(site, configs):
+    expected = radio_settings(site)
+    actual = json.loads(configs["radio.conf"]) if "radio.conf" in configs else None
+    if expected != actual:
+        raise ValueError("Radio settings differ from site.json; rerun provision.py")
+    routes, _ = service_dialplan(site)
+    dialplan = configs.get("extensions.conf", "")
+    if routes and routes not in dialplan:
+        raise ValueError("Service routes differ from site.json; rerun provision.py")
+    if not expected and "AGI(radio.py," in dialplan:
+        raise ValueError("Disabled radio has stale routes; rerun provision.py")
+    if not site.get("alarms", {}).get("enabled", False) and "exten => 640," in dialplan:
+        raise ValueError("Disabled alarms have stale routes; rerun provision.py")
 
 
 def check_phone_config(site, configs):
     """Do not deploy stale phone permissions after changing the source allowlist."""
     expected = phone_networks(site)
+    external = external_sip.object_names(site)
+    external_sip.check(site, configs)
     sections, current = [], None
     for line in configs.get("pjsip.conf", "").splitlines():
         line = line.strip()
@@ -29,10 +47,13 @@ def check_phone_config(site, configs):
     transports = set()
     for section in sections:
         if section.get("type") == ["transport"]:
+            if section["name"] in external["transports"]:
+                continue
             transports.add(section["name"])
             if section.get("local_net") != local_networks(site):
                 raise ValueError("PJSIP local networks differ from site.json; rerun provision.py")
-        if section.get("type") == ["endpoint"] and section["name"] != "ha-assist":
+        if (section.get("type") == ["endpoint"] and section["name"] != "ha-assist"
+                and section["name"] not in external["endpoints"]):
             if section.get("deny") != ["0.0.0.0/0"] or section.get("permit") != expected:
                 raise ValueError("Phone source ACL differs from site.json; rerun provision.py")
     if transports != {"transport-udp", "transport-tcp"}:
@@ -42,11 +63,12 @@ def check_phone_config(site, configs):
 def check_ha_config(site, configs):
     """Reject stale management credentials/ACLs after an operator edits site.json."""
     ha = ha_settings(site)
+    gateway = gateway_settings(site)
     parser = configparser.ConfigParser(interpolation=None)
     try:
         parser.read_string(configs.get("manager.conf", "[general]\nenabled=no\n"))
         enabled = parser.getboolean("general", "enabled", fallback=False)
-        if enabled != bool(ha):
+        if enabled != bool(ha or gateway):
             raise ValueError("AMI enabled state differs from site.json; rerun provision.py")
         if ha:
             expected = {"permit": f"{ha['client']}/255.255.255.255", "deny": "0.0.0.0/0.0.0.0",
@@ -62,6 +84,20 @@ def check_ha_config(site, configs):
             raise ValueError("Assist route differs from site.json; rerun provision.py")
         if assist and f"{route}{assist['host']}:{assist['port']},60)" not in actual:
             raise ValueError("Assist destination differs from site.json; rerun provision.py")
+        if bool(gateway) != parser.has_section("cisco_gateway"):
+            raise ValueError("Gateway enabled state differs from site.json; rerun provision.py")
+        if gateway:
+            expected = {"permit": f"{gateway['client']}/255.255.255.255", "deny": "0.0.0.0/0.0.0.0",
+                        "read": "system,call", "write": "system,call,originate"}
+            if any(parser.get("cisco_gateway", k) != v for k, v in expected.items()):
+                raise ValueError("Gateway AMI settings differ from site.json; rerun provision.py")
+            if parser.get("general", "bindaddr") != site["node_ipv4"] or parser.get("general", "port") != "5038":
+                raise ValueError("Gateway AMI listener differs from site.json; rerun provision.py")
+            for extension in re.findall(r"^exten => (2[0-9]{2}),1,", actual, re.M):
+                if f'exten => {extension},1,GotoIf($["${{DB(cisco-dnd/{extension})}}" = "1"]?dnd)' not in actual:
+                    raise ValueError("Gateway DND routes differ from site.json; rerun provision.py")
+        elif "DB(cisco-dnd/" in actual:
+            raise ValueError("Disabled gateway has stale DND routes; rerun provision.py")
     except configparser.Error:
         raise ValueError("Invalid manager.conf; rerun provision.py") from None
 
@@ -108,6 +144,7 @@ def main():
         configs = read_files(root / "asterisk", ".conf")
         check_phone_config(site, configs)
         check_ha_config(site, configs)
+        check_service_config(site, configs)
         render_core(site, configs)
         if args.with_tftp:
             xmls = read_files(root / "tftp", ".xml")

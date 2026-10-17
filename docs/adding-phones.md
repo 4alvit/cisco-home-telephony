@@ -1,22 +1,27 @@
 # Add more Cisco 7945G phones without disturbing the pilot
 
-This runbook expands one working two-line phone into three physical phones.
-Repeat the same checks for every later batch. An existing phone's successful
-conversion does not prove another unit's firmware compatibility, registration,
-audio or remote-management behavior.
+This runbook expands a working installation to four physical phones with eight
+independent lines. Repeat the same checks for every later batch. A phone's
+successful conversion does not prove another unit's firmware compatibility,
+registration, audio or remote-management behavior.
 
-The first phone has a verified two-line SIP configuration. The two additional
-phones in the current expansion are **not yet accepted**: preparation, DHCP
-configuration and a running TFTP server do not establish that conversion
-finished. Keep their status pending until the per-phone evidence below exists.
-The [validation record](server-validation.md) distinguishes completed tests
-from remaining work.
+The first three phones now register lines **201–206**. The second and third
+phones have saved LakeDawn backgrounds and verified two-stage SSH access; each
+of their four lines passed an Echo 600 call, bidirectional RTP checks and HA
+Hangup. Native VoIP discovery, call permissions and the existing Russian
+pipeline/VAD settings for **203/205** passed verification; spoken Assist
+acceptance is still separate. After its old ITL was erased, the fourth phone
+automatically received the new DHCP/TFTP settings and requested its plain SEP
+profile. **207/208 remain pending SIP verification**. The
+[validation record](server-validation.md) separates these results from the
+remaining audio, Assist and feature tests. Prepared files or an open TFTP window
+do not establish that conversion finished.
 
 All addresses below are synthetic examples. Real MAC addresses, switch ports,
 hardware observations, credentials and deployment receipts belong in private
 `.local/` files, never in this document or Git.
 
-![Example: three phones, six lines, temporary TFTP and HA Assist](diagrams/three-phones.svg)
+![Example: four phones, eight lines, temporary TFTP and HA Assist](diagrams/four-phones.svg)
 
 ## 1. Keep one complete inventory and preserve the working credentials
 
@@ -25,23 +30,25 @@ For this example, assign:
 - Phone A, the existing pilot: button 1 **201**, button 2 **202**.
 - Phone B, the next verified device: button 1 **203**, button 2 **204**.
 - Phone C, the other verified device: button 1 **205**, button 2 **206**.
+- Phone D, the next addition: button 1 **207**, button 2 **208**.
 
 Start from the [two-line example](../examples/phones.two-lines.example.json)
-and [inventory guide](provisioning.md). Keep all three physical phones in the
+and [inventory guide](provisioning.md). Keep all four physical phones in the
 same private `phones.json`. Each entry has its own verified MAC and an ordered
-`lines` list; for Phone B that list is:
+`lines` list; for Phone D that list is:
 
 ```json
 "lines": [
-  {"extension": "203", "label": "203"},
-  {"extension": "204", "label": "204"}
+  {"extension": "207", "label": "207"},
+  {"extension": "208", "label": "208"}
 ]
 ```
 
 Do not also include the legacy `extension` field. MACs must be unique per
-physical phone, and extensions must be unique across all six lines. The first
+physical phone, and extensions must be unique across all eight lines. The first
 array item maps to button 1 and the second to button 2. Group **620** calls only
-**201, 203 and 205**, avoiding two simultaneous group-call legs to one handset.
+**201, 203, 205 and 207**, avoiding two simultaneous group-call legs to one
+handset.
 The generator deliberately omits `lineIndex` for independent registrations;
 see the [two-line explanation](second-line-and-wallpaper.md).
 
@@ -98,21 +105,22 @@ PBX at `192.168.50.10`, the complete endpoint allowlist might be:
 "phone_cidrs": [
   "192.168.50.21/32",
   "192.168.50.22/32",
-  "192.168.50.23/32"
+  "192.168.50.23/32",
+  "192.168.50.24/32"
 ]
 ```
 
 An explicit `phone_cidrs` list replaces the generator's default phone ACL;
-retain the pilot's address when adding the other two. Do not widen `lan_cidr`
-to accommodate one new phone. Update the independent host firewall to admit
+retain all three existing phone addresses when adding the fourth. Do not widen
+`lan_cidr` to accommodate one new phone. Update the independent host firewall to admit
 SIP TCP/UDP5060 and PBX RTP UDP10000–10199 from the intended phone sources,
 while retaining the existing HA permissions. Preserve existing routes, other
 firewall chains and IPv6 restrictions. Do not expose SIP, AMI or TFTP publicly.
 
 Allow TFTP **UDP69 and UDP20000–20031** only from phones being provisioned in
-this window. For a batch containing only B and C, A does not need temporary
-TFTP access or a restart. Keep the persistent/boot firewall policy closed to
-TFTP; the Job timeout cannot remove host firewall rules. The generic firewall
+this window. When adding only D, A–C do not need temporary TFTP access or a
+restart. Keep the persistent/boot firewall policy closed to TFTP; the Job
+timeout cannot remove host firewall rules. The generic firewall
 examples are starting points, not a command to flush a live shared ruleset.
 
 Use the existing DHCP server. Add reservations and option 150 only for the new
@@ -121,13 +129,12 @@ For dnsmasq, the intended effective rules look like this **template**, with
 real verified MACs substituted privately:
 
 ```text
-dhcp-host=<PHONE_B_MAC>,set:cisco_new,192.168.50.22,phone-b
-dhcp-host=<PHONE_C_MAC>,set:cisco_new,192.168.50.23,phone-c
+dhcp-host=<PHONE_D_MAC>,set:cisco_new,192.168.50.24,phone-d
 dhcp-option-force=tag:cisco_new,150,192.168.50.10
 ```
 
 The option value is the TFTP node's IPv4 address, not a URL, Pod IP or ClusterIP.
-Keep the existing pilot reservation/tag unchanged. On routers that generate
+Keep the three existing reservations/tags unchanged. On routers that generate
 dnsmasq configuration, modify their supported persistent configuration rather
 than editing a generated runtime file.
 
@@ -158,9 +165,9 @@ bash scripts/deploy.sh --site "$deployment/site.json" --with-tftp --server-dry-r
 
 These steps generate private files, check the complete bundle, perform a local
 render, and finally validate against the cluster without applying. The existing
-namespace is required for the server dry run. Review the six endpoints, source
+namespace is required for the server dry run. Review the eight endpoints, source
 ACLs, actual firmware load, image digests and node placement. Compare the old
-pilot's credentials and configuration without printing them. Follow the
+phones' credentials and configuration without printing them. Follow the
 [k3s deployment guide](k3s-deployment.md) for host firmware staging, permissions
 and firewall/socket checks.
 
@@ -174,8 +181,8 @@ bash scripts/deploy.sh --site "$deployment/site.json" \
   --with-tftp --apply --firewall-reviewed
 ```
 
-The TFTP Job lasts at most one hour. Confirm its Pod is ready before restarting
-any phone. A finished Job must be explicitly removed before a new window;
+The generated TFTP Job has a one-hour deadline. Confirm its Pod is ready before
+restarting any phone. A finished Job must be explicitly removed before a new window;
 never run two servers on the same address/UDP69. Cancel any cleanup timer tied
 to an older Job before creating a later window, and record how this window
 will be closed. Do not copy an old one-phone cleanup policy blindly into a
@@ -188,7 +195,12 @@ read-only served tree. Changing the source assets does not update a running
 Job: finish the current transfers, close that window and create a new Job.
 Selecting and saving a wallpaper is a separate per-phone acceptance step.
 
-## 5. Restart one identified phone at a time
+## 5. Restart only when needed, one identified phone at a time
+
+Observe current DHCP/TFTP activity first. A phone already retrying after an
+ITL erase may request the new profile without another power cycle; this was
+observed on the fourth phone. Continue monitoring the resulting load and
+registration instead of interrupting an update to force another restart.
 
 Prefer a normal supported restart when available. When remote management is
 not yet provisioned, a controlled PoE cycle can load the new profile. A PoE
@@ -238,7 +250,7 @@ verify the final App Load. If settings remain locked or conversion fails,
 record the result and stop that phone's rollout instead of repeatedly cycling
 power. Keep its status pending and leave working devices alone.
 
-## 7. Accept all six lines, then add HA controls
+## 7. Accept all eight lines, then add HA controls
 
 For each physical phone, require independent contacts for both assigned
 extensions in `pjsip show contacts`. Generated endpoints, visible button labels
@@ -249,7 +261,7 @@ the test tone at a moderate volume. Test incoming calls to each line and a
 real two-way call between two physical phones; two lines on one handset do
 not satisfy that cross-device test.
 
-Test **620** after all three devices are ready: each phone rings once through
+Test **620** after all four devices are ready: each phone rings once through
 its primary line, and answering stops the other legs. Record failures and
 untested features separately; firmware support, a successful SIP transaction
 and actual human-audible speech are different evidence.
@@ -270,12 +282,12 @@ configuration, and label those endpoints **pending**. This is configuration
 readiness only; it does not pass the call or phone acceptance checks. Native
 Assist still requires a first call from each intended SIP identity.
 
-For Assist, start with each physical phone's **primary line: 201, 203, 205**.
+For Assist, start with each physical phone's **primary line: 201, 203, 205, 207**.
 Dial **630** from that specific line to discover its native VoIP identity, then
 enable **Allow calls** and choose the intended working language/pipeline for
 that device. Preserve the pilot's selected pipeline. Native VoIP identity
-follows the SIP From extension, so approval for 201 does not approve 203 or
-205; secondary lines need their own discovery only if Assist is wanted there.
+follows the SIP From extension, so approval for 201 does not approve 203, 205 or
+207; secondary lines need their own discovery only if Assist is wanted there.
 Call again and confirm a spoken request, an audible answer and clean hangup.
 Do not restart HA during an active call. Validate new package configuration
 before any necessary reload/restart, and verify existing entities afterward.
@@ -310,5 +322,5 @@ load rather than assuming persistent access is unnecessary.
 Keep a private receipt per device: verified identity, final load, two registered
 extensions, call/audio/HA/Assist results, wallpaper/management results when
 requested, cleanup verification, and any unresolved limitation. Record skipped
-checks as pending. A prepared six-line configuration becomes a completed
-three-phone rollout only when those device-level checks have passed.
+checks as pending. A prepared eight-line configuration becomes a completed
+four-phone rollout only when those device-level checks have passed.

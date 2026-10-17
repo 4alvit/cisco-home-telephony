@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
+  <title id="title">Radio on demand and finite home alarms</title>
+  <desc id="desc">A phone calls a station number from 701 through 707. Asterisk starts one AGI worker, which validates an official broadcaster and sends decoded audio through a loopback AudioSocket. Hanging up stops the worker and FFmpeg. Home Assistant schedules an ordinary ringing call, guarded by idle, registration and do-not-disturb checks. Answering plays extension 640 for at most thirty seconds.</desc>
+  <defs>
+    <marker id="teal" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8" fill="#48DDCC"/></marker>
+    <marker id="gold" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8" fill="#F7CB64"/></marker>
+    <marker id="coral" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8" fill="#FF836D"/></marker>
+  </defs>
+  <rect width="1280" height="760" fill="#101C34"/>
+  <g font-family="Arial, sans-serif">
+    <text x="45" y="55" font-size="34" font-weight="700" fill="#F5F7FB">Radio on demand · alarms with an end</text>
+    <text x="45" y="94" font-size="21" fill="#AAB9D0">Optional home services · no idle downloads · existing phone numbers stay unchanged</text>
+    <g fill="none" stroke-width="3">
+      <path d="M285,245 H365" stroke="#48DDCC" marker-start="url(#teal)" marker-end="url(#teal)"/>
+      <path d="M650,245 H730" stroke="#48DDCC" marker-start="url(#teal)" marker-end="url(#teal)"/>
+      <path d="M975,245 H1050" stroke="#48DDCC" marker-end="url(#teal)"/>
+      <path d="M285,555 H365" stroke="#F7CB64" marker-end="url(#gold)"/>
+      <path d="M650,555 H730" stroke="#FF836D" marker-end="url(#coral)"/>
+    </g>
+    <g fill="#172841" stroke="#48DDCC" stroke-width="2">
+      <rect x="45" y="170" width="240" height="160" rx="10"/>
+      <rect x="365" y="170" width="285" height="160" rx="10"/>
+      <rect x="730" y="170" width="245" height="160" rx="10"/>
+      <rect x="1050" y="170" width="185" height="160" rx="10"/>
+    </g>
+    <g text-anchor="middle" fill="#F5F7FB">
+      <text x="165" y="211" font-size="26" font-weight="600">Official stations</text>
+      <text x="165" y="247" font-size="21">Approved hosts + DNS</text>
+      <text x="165" y="280" font-size="20">MP3 or bounded HLS</text>
+      <text x="165" y="309" font-size="18" fill="#AAB9D0">No audio archive</text>
+      <text x="508" y="211" font-size="26" font-weight="600">One worker per call</text>
+      <text x="508" y="248" font-size="21">AGI → FFmpeg pipe</text>
+      <text x="508" y="281" font-size="20">8 kHz PCM · 20 ms frames</text>
+      <text x="508" y="310" font-size="18" fill="#AAB9D0">Time + concurrency limits</text>
+      <text x="853" y="212" font-size="27" font-weight="600">Asterisk</text>
+      <text x="853" y="249" font-size="21">Loopback AudioSocket</text>
+      <text x="853" y="282" font-size="20">Per-call UUID</text>
+      <text x="853" y="311" font-size="18" fill="#AAB9D0">G.711 to the phone</text>
+      <text x="1143" y="213" font-size="26" font-weight="600">Phone</text>
+      <text x="1143" y="254" font-size="30" font-weight="700">701–707</text>
+      <text x="1143" y="289" font-size="20">Hang up to stop</text>
+    </g>
+    <rect x="45" y="360" width="1190" height="70" rx="10" fill="#172841"/>
+    <text x="640" y="390" text-anchor="middle" font-size="21" fill="#48DDCC">701 Matryoshka · 702 Echo · 703 Rock · 704 Metal · 705 Gothic · 706 PopTron · 707 Turkish</text>
+    <text x="640" y="416" text-anchor="middle" font-size="18" fill="#AAB9D0">Microphone audio is discarded · unavailable stream → short local tone → hangup</text>
+    <g fill="#172841" stroke="#F7CB64" stroke-width="2">
+      <rect x="45" y="475" width="240" height="160" rx="10"/>
+      <rect x="365" y="475" width="285" height="160" rx="10"/>
+    </g>
+    <rect x="730" y="475" width="505" height="160" rx="10" fill="#172841" stroke="#FF836D" stroke-width="2"/>
+    <g text-anchor="middle" fill="#F5F7FB">
+      <text x="165" y="517" font-size="25" font-weight="600">Home Assistant</text>
+      <text x="165" y="555" font-size="21">Timers + weekdays</text>
+      <text x="165" y="590" font-size="21">Explicit enable/disable</text>
+      <text x="508" y="517" font-size="25" font-weight="600">Fresh state guard</text>
+      <text x="508" y="555" font-size="21">Registered · idle · DND off</text>
+      <text x="508" y="590" font-size="21">Ordinary ring ≤20 seconds</text>
+      <text x="982" y="517" font-size="27" font-weight="600">Answer → 640 → finite signal</text>
+      <text x="982" y="557" font-size="23">15 seconds by default · 30 seconds maximum</text>
+      <text x="982" y="596" font-size="21" fill="#FF836D">Ends automatically · no auto-answer or retry loop</text>
+    </g>
+    <text x="45" y="691" font-size="20" fill="#AAB9D0">Architecture and number plan only. Verify the deployed image, current streams and handset audio separately.</text>
+    <text x="45" y="726" font-size="20" fill="#AAB9D0">Private listening · no public stream relay · no new inbound internet ports</text>
+  </g>
+</svg>

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Generate Cisco 7945G/PBX configuration, or explicitly bootstrap only the PBX."""
 import argparse
+import importlib.util
 import ipaddress
 import json
 import os
@@ -11,6 +12,59 @@ import string
 import sys
 from urllib.parse import urlsplit
 import xml.etree.ElementTree as ET
+
+_radio_spec = importlib.util.spec_from_file_location(
+    "cisco_radio", Path(__file__).resolve().parents[1] / "containers/asterisk/radio.py")
+_radio = importlib.util.module_from_spec(_radio_spec)
+_radio_spec.loader.exec_module(_radio)
+radio_settings = _radio.settings
+_external_spec = importlib.util.spec_from_file_location(
+    "cisco_external_sip", Path(__file__).resolve().with_name("external_sip.py"))
+external_sip = importlib.util.module_from_spec(_external_spec)
+_external_spec.loader.exec_module(external_sip)
+
+
+def alarm_settings(site):
+    alarm = site.get("alarms", {})
+    if (not isinstance(alarm, dict) or set(alarm) - {"enabled", "duration_seconds"}
+            or type(alarm.get("enabled", False)) is not bool):
+        raise ValueError("alarms accepts boolean enabled and duration_seconds")
+    if not alarm.get("enabled", False):
+        return None
+    duration = alarm.get("duration_seconds", 15)
+    if type(duration) is not int or not 1 <= duration <= 30:
+        raise ValueError("alarms.duration_seconds must be 1..30")
+    return {"enabled": True, "duration_seconds": duration}
+
+
+def service_dialplan(site):
+    """Return optional service routes without introducing outbound dialing."""
+    radio, alarm = radio_settings(site), alarm_settings(site)
+    routes, numbers = [], []
+    if alarm:
+        numbers.append("640")
+        routes.append(f'''exten => 640,1,Answer()
+ same => n,Set(TIMEOUT(absolute)=35)
+ same => n,PlayTones(880/250,0/750)
+ same => n,Wait({alarm['duration_seconds']})
+ same => n,StopPlayTones()
+ same => n,Hangup()
+''')
+    if radio:
+        for station in radio["stations"]:
+            number = _radio.catalog()[station]["extension"]
+            numbers.append(number)
+            routes.append(f'''exten => {number},1,Answer()
+ same => n,Set(TIMEOUT(absolute)={radio['max_seconds'] + 30})
+ same => n,Set(RADIOSTATUS=failed)
+ same => n,AGI(radio.py,{station})
+ same => n,GotoIf($["${{RADIOSTATUS}}" = "ok"]?done)
+ same => n,PlayTones(480+620/250,0/250)
+ same => n,Wait(2)
+ same => n,StopPlayTones()
+ same => n(done),Hangup()
+''')
+    return ''.join(routes), numbers
 
 
 def read_json(path):
@@ -117,6 +171,45 @@ writetimeout=5000
 """
 
 
+def gateway_settings(site):
+    cfg = site.get("gateway", {})
+    if (not isinstance(cfg, dict) or set(cfg) - {"enabled", "ami_client_ipv4"}
+            or type(cfg.get("enabled", False)) is not bool):
+        raise ValueError("gateway accepts boolean enabled and ami_client_ipv4")
+    if not cfg.get("enabled", False):
+        return None
+    addr = ipaddress.IPv4Address(cfg["ami_client_ipv4"])
+    private = any(addr in ipaddress.IPv4Network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+    if not private and not (addr.is_loopback and ipaddress.IPv4Address(site["node_ipv4"]).is_loopback):
+        raise ValueError("gateway AMI client must be a private unicast IPv4 address")
+    return {"client": str(addr)}
+
+
+def gateway_manager(config, site, out):
+    gateway = gateway_settings(site)
+    if gateway is None:
+        return config
+    path = out / "gateway-ami-secret.json"
+    if path.is_symlink():
+        raise ValueError("gateway AMI secret cannot be a symlink")
+    saved = read_json(path) if path.exists() else {"username": "cisco_gateway", "secret": secrets.token_hex(24)}
+    if (not isinstance(saved, dict) or saved.get("username") != "cisco_gateway"
+            or not isinstance(saved.get("secret"), str) or not re.fullmatch(r"[A-Za-z0-9]{40,64}", saved["secret"])):
+        raise ValueError("Invalid gateway AMI secret; preserve or rotate it explicitly")
+    private_write(path, json.dumps(saved, indent=2) + '\n')
+    if ha_settings(site) is None:
+        config = f"[general]\nenabled=yes\nwebenabled=no\nport=5038\nbindaddr={site['node_ipv4']}\ndisplayconnects=no\n"
+    return config + f"""
+[cisco_gateway]
+secret={saved['secret']}
+deny=0.0.0.0/0.0.0.0
+permit={gateway['client']}/255.255.255.255
+read=system,call
+write=system,call,originate
+writetimeout=5000
+"""
+
+
 def phone_lines(phone):
     """Return ordered line definitions; legacy extension occupies button 1."""
     if "lines" in phone:
@@ -179,6 +272,10 @@ def phone_management_secrets(phones, out):
 
 def validate(site, inventory, *, pbx_only=False):
     ha_settings(site)
+    radio_settings(site)
+    alarm_settings(site)
+    gateway_settings(site)
+    external = external_sip.validate(site)
     phone_networks(site)
     ip = ipaddress.IPv4Address(site["node_ipv4"])
     net = ipaddress.IPv4Network(site["lan_cidr"], strict=True)
@@ -187,6 +284,8 @@ def validate(site, inventory, *, pbx_only=False):
     if pbx_only:
         if inventory is not None:
             raise ValueError("PBX-only mode does not accept a phone inventory")
+        if external and any(account["inbound_target"] for account in external["accounts"]):
+            raise ValueError("External SIP inbound needs a verified local phone inventory")
         return [], None
     ntp = str(ipaddress.IPv4Address(site["ntp_ipv4"]))
     phones = inventory["phones"]
@@ -251,6 +350,9 @@ def validate(site, inventory, *, pbx_only=False):
         else:
             copy["extension"] = normalized_lines[0]["extension"]
         normalized.append(copy)
+    if external and any(account["inbound_target"] and account["inbound_target"] not in seen_ext
+                        for account in external["accounts"]):
+        raise ValueError("External SIP inbound target must be a verified local phone line")
     return normalized, ntp
 
 
@@ -330,6 +432,8 @@ def phone_xml(phone, ip, ntp, passwords, management=None):
 
 def generate(site, inventory, out, *, pbx_only=False):
     phones,ntp = validate(site,inventory,pbx_only=pbx_only)
+    # Resolve private provider credentials before any output is modified.
+    external = external_sip.generate(site)
     out=Path(out)
     if pbx_only and any((out/name).exists() or (out/name).is_symlink()
                         for name in ("tftp", "secrets.json")):
@@ -357,6 +461,7 @@ def generate(site, inventory, out, *, pbx_only=False):
     management = phone_management_secrets(phones, out)
     ip=site["node_ipv4"]
     ha=ha_settings(site)
+    gateway=gateway_settings(site)
     local_nets = ''.join(f'local_net={net}\n' for net in local_networks(site))
     phone_permits = '\n'.join(f'permit={net}' for net in phone_networks(site))
     pjsip=['[global]\ntype=global\nuser_agent=HomePBX\n',f'[transport-udp]\ntype=transport\nprotocol=udp\nbind={ip}:5060\n{local_nets}',f'[transport-tcp]\ntype=transport\nprotocol=tcp\nbind={ip}:5060\n{local_nets}']
@@ -399,7 +504,15 @@ max_contacts=1
 remove_existing=yes
 qualify_frequency=60
 ''')
-            dial.append(f'exten => {ext},1,Dial(PJSIP/{ext},25)\n same => n,Hangup()\n')
+            if gateway:
+                dial.append(f'''exten => {ext},1,GotoIf($["${{DB(cisco-dnd/{ext})}}" = "1"]?dnd)
+ same => n,Dial(PJSIP/{ext},25)
+ same => n,Hangup()
+ same => n(dnd),Busy(3)
+ same => n,Hangup()
+''')
+            else:
+                dial.append(f'exten => {ext},1,Dial(PJSIP/{ext},25)\n same => n,Hangup()\n')
         filename=f'SEP{p["mac"]}.cnf.xml'
         expected.add(filename)
         private_write(out/"tftp"/filename,phone_xml(p,ip,ntp,passwords,management.get("SEP" + p["mac"])))
@@ -420,9 +533,25 @@ exten => 601,1,Answer()
         # Ring a physical handset once through its primary line (button 1).
         # Secondary lines remain individually callable by their own extension.
         ring='&'.join('PJSIP/'+phone_lines(p)[0]['extension'] for p in phones)
-        dial.append(f'''exten => 620,1,Dial({ring},25)
+        if gateway:
+            group = ['exten => 620,1,Set(RING_TARGETS=)', ' same => n,Set(RING_SEPARATOR=)']
+            for p in phones:
+                primary = phone_lines(p)[0]['extension']
+                condition = '$["${DND_PRIMARY}" != "1"]'
+                group.extend([
+                    f' same => n,Set(DND_PRIMARY=${{DB(cisco-dnd/{primary})}})',
+                    f' same => n,ExecIf({condition}?Set(RING_TARGETS=${{RING_TARGETS}}${{RING_SEPARATOR}}PJSIP/{primary}))',
+                    f' same => n,ExecIf({condition}?Set(RING_SEPARATOR=&))'])
+            group.extend([' same => n,GotoIf($["${RING_TARGETS}" = ""]?dnd)',
+                          ' same => n,Dial(${RING_TARGETS},25)', ' same => n,Hangup()',
+                          ' same => n(dnd),Busy(3)', ' same => n,Hangup()'])
+            dial.append('\n'.join(group) + '\n')
+        else:
+            dial.append(f'''exten => 620,1,Dial({ring},25)
  same => n,Hangup()
 ''')
+    service_routes, service_numbers = service_dialplan(site)
+    dial.append(service_routes)
     dial.append('''
 ; Internal service only. No emergency or PSTN route is configured.
 exten => _X!,1,Hangup(1)
@@ -443,7 +572,16 @@ verbose = 2
 debug = 0
 documentation_language = en_US
 ""","modules.conf":"[modules]\nautoload=yes\nnoload=chan_sip.so\nnoload=chan_iax2.so\nnoload=chan_mgcp.so\nnoload=chan_skinny.so\nnoload=res_http_websocket.so\nnoload=res_ari.so\n","logger.conf":"[general]\ndateformat=%F %T\n[logfiles]\nconsole => notice,warning,error\n","manager.conf":"[general]\nenabled=no\n","http.conf":"[general]\nenabled=no\n"}
-    configs["manager.conf"] = manager_config(ha, ip, out)
+    configs["manager.conf"] = gateway_manager(manager_config(ha, ip, out), site, out)
+    radio = radio_settings(site)
+    if radio:
+        configs["radio.conf"] = json.dumps(radio, indent=2) + '\n'
+    else:
+        # Never leave an enabled runtime catalog after disabling the feature.
+        stale = out / "asterisk/radio.conf"
+        if stale.is_symlink():
+            raise ValueError("refusing stale radio config symlink")
+        stale.unlink(missing_ok=True)
     assist = ha.get("assist") if ha else None
     if assist:
         # No from_user: preserve each phone's caller ID for HA device discovery.
@@ -478,10 +616,14 @@ exten => 630,1,NoOp(Home Assistant Assist)
 exten => _.,1,Hangup(21)
 exten => s,1,Hangup(21)
 """
+    configs["pjsip.conf"] += external["pjsip"]
+    configs["extensions.conf"] += external["dialplan"]
+    service_numbers += external["numbers"]
     for name,body in configs.items():
         private_write(out/"asterisk"/name,body)
     if not pbx_only:
         assist_template = '  <TEMPLATE MATCH="630" Timeout="0"/>\n' if assist else ''
+        assist_template += ''.join(f'  <TEMPLATE MATCH="{number}" Timeout="0"/>\n' for number in service_numbers)
         private_write(out/"tftp"/"dialplan.xml",'<DIALTEMPLATE>\n  <TEMPLATE MATCH="2.." Timeout="0"/>\n  <TEMPLATE MATCH="600" Timeout="0"/>\n  <TEMPLATE MATCH="601" Timeout="0"/>\n  <TEMPLATE MATCH="620" Timeout="0"/>\n'+assist_template+'</DIALTEMPLATE>\n')
     return len(phones)
 

@@ -6,7 +6,7 @@ ARG ASTERISK_VERSION=22.11.0
 ARG ASTERISK_SHA256=3bd5ee040509a3d3cd9b1ba9520c18e6ec0a7e7981ca68c457dcd36ba3c54d94
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential ca-certificates curl pkg-config python3 bzip2 \
-    libedit-dev libssl-dev libxml2-dev uuid-dev libsqlite3-dev libncurses-dev \
+    libedit-dev libssl-dev libxml2-dev uuid-dev libsqlite3-dev libncurses-dev libunbound-dev \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 RUN curl -fL --retry 3 "https://downloads.asterisk.org/pub/telephony/asterisk/asterisk-${ASTERISK_VERSION}.tar.gz" -o asterisk.tar.gz \
@@ -21,6 +21,10 @@ RUN curl -fL --retry 3 "https://downloads.asterisk.org/pub/telephony/asterisk/as
          --disable-category MENUSELECT_CORE_SOUNDS --disable-category MENUSELECT_MOH menuselect.makeopts \
     && make -j2 \
     && make install DESTDIR=/stage
+RUN test -f /stage/usr/lib/asterisk/modules/app_audiosocket.so \
+    && test -f /stage/usr/lib/asterisk/modules/res_audiosocket.so \
+    && test -f /stage/usr/lib/asterisk/modules/res_agi.so \
+    && test -f /stage/usr/lib/asterisk/modules/res_resolver_unbound.so
 # Debian has /var/run -> /run. Runtime directories are created in the final image.
 RUN rm -rf /stage/var/run
 # Open-source Opus transcoder (GPL-2.0); Asterisk's Opus format alone is pass-through.
@@ -42,10 +46,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends libopus-dev \
     && cp /tmp/opus-source.tar.gz /stage/usr/share/doc/asterisk-opus-open-source/source.tar.gz
 FROM ${DEBIAN_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates libedit2 libssl3 libxml2 libuuid1 libsqlite3-0 libncurses6 libopus0 \
+    ca-certificates libedit2 libssl3 libxml2 libuuid1 libsqlite3-0 libncurses6 libopus0 libunbound8 python3 python3-pil ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 10001 asterisk && useradd -u 10001 -g 10001 -M -s /usr/sbin/nologin asterisk
 COPY --from=build /stage/ /
+COPY radio.py radio-catalog.json /var/lib/asterisk/agi-bin/
+COPY phone_gateway.py /usr/local/lib/cisco-phone-gateway.py
+RUN chmod 0555 /var/lib/asterisk/agi-bin/radio.py \
+    && chmod 0444 /var/lib/asterisk/agi-bin/radio-catalog.json
 RUN mkdir -p /run/asterisk /var/lib/asterisk/db /var/spool/asterisk /var/log/asterisk \
     && chown -R 10001:10001 /run/asterisk /var/lib/asterisk /var/spool/asterisk /var/log/asterisk
 USER 10001:10001

@@ -1,0 +1,12 @@
+{
+  "verified_date": "2026-10-17",
+  "stations": {
+    "matryoshka": {"extension": "701", "name": "Matryoshka Radio London", "genre": "Russian and international music", "url": "https://matryoshka.fm/stream", "hosts": ["matryoshka.fm"], "redirect_host_regex": "n[0-9]{2}-eu[0-9]\\.rcs\\.revma\\.com", "allow_http": true, "format": "mp3", "source": "https://matryoshka.fm/"},
+    "echo": {"extension": "702", "name": "Echo online", "genre": "Russian speech; current Echo service", "url": "https://edifchqufozvbegw.global.ssl.fastly.net/audio_echofm/stream", "hosts": ["edifchqufozvbegw.global.ssl.fastly.net"], "allow_http": false, "format": "mp3", "source": "https://echofm.online/"},
+    "bob-rock": {"extension": "703", "name": "RADIO BOB! Live", "genre": "Rock", "url": "https://streams.radiobob.de/bob-live/mp3-128/streams.radiobob.de/", "hosts": ["streams.radiobob.de", "regiocast.streamabc.net"], "allow_http": false, "format": "mp3", "source": "https://streams.radiobob.de/"},
+    "bob-metal": {"extension": "704", "name": "RADIO BOB! Metal", "genre": "Metal", "url": "https://streams.radiobob.de/bob-metal/mp3-128/streams.radiobob.de/", "hosts": ["streams.radiobob.de", "regiocast.streamabc.net"], "allow_http": false, "format": "mp3", "source": "https://streams.radiobob.de/bob-metal"},
+    "bob-gothic": {"extension": "705", "name": "RADIO BOB! Gothic", "genre": "Gothic rock", "url": "https://streams.radiobob.de/gothic/mp3-128/streams.radiobob.de/", "hosts": ["streams.radiobob.de", "regiocast.streamabc.net"], "allow_http": false, "format": "mp3", "source": "https://streams.radiobob.de/"},
+    "soma-poptron": {"extension": "706", "name": "SomaFM PopTron", "genre": "Electropop and indie dance rock", "url": "https://ice5.somafm.com/poptron-128-mp3", "hosts": ["ice5.somafm.com"], "allow_http": false, "format": "mp3", "source": "https://somafm.com/poptron/directstreamlinks.html"},
+    "radyo-viva": {"extension": "707", "name": "Radyo Viva", "genre": "Turkish music", "url": "https://listen.radyotvonline.net/hls/play/adsonline_radyoviva.m3u8", "hosts": ["listen.radyotvonline.net", "chunks.radyotvonline.net"], "allow_http": false, "format": "aac", "hls": true, "source": "https://www.radyoviva.com.tr/"}
+  }
+}

@@ -21,18 +21,27 @@ conversion to MPP is not required.
 - [SVG diagrams](docs/diagrams/) and [color slides](docs/slides/), all in English.
 - [Home Assistant](docs/home-assistant.md): phone states, DTMF, call control and
   Assist on extension **630**.
+- [Internet radio and bounded alarm audio](docs/radio-and-alarms.md), including
+  seven station extensions and an isolated runtime validation suite.
+- [Persistent HA phone control](docs/phone-gateway.md): opt-in auto-answer,
+  PBX DND, numeric dialing, text and photo delivery.
+- [External SIP research](docs/extended-services-research.md), with disabled-by-default
+  provider adapters and clear limits on free PSTN/Google Voice integration.
 - [Remote phone management](docs/phone-control.md): authenticated screenshots
   and keypad control, separate SSH credentials, and renewable access windows.
 
 **The server is deployed in the home k3s cluster:** Asterisk 22.11.0, Home
 Assistant AMI and VoIP integrations, and a telephony dashboard are installed.
 See [live deployment validation](docs/server-validation.md).
-The first physical 7945G now runs **SIP45.9-4-2SR4-3S**, registers to Asterisk
-over TCP as **201** and **202** on its two line buttons, and appears registered
-in Home Assistant. Handset echo on **600**,
-Russian Assist on **630**, and HA-initiated calling and hangup passed live tests.
-Speakerphone, DTMF and two-phone acceptance remain. Cisco firmware is not
-included: obtain an authorized copy and verify the upgrade path.
+Four physical 7945G phones now run **SIP45.9-4-2SR4-3S** and independently
+register **201-208** over TCP. All four have two numeric line labels,
+LakeDawn wallpaper and verified two-stage SSH access. The first phone passed
+human-audible echo and Russian Assist; additional lines have automated echo,
+RTP and HA hangup checks recorded in the validation log. The phone voice
+profile now uses the existing **Silero Baya** backend; fourth-phone Assist
+acceptance is being completed separately.
+Speakerphone, DTMF and calls between phones still need separate acceptance.
+Cisco firmware is not included: obtain an authorized copy and verify the upgrade path.
 The [second-line and wallpaper guide](docs/second-line-and-wallpaper.md) covers
 the independent 202 line and original generated background now installed on the
 pilot. Authenticated screenshots, remote keys and SSH diagnostics were verified;
@@ -48,7 +57,7 @@ SR4-3 copy, byte-level checks, extraction steps and provenance limitations.
 4. [Build images and deploy Asterisk/TFTP to k3s](docs/k3s-deployment.md).
 5. [Test calls, close TFTP and save a backup](docs/operations.md).
 6. [Add further phones in a controlled batch](docs/adding-phones.md) —
-   [three-phone architecture](docs/diagrams/three-phones.svg).
+   [four-phone architecture](docs/diagrams/four-phones.svg).
 
 Before physical inventory is complete, [bootstrap the PBX and AMI](docs/pbx-bootstrap.md)
 with `provision.py --pbx-only`. This does not create placeholder phones, Cisco XML
@@ -90,8 +99,9 @@ staging on the node and acceptance checks.
 
 Example extensions: **201–210**. **600** is echo, **601** is a test tone, and
 **620** rings the group. With HA integration enabled, **630** reaches Home
-Assistant Assist. There are no outgoing PSTN calls, trunks, voicemail or emergency
-calls. Use a working external phone service for emergency calls.
+Assistant Assist. Optional **640** plays bounded alarm audio, and **701-707**
+select internet radio when enabled. External SIP profiles are disabled by
+default; there are no unrestricted PSTN routes, voicemail or emergency calls. Use a working external phone service for emergency calls.
 
 Default profile: **SIP TCP 5060**, G.711, and RTP through Asterisk. The server also
 listens on UDP 5060 for explicitly configured UDP phones. Asterisk RTP uses UDP

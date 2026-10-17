@@ -1,0 +1,32 @@
+{
+  "external_sip": {
+    "enabled": false,
+    "public_ipv4": "203.0.113.10",
+    "signaling_port": 5070,
+    "accounts": [
+      {
+        "provider": "callcentric",
+        "enabled": false,
+        "credentials_file": "/absolute/private/callcentric.json",
+        "target": "17771234567",
+        "inbound": {
+          "enabled": false,
+          "target": "201",
+          "source_cidrs": ["204.11.192.0/22", "199.87.144.0/21"]
+        }
+      },
+      {
+        "provider": "sip2sip",
+        "enabled": false,
+        "credentials_file": "/absolute/private/sip2sip.json",
+        "target": "4444"
+      },
+      {
+        "provider": "linphone",
+        "enabled": false,
+        "credentials_file": "/absolute/private/linphone.json",
+        "target": "your-test-peer"
+      }
+    ]
+  }
+}

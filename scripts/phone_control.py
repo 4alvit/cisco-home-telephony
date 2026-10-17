@@ -263,6 +263,8 @@ def phone_request(config, *, key=None, allow_active=False):
         if key not in KEYS:
             raise ValueError("key is not in the permitted single-key set")
         endpoint = "Execute"
+        # Cisco applies Priority only to HTTP URLs. Internal Key: URIs execute
+        # immediately; the caller must independently verify call state/ownership.
         priority = 0 if allow_active else 2
         xml = f'<CiscoIPPhoneExecute><ExecuteItem Priority="{priority}" URL="Key:{key}"/></CiscoIPPhoneExecute>'
         data = parse.urlencode({"XML": xml}).encode("ascii")
@@ -326,7 +328,7 @@ def main():
     key = commands.add_parser("key")
     key.add_argument("key", choices=sorted(KEYS))
     key.add_argument("--allow-active", action="store_true",
-                     help="explicitly permit this one key during an operator-controlled call (Priority 0)")
+                     help="acknowledge an operator-controlled active-call key; Priority does not guard internal Key URIs")
     shot = commands.add_parser("screenshot")
     shot.add_argument("--output", required=True, help="new private output path; suffix must match detected format")
     args = ap.parse_args()

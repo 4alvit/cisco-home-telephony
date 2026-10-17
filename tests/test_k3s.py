@@ -116,6 +116,35 @@ esac
                        TEST_CODEC=codec, TEST_ENDPOINT=endpoint, TEST_DIALPLAN=dialplan)
             return subprocess.run(command, env=env, capture_output=True, text=True, timeout=5)
 
+    def test_radio_readiness_rejects_missing_worker_or_stopped_module(self):
+        site = dict(fixture(), radio={"enabled": True})
+        command = list(render.render_core(site, configs())["items"][2]["spec"]["template"]["spec"]
+                       ["containers"][0]["readinessProbe"]["exec"]["command"])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "asterisk"
+            binary.write_text("""#!/bin/sh
+case "$2" in
+  'pjsip show transports') printf '%s\\n' "$TEST_TRANSPORTS" ;;
+  'module show like app_audiosocket') printf '%s\\n' "$TEST_MODULE" ;;
+  *) exit 98 ;;
+esac
+""")
+            binary.chmod(0o700)
+            for name in ("radio.py", "ffmpeg"):
+                (root / name).write_text("#!/bin/sh\nexit 0\n")
+                (root / name).chmod(0o700)
+            command[2] = command[2].replace("/var/lib/asterisk/agi-bin/radio.py", shlex.quote(str(root / "radio.py")))
+            env = dict(os.environ, PATH=directory + os.pathsep + os.environ["PATH"],
+                       TEST_TRANSPORTS="Transport: transport-udp udp 0 0 192.168.50.58:5060\nTransport: transport-tcp tcp 0 0 192.168.50.58:5060")
+            for state, expected in (("Running", 0), ("Not Running", 1)):
+                env["TEST_MODULE"] = "app_audiosocket.so AudioSocket 0 " + state
+                result = subprocess.run(command, env=env, capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, expected)
+            env["TEST_MODULE"] = "app_audiosocket.so AudioSocket 0 Running"
+            (root / "radio.py").unlink()
+            self.assertNotEqual(subprocess.run(command, env=env, capture_output=True, timeout=5).returncode, 0)
+
     def test_ha_readiness_requires_ami_listening_on_configured_local_address(self):
         # 3A32A8C0 is 192.168.50.58 in /proc/net/tcp. Both SIP transports work
         # throughout these cases, so only a genuine local LISTEN should pass.

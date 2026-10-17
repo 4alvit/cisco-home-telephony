@@ -3,7 +3,8 @@
 The provisioning inventory enables web access, SSH diagnostics and authenticated
 personalization. `scripts/phone_control.py` supplies the authentication callback,
 one keypad action per invocation, and screenshots. Start an attended maintenance
-window with the phone idle; active-call keys require an explicit override.
+window with the phone idle. For an owned active call, record that intent with
+`--allow-active`; the caller remains responsible for checking call state.
 
 The phone's HTTP home page provides status and logs, not a settings editor.
 `web_access: true` alone does not authorize changing a line or selecting a
@@ -379,14 +380,18 @@ output files, and a specified suffix that disagrees with the actual format.
 Allowed keys are `Settings`, `NavDwn`, `NavUp`, `NavLeft`, `NavRight`, `NavSelect`,
 `Line1`, `Line2`, `Speaker`, `Release`, `Soft1` through `Soft4`, `KeyPad0` through `KeyPad9`, `KeyPadStar`, and
 `KeyPadPound`. Each invocation sends one `Key:` URI with `Priority="2"`
-(idle-only execution) by default, and requires a successful Cisco response. Observe the
+by default and requires a successful Cisco response. **Priority is not an idle
+guard for keys:** Cisco specifies that priority applies only to HTTP URLs;
+internal `Key:`, `Dial:` and `Play:` URIs execute immediately. Verify the phone
+and its actual PBX channels are idle before sending a key. Observe the
 screen after each navigation step; a successful request does not prove that the
 desired setting was selected. Softkey positions depend on the current screen.
 Do not operate another person's active call. For an explicitly authorized test
 call that the operator started and is monitoring, `key --allow-active` sets
-`Priority="0"` for that one request. This is needed for individual digits after
-the selected line goes off-hook, or to end the operator's own test call. It does
-not expand the allowed keys or permit arbitrary XML/URIs.
+`Priority="0"` for that one request. This flag records the caller's explicit
+active-call intent; neither value enforces call-state isolation. Automated
+callers must check fresh PBX state and the exact channel identity themselves.
+The flag does not expand the allowed keys or permit arbitrary XML/URIs.
 
 ```sh
 # First verify that the phone is idle, then inspect the selected line on screen.

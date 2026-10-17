@@ -26,6 +26,10 @@ def validate_site(site, with_tftp=False):
         raise ValueError("home_assistant must be an object with boolean enabled")
     if not isinstance(ha.get("assist", {}), dict):
         raise ValueError("home_assistant.assist must be an object")
+    for key in ("radio", "gateway", "alarms", "external_sip"):
+        config = site.get(key, {})
+        if not isinstance(config, dict) or type(config.get("enabled", False)) is not bool:
+            raise ValueError(f"{key} must be an object with boolean enabled")
     for key in ("namespace", "node_name", "node_ipv4", "lan_cidr", "asterisk_image", "kube_context"):
         if not isinstance(site.get(key), str) or not site[key]:
             raise ValueError(f"site.{key} must be a nonempty string")
@@ -215,7 +219,7 @@ def render_core(site, configs):
     spec["volumes"] = [{"name": "config", "secret": {"secretName": name, "defaultMode": 0o440}}] + [
         {"name": n, "emptyDir": {"sizeLimit": "64Mi"}} for n in ("run", "db", "spool", "log", "tmp")]
     ha = site.get("home_assistant", {})
-    if ha.get("enabled"):
+    if ha.get("enabled") or site.get("gateway", {}).get("enabled"):
         spec["containers"][0]["ports"].append({"name": "ami", "containerPort": 5038, "protocol": "TCP"})
         # Linux exposes IPv4 socket addresses in host byte order on our supported
         # amd64/arm64 nodes. Match the configured bind address, local AMI port and
@@ -237,6 +241,21 @@ def render_core(site, configs):
                 "; asterisk -rx 'dialplan show 630@home'"
                 " | grep -Fq 'Dial(PJSIP/ha-assist/'"
             )
+    if site.get("radio", {}).get("enabled"):
+        probe = spec["containers"][0]["readinessProbe"]
+        probe["timeoutSeconds"] = 5
+        probe["exec"]["command"][2] += (
+            "; test -x /var/lib/asterisk/agi-bin/radio.py; command -v ffmpeg >/dev/null"
+            "; asterisk -rx 'module show like app_audiosocket'"
+            " | grep -Eq '^[[:space:]]*app_audiosocket[.]so[[:space:]].*[[:space:]][0-9]+[[:space:]]+Running([[:space:]]|$)'"
+        )
+    if site.get("external_sip", {}).get("enabled"):
+        probe = spec["containers"][0]["readinessProbe"]
+        probe["timeoutSeconds"] = 5
+        probe["exec"]["command"][2] += (
+            "; asterisk -rx 'module show like res_resolver_unbound'"
+            " | grep -Eq '^[[:space:]]*res_resolver_unbound[.]so[[:space:]].*[[:space:]][0-9]+[[:space:]]+Running([[:space:]]|$)'"
+        )
     deployment = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "asterisk", "namespace": ns},
         "spec": {"replicas": 1, "revisionHistoryLimit": 5, "strategy": {"type": "Recreate"},
                  "selector": {"matchLabels": {"app": "asterisk"}},
