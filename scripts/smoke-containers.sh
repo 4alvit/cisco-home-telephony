@@ -29,7 +29,9 @@ trap cleanup EXIT
 python3 - "$test_root" <<'PY'
 import json, pathlib, sys
 root=pathlib.Path(sys.argv[1])
-(root/'site.json').write_text(json.dumps({'node_ipv4':'127.0.0.1','lan_cidr':'127.0.0.0/8','ntp_ipv4':'127.0.0.1'}))
+(root/'site.json').write_text(json.dumps({'node_ipv4':'127.0.0.1','lan_cidr':'127.0.0.0/8','ntp_ipv4':'127.0.0.1',
+ 'home_assistant':{'enabled':True,'ami_client_ipv4':'127.0.0.1','allow_originate':True,
+ 'assist':{'enabled':True,'host_ipv4':'127.0.0.1','sip_port':5061}}}))
 (root/'phones.json').write_text(json.dumps({'phones':[{'model':'CP-7945G','verified':True,'mac':'020000000001','extension':'201','label':'CI synthetic','firmware_load':'SIP45.9-4-2SR3-1S','transport':'tcp'}]}))
 PY
 python3 scripts/provision.py --site "$test_root/site.json" --inventory "$test_root/phones.json" --out "$test_root/generated"
@@ -59,18 +61,23 @@ done
 if [[ "$ready" != 1 ]]; then docker logs "$container"; echo 'Asterisk did not start' >&2; exit 1; fi
 # Allow module initialization to complete, then require the actual generated config.
 for attempt in {1..30}; do
-  if docker exec "$container" asterisk -rx 'pjsip show endpoints' | grep -Eq 'Endpoint:.*201'; then break; fi
+  if docker exec "$container" asterisk -rx 'pjsip show endpoints' | grep -E 'Endpoint:.*201' > /dev/null; then break; fi
   sleep 1
 done
-docker exec "$container" asterisk -rx 'pjsip show endpoints' | grep -Eq 'Endpoint:.*201'
-docker exec "$container" asterisk -rx 'pjsip show transports' | grep -Eq 'transport-tcp.*127.0.0.1:5060'
-docker exec "$container" asterisk -rx 'pjsip show transports' | grep -Eq 'transport-udp.*127.0.0.1:5060'
-docker exec "$container" asterisk -rx 'dialplan show 600@home' | grep -q 'Echo'
-docker exec "$container" asterisk -rx 'dialplan show 601@home' | grep -q 'Milliwatt'
-docker exec "$container" asterisk -rx 'dialplan show 620@home' | grep -q 'PJSIP/201'
-docker exec "$container" asterisk -rx 'module show like chan_pjsip' | grep -Eq 'chan_pjsip.so.*Running'
+docker exec "$container" asterisk -rx 'pjsip show endpoints' | grep -E 'Endpoint:.*201' > /dev/null
+docker exec "$container" asterisk -rx 'pjsip show transports' | grep -E 'transport-tcp.*127.0.0.1:5060' > /dev/null
+docker exec "$container" asterisk -rx 'pjsip show transports' | grep -E 'transport-udp.*127.0.0.1:5060' > /dev/null
+docker exec "$container" asterisk -rx 'dialplan show 600@home' | grep 'Echo' > /dev/null
+docker exec "$container" asterisk -rx 'dialplan show 601@home' | grep 'Milliwatt' > /dev/null
+docker exec "$container" asterisk -rx 'dialplan show 620@home' | grep 'PJSIP/201' > /dev/null
+docker exec "$container" asterisk -rx 'module show like chan_pjsip' | grep -E 'chan_pjsip.so.*Running' > /dev/null
+docker exec "$container" asterisk -rx 'module show like codec_opus_open_source' | grep -E 'codec_opus_open_source.so.*Running' > /dev/null
+docker exec "$container" asterisk -rx 'core show translation paths ulaw' | grep -E '\(ulaw@8000\).*\(opus@48000\)' > /dev/null
+docker exec "$container" asterisk -rx 'core show translation paths opus' | grep -E '\(opus@48000\).*\(ulaw@8000\)' > /dev/null
+docker exec "$container" asterisk -rx 'dialplan show 630@home' | grep 'ha-assist/sip:630@127.0.0.1:5061' > /dev/null
+python3 tests/ami_runtime.py "$container" "$test_root/generated/ha-ami-secret.json"
 docker exec "$container" asterisk -rx 'core show version'
-if docker logs "$container" 2>&1 | grep -Eq 'Could not create an object of type|Unable to bind|Could not create.*transport'; then
+if docker logs "$container" 2>&1 | grep -E 'Could not create an object of type|Unable to bind|Could not create.*transport' > /dev/null; then
   docker logs "$container"
   echo 'Asterisk configuration object or bind error' >&2
   exit 1
@@ -116,5 +123,5 @@ docker run -d --name "$tftp_container" --network "$tftp_network" --read-only \
   --address 127.0.0.1:69 --port-range 20000:20031 --blocksize 1468 /srv/tftp >/dev/null
 sleep 1
 docker exec "$tftp_container" timeout 10 tftp 127.0.0.1 -m binary -c get health.txt /tmp/health.txt
-docker exec "$tftp_container" cat /tmp/health.txt | grep -qx 'tftp-smoke-ok'
-echo 'Isolated smoke passed: generated Asterisk configuration loads and read-only TFTP serves an RRQ with production flags.'
+docker exec "$tftp_container" cat /tmp/health.txt | grep -x 'tftp-smoke-ok' > /dev/null
+echo 'Isolated smoke passed: Asterisk, AMI permissions/actions, G.711/Opus translation, Assist route, and TFTP RRQ.'

@@ -180,3 +180,12 @@ fixture images и тестовая сеть удалены скриптом.
 неиспользуемых функций. В поставке проверяются нужные PJSIP transport/endpoint и
 dialplan; сообщения об ошибках **этих** объектов нельзя игнорировать. Сообщение об
 отсутствии Ethernet для global EID ожидаемо только в изолированном loopback smoke.
+
+## Проверка Home Assistant
+
+При включении [HA](home-assistant.md) smoke дополнительно открывает настоящий AMI
+TCP-сеанс в изолированном контейнере: проверяет PJSIP discovery, CoreSettings,
+внутренний Local Originate, право Hangup и запрет CLI Command. Проверяются также
+реальные пути перекодирования G.711↔Opus и маршрут630. Это не подменяет звонок
+через живой HA pipeline и физический Cisco: STT, TTS и двусторонний RTP принимают
+по [полному сценарию](https://github.com/ha-homelab/asterisk-telephony/blob/main/docs/acceptance.md).

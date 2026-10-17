@@ -14,6 +14,11 @@ import tempfile
 RFC1918 = tuple(ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 
 def validate_site(site, with_tftp=False):
+    ha = site.get("home_assistant", {})
+    if not isinstance(ha, dict) or type(ha.get("enabled", False)) is not bool:
+        raise ValueError("home_assistant must be an object with boolean enabled")
+    if not isinstance(ha.get("assist", {}), dict):
+        raise ValueError("home_assistant.assist must be an object")
     for key in ("namespace", "node_name", "node_ipv4", "lan_cidr", "asterisk_image", "kube_context"):
         if not isinstance(site.get(key), str) or not site[key]:
             raise ValueError(f"site.{key} must be a nonempty string")
@@ -100,6 +105,11 @@ def render_core(site, configs):
             ("spool", "/var/spool/asterisk"), ("log", "/var/log/asterisk"), ("tmp", "/tmp"))]}]
     spec["volumes"] = [{"name": "config", "secret": {"secretName": name, "defaultMode": 0o440}}] + [
         {"name": n, "emptyDir": {"sizeLimit": "64Mi"}} for n in ("run", "db", "spool", "log", "tmp")]
+    ha = site.get("home_assistant", {})
+    if ha.get("enabled"):
+        spec["containers"][0]["ports"].append({"name": "ami", "containerPort": 5038, "protocol": "TCP"})
+        if ha.get("assist", {}).get("enabled"):
+            spec["containers"][0]["readinessProbe"]["exec"]["command"][2] += "; asterisk -rx 'module show like codec_opus_open_source' | grep -Eq 'codec_opus_open_source.so.*Running'"
     deployment = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "asterisk", "namespace": ns},
         "spec": {"replicas": 1, "revisionHistoryLimit": 5, "strategy": {"type": "Recreate"},
                  "selector": {"matchLabels": {"app": "asterisk"}},

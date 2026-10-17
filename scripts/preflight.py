@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Local checks by default; --cluster adds strictly read-only kubectl checks."""
 import argparse
+import configparser
 import json
 from pathlib import Path
 import subprocess
@@ -8,6 +9,34 @@ import sys
 import xml.etree.ElementTree as ET
 from render_k3s import load_site, read_files, render_core, render_tftp
 from verify_firmware import verify as verify_firmware
+from provision import ha_settings
+
+
+def check_ha_config(site, configs):
+    """Reject stale management credentials/ACLs after an operator edits site.json."""
+    ha = ha_settings(site)
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read_string(configs.get("manager.conf", "[general]\nenabled=no\n"))
+        enabled = parser.getboolean("general", "enabled", fallback=False)
+        if enabled != bool(ha):
+            raise ValueError("AMI enabled state differs from site.json; rerun provision.py")
+        if ha:
+            expected = {"permit": f"{ha['client']}/255.255.255.255", "deny": "0.0.0.0/0.0.0.0",
+                        "read": "call,dtmf", "write": "system,originate" if ha["originate"] else "system"}
+            if parser.get("general", "bindaddr") != site["node_ipv4"] or parser.get("general", "port") != "5038":
+                raise ValueError("AMI listener differs from site.json; rerun provision.py")
+            if any(parser.get("homeassistant", k) != v for k, v in expected.items()):
+                raise ValueError("AMI permissions or client ACL differ from site.json; rerun provision.py")
+        assist = ha.get("assist") if ha else None
+        route = "Dial(PJSIP/ha-assist/sip:630@"
+        actual = configs.get("extensions.conf", "")
+        if bool(assist) != (route in actual):
+            raise ValueError("Assist route differs from site.json; rerun provision.py")
+        if assist and f"{route}{assist['host']}:{assist['port']},60)" not in actual:
+            raise ValueError("Assist destination differs from site.json; rerun provision.py")
+    except configparser.Error:
+        raise ValueError("Invalid manager.conf; rerun provision.py") from None
 
 
 def inspect_cluster(site):
@@ -49,7 +78,9 @@ def main():
     try:
         site = load_site(args.site, args.with_tftp)
         root = args.site.resolve().parent
-        render_core(site, read_files(root / "asterisk", ".conf"))
+        configs = read_files(root / "asterisk", ".conf")
+        check_ha_config(site, configs)
+        render_core(site, configs)
         if args.with_tftp:
             xmls = read_files(root / "tftp", ".xml")
             render_tftp(site, xmls)

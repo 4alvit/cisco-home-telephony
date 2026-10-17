@@ -23,9 +23,26 @@ RUN curl -fL --retry 3 "https://downloads.asterisk.org/pub/telephony/asterisk/as
     && make install DESTDIR=/stage
 # Debian has /var/run -> /run. Runtime directories are created in the final image.
 RUN rm -rf /stage/var/run
+# Open-source Opus transcoder (GPL-2.0); Asterisk's Opus format alone is pass-through.
+# Build only the codec against these exact Asterisk headers, retaining Asterisk's
+# own res_format_attr_opus module. Keep corresponding source/license in the image.
+ARG OPUS_SOURCE_COMMIT=591b6cd9b75e2b9b6d815ef364a385fccee595a7
+ARG OPUS_SOURCE_SHA256=4b9b6b7e05d1450bf88932fdac280d210f6209c4fefed8b7c82995fbc869ed70
+RUN apt-get update && apt-get install -y --no-install-recommends libopus-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fL --retry 3 "https://github.com/wazo-platform/wazo-codec-opus-open-source/archive/${OPUS_SOURCE_COMMIT}.tar.gz" -o /tmp/opus-source.tar.gz \
+    && printf '%s  /tmp/opus-source.tar.gz\n' "$OPUS_SOURCE_SHA256" | sha256sum -c - \
+    && mkdir /build/opus-source \
+    && tar -xzf /tmp/opus-source.tar.gz -C /build/opus-source --strip-components=1 \
+    && make -C /build/opus-source codec_opus_open_source CPATH=-I/build/include \
+         CFLAGS='-pthread -D_FORTIFY_SOURCE=2 -fPIC -Wl,--no-as-needed' \
+    && install -m 0755 /build/opus-source/codecs/codec_opus_open_source.so /stage/usr/lib/asterisk/modules/ \
+    && mkdir -p /stage/usr/share/doc/asterisk-opus-open-source \
+    && cp /build/opus-source/LICENSE /build/opus-source/README.md /stage/usr/share/doc/asterisk-opus-open-source/ \
+    && cp /tmp/opus-source.tar.gz /stage/usr/share/doc/asterisk-opus-open-source/source.tar.gz
 FROM ${DEBIAN_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates libedit2 libssl3 libxml2 libuuid1 libsqlite3-0 libncurses6 \
+    ca-certificates libedit2 libssl3 libxml2 libuuid1 libsqlite3-0 libncurses6 libopus0 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 10001 asterisk && useradd -u 10001 -g 10001 -M -s /usr/sbin/nologin asterisk
 COPY --from=build /stage/ /
