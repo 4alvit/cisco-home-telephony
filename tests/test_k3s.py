@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -76,6 +77,67 @@ class K3sSafetyTests(unittest.TestCase):
                 env["TEST_TRANSPORTS"] = output
                 result = subprocess.run(probe, env=env, capture_output=True)
                 self.assertEqual(result.returncode == 0, success)
+
+    def run_ha_probe(self, tcp_row, *, assist=True,
+                     codec="codec_opus_open_source.so Opus transcoder 0 Running core",
+                     endpoint="  Endpoint:  ha-assist  Not in use  0 of inf",
+                     dialplan="  '630' => 1. Dial(PJSIP/ha-assist/sip:630@192.168.50.30:5060,60)"):
+        site = dict(fixture(), home_assistant={"enabled": True, "assist": {"enabled": assist}})
+        probe = render.render_core(site, configs())["items"][2]["spec"]["template"]["spec"]["containers"][0]["readinessProbe"]
+        self.assertEqual(probe["timeoutSeconds"], 5)
+        command = list(probe["exec"]["command"])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / "asterisk"
+            binary.write_text("""#!/bin/sh
+case "$2" in
+  'pjsip show transports') printf '%s\\n' "$TEST_TRANSPORTS" ;;
+  'module show like codec_opus_open_source') printf '%s\\n' "$TEST_CODEC" ;;
+  'pjsip show endpoint ha-assist') printf '%s\\n' "$TEST_ENDPOINT" ;;
+  'dialplan show 630@home') printf '%s\\n' "$TEST_DIALPLAN" ;;
+  *) exit 98 ;;
+esac
+""")
+            binary.chmod(0o700)
+            tcp = root / "proc-net-tcp"
+            tcp.write_text("  sl  local_address rem_address   st tx_queue rx_queue\n" + tcp_row + "\n")
+            # Run the actual generated shell and real grep, substituting only
+            # the read-only kernel data source so the test also runs on macOS.
+            self.assertEqual(command[2].count("/proc/net/tcp"), 1)
+            command[2] = command[2].replace("/proc/net/tcp", shlex.quote(str(tcp)))
+            env = dict(os.environ, PATH=directory + os.pathsep + os.environ["PATH"],
+                       TEST_TRANSPORTS="Transport: transport-udp udp 0 0 192.168.50.58:5060\nTransport: transport-tcp tcp 0 0 192.168.50.58:5060",
+                       TEST_CODEC=codec, TEST_ENDPOINT=endpoint, TEST_DIALPLAN=dialplan)
+            return subprocess.run(command, env=env, capture_output=True, text=True, timeout=5)
+
+    def test_ha_readiness_requires_ami_listening_on_configured_local_address(self):
+        # 3A32A8C0 is 192.168.50.58 in /proc/net/tcp. Both SIP transports work
+        # throughout these cases, so only a genuine local LISTEN should pass.
+        cases = (
+            ("", False),
+            (" 0: 3A32A8C0:13AE 00000000:0000 01 00000000:00000000", False),
+            (" 0: 3A32A8C0:C001 1E32A8C0:13AE 01 00000000:00000000", False),
+            (" 0: 3B32A8C0:13AE 00000000:0000 0A 00000000:00000000", False),
+            (" 0: 3A32A8C0:13AE 00000000:0000 0A 00000000:00000000", True),
+        )
+        for row, expected in cases:
+            with self.subTest(row=row):
+                result = self.run_ha_probe(row, assist=False, codec="", endpoint="", dialplan="")
+                self.assertEqual(result.returncode == 0, expected, result.stderr)
+
+    def test_assist_readiness_requires_real_endpoint_route_and_running_codec(self):
+        listening = " 0: 3A32A8C0:13AE 00000000:0000 0A 00000000:00000000"
+        result = self.run_ha_probe(listening)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotEqual(self.run_ha_probe("").returncode, 0)
+        for missing in ({"endpoint": "Unable to find object ha-assist."},
+                        {"endpoint": "Endpoint: ha-assist-other Not in use"},
+                        {"dialplan": "There is no existence of 630@home extension"},
+                        {"dialplan": "'630' => 1. Hangup()"},
+                        {"codec": "codec_opus_open_source.so Opus transcoder 0 Not Running"}):
+            with self.subTest(missing=missing):
+                result = self.run_ha_probe(listening, **missing)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_preflight_enforces_firmware_and_generated_profile_match(self):
         with tempfile.TemporaryDirectory() as directory:

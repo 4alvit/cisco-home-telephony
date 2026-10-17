@@ -108,8 +108,26 @@ def render_core(site, configs):
     ha = site.get("home_assistant", {})
     if ha.get("enabled"):
         spec["containers"][0]["ports"].append({"name": "ami", "containerPort": 5038, "protocol": "TCP"})
+        # Linux exposes IPv4 socket addresses in host byte order on our supported
+        # amd64/arm64 nodes. Match the configured bind address, local AMI port and
+        # LISTEN state, not an unrelated peer connection to remote port 5038.
+        ami_address = ipaddress.IPv4Address(site["node_ipv4"]).packed[::-1].hex().upper()
+        probe = spec["containers"][0]["readinessProbe"]
+        probe["timeoutSeconds"] = 5
+        probe["exec"]["command"][2] += (
+            "; grep -Eq '^[[:space:]]*[0-9]+:[[:space:]]+"
+            + ami_address + ":13AE[[:space:]]+[[:xdigit:]]{8}:[[:xdigit:]]{4}"
+            "[[:space:]]+0A[[:space:]]' /proc/net/tcp"
+        )
         if ha.get("assist", {}).get("enabled"):
-            spec["containers"][0]["readinessProbe"]["exec"]["command"][2] += "; asterisk -rx 'module show like codec_opus_open_source' | grep -Eq 'codec_opus_open_source.so.*Running'"
+            probe["exec"]["command"][2] += (
+                "; asterisk -rx 'module show like codec_opus_open_source'"
+                " | grep -Eq '^[[:space:]]*codec_opus_open_source[.]so[[:space:]].*[[:space:]][0-9]+[[:space:]]+Running([[:space:]]|$)'"
+                "; asterisk -rx 'pjsip show endpoint ha-assist'"
+                " | grep -Eq '^[[:space:]]*Endpoint:[[:space:]]+ha-assist[[:space:]/]'"
+                "; asterisk -rx 'dialplan show 630@home'"
+                " | grep -Fq 'Dial(PJSIP/ha-assist/'"
+            )
     deployment = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "asterisk", "namespace": ns},
         "spec": {"replicas": 1, "revisionHistoryLimit": 5, "strategy": {"type": "Recreate"},
                  "selector": {"matchLabels": {"app": "asterisk"}},

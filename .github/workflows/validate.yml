@@ -3,6 +3,12 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      export_images:
+        description: Export smoke-tested amd64 images for one deployment (1-day retention)
+        type: boolean
+        required: false
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -25,7 +31,7 @@ jobs:
       - name: Isolated smoke with synthetic generated configuration
         run: bash scripts/smoke-containers.sh cisco-home-ci
       - name: Export verified amd64 images
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'workflow_dispatch' && inputs.export_images && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
           mkdir -p .build/image-artifacts
@@ -42,7 +48,7 @@ jobs:
           printf 'Verified image artifact size: %s bytes (limit: 400 MiB)\n' "$total_bytes"
           test "$total_bytes" -lt $((400 * 1024 * 1024))
       - name: Upload verified amd64 images
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'workflow_dispatch' && inputs.export_images && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: verified-amd64-images-${{ github.sha }}

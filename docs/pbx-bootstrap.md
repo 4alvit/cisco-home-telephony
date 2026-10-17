@@ -47,6 +47,13 @@ Assist добавляется только маршрут 630 к провере�
 После запуска проверяйте SIP transports и AMI login, а не наличие телефонных
 entities: их до подключения аппаратов не ожидается.
 
+При включённом Assist upstream также обнаруживает служебный endpoint
+`ha-assist`. Его производный `Registered` может быть выключен, а `State` —
+`Unavailable`: этот endpoint набирается по явному SIP URI и не регистрируется
+на HA. Это не физический Cisco и не проверка доступности Assist. Серверный
+`AMI Connected` и отдельный [AMI-пробник](https://github.com/ha-homelab/asterisk-telephony/blob/main/docs/ami-verification.md)
+проверяют управление АТС; работу аудио подтверждает отдельный звонок.
+
 ## Добавление проверенных аппаратов
 
 После физической проверки создайте настоящий `phones.json`, добавьте NTP и
