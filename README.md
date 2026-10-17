@@ -34,7 +34,8 @@ conversion to MPP is not required.
   ten station extensions with toddler music and lullabies, and alerts
   that ring until manually stopped.
 - [Cisco command line](docs/cli.md): `cisco 212` shows status; `cisco 212 220`
-  calls from line 212 to 220. Includes pickup, speaker toggle, DND, auto-answer,
+  calls from line 212 to 220. `cisco 212 intercom 220` connects two Cisco phones
+  with one-time speaker answer. Includes pickup, speaker toggle, DND, auto-answer,
   timers, weekday alarms, messages and photos, with private local configuration.
 - [Room directory](docs/phone-directory.md): a fictional ten-room demonstration
   plus an example Mac client, with stable numbers, room caller ID and read-only

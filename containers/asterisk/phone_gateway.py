@@ -216,6 +216,10 @@ class Gateway:
         self.db.execute('''CREATE TABLE IF NOT EXISTS alerts (
             id TEXT PRIMARY KEY, phone TEXT, line TEXT, kind TEXT, state TEXT,
             reason TEXT, created REAL, seen INTEGER, stop_requested INTEGER)''')
+        self.db.execute('''CREATE TABLE IF NOT EXISTS intercoms (
+            root TEXT PRIMARY KEY, state TEXT, created REAL)''')
+        # Never resume answering a partially established intercom after restart.
+        self.db.execute("UPDATE intercoms SET state='stopping' WHERE state='starting'")
         for phone in self.phones:
             self.db.execute('INSERT OR IGNORE INTO preferences VALUES (?, 0, 0)', (phone,))
         self.db.commit()
@@ -304,6 +308,7 @@ class Gateway:
         with self.lock, AMI(self.config['ami']) as ami:
             endpoints, channels = ami.snapshot()
             self.reconcile_alerts(ami, channels)
+            self.reconcile_intercoms(ami, channels)
             return {'ami_fresh': True, 'observed_at': time.time(),
                     'dial_allowlist': self.config['dial_allowlist'],
                     'ring_allowlist': self.config.get('ring_allowlist', ['640']),
@@ -320,8 +325,102 @@ class Gateway:
                  'channels': [{'name': item['Channel'], 'uniqueid': item.get('Uniqueid'),
                                'state': item.get('ChannelStateDesc'), 'line': item['Channel'].split('/')[1].split('-')[0]}
                               for item in own_channels(phone, channels)],
-                 'capabilities': ['dial', 'answer', 'hangup', 'speaker_toggle', 'message', 'image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop']}
+                 'capabilities': ['dial', 'intercom', 'answer', 'hangup', 'speaker_toggle', 'message', 'image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop']}
                 for phone in self.phones.values()]}
+
+    @staticmethod
+    def intercom_channels(root, channels):
+        return [item for item in channels if root in (item.get('Uniqueid'), item.get('Linkedid'))]
+
+    def is_intercom_channel(self, channel):
+        return any(self.db.execute('SELECT 1 FROM intercoms WHERE root=?', (identity,)).fetchone()
+                   for identity in (channel.get('Uniqueid'), channel.get('Linkedid')) if identity)
+
+    def stop_intercom(self, ami, root):
+        _, channels = ami.snapshot()
+        for candidate in self.intercom_channels(root, channels):
+            _, current = ami.snapshot()
+            if any(item.get('Channel') == candidate.get('Channel')
+                   and item.get('Uniqueid') == candidate.get('Uniqueid')
+                   for item in self.intercom_channels(root, current)):
+                ami.action('Hangup', Channel=candidate['Channel'], Cause='16')
+
+    def reconcile_intercoms(self, ami, channels):
+        for root, state, created in self.db.execute('SELECT root,state,created FROM intercoms').fetchall():
+            if state == 'starting' and time.time() - created > 35:
+                self.db.execute("UPDATE intercoms SET state='stopping' WHERE root=?", (root,))
+                self.db.commit()
+                state = 'stopping'
+            if state == 'stopping' and self.intercom_channels(root, channels):
+                self.stop_intercom(ami, root)
+            # Retain failed identities to catch a delayed asynchronous originate.
+            if time.time() - created > 30 * 86400 and not self.intercom_channels(root, channels):
+                self.db.execute('DELETE FROM intercoms WHERE root=?', (root,))
+                self.db.commit()
+
+    def intercom(self, ami, phone, line, destination, endpoints, channels):
+        require(isinstance(destination, str) and destination in self.config['dial_allowlist'], 'number_not_allowed')
+        targets = [item for item in self.phones.values() if destination in item['lines']]
+        require(len(targets) == 1, 'intercom_requires_cisco_destination')
+        target = targets[0]
+        require(target['id'] != phone['id'], 'intercom_requires_two_phones')
+        for item in (phone, target):
+            require(all(endpoints.get(number) not in (None, 'Unavailable', 'Invalid') for number in item['lines']),
+                    'phone_unavailable', 503)
+            require(not own_channels(item, channels) and
+                    all(endpoints.get(number) == 'Not in use' for number in item['lines']), 'phone_busy')
+            require(not self.preference(item['id'])['dnd'], 'do_not_disturb')
+            require(not any(row['phone'] == item['id'] and row['state'] != 'ended' for row in self.alerts()),
+                    'alert_already_active')
+        root = 'cisco-intercom-' + secrets.token_hex(16)
+        self.db.execute('INSERT INTO intercoms VALUES (?, ?, ?)', (root, 'starting', time.time()))
+        self.db.commit()
+        try:
+            # Direct, allowlisted Cisco peer only; ignore call forwarding. The
+            # supplied ChannelId ties both legs to this one operation, not to CID.
+            ami.action('Originate', Channel='PJSIP/' + line, ChannelId=root,
+                       Application='Dial', Data='PJSIP/' + destination + ',8,i',
+                       CallerID=(phone.get('room') or line) + ' <' + line + '>',
+                       Timeout='8000', Async='true')
+            deadline, attempted, seen = time.monotonic() + 12, set(), set()
+            while time.monotonic() < deadline:
+                _, current = ami.snapshot()
+                related = self.intercom_channels(root, current)
+                legs = []
+                for item, number in ((phone, line), (target, destination)):
+                    owned = own_channels(item, current)
+                    require(len(owned) <= 1 and all(ch in related for ch in owned), 'intercom_call_changed', 503)
+                    if not owned:
+                        require(number not in seen, 'intercom_call_ended', 503)
+                        continue
+                    ch = owned[0]
+                    require(ch['Channel'].startswith('PJSIP/' + number + '-') and ch.get('Uniqueid'),
+                            'intercom_call_changed', 503)
+                    seen.add(number)
+                    legs.append(ch)
+                    if ch.get('ChannelStateDesc') == 'Ringing' and number not in attempted:
+                        # One speaker-key press on this isolated incoming call.
+                        # Never toggle a speaker on an already answered call.
+                        attempted.add(number)
+                        execute(item, 'Key:Speaker')
+                        break  # Re-read both phones before another key press.
+                else:
+                    if (len(legs) == 2 and all(ch.get('ChannelStateDesc') == 'Up' for ch in legs)
+                            and legs[0].get('BridgeId') and legs[0]['BridgeId'] == legs[1].get('BridgeId')):
+                        self.db.execute("UPDATE intercoms SET state='connected' WHERE root=?", (root,))
+                        self.db.commit()
+                        return {'line': line, 'number': destination, 'connection_state': 'connected',
+                                'intercom_id': root, 'speaker_requested': len(attempted) == 2}
+                time.sleep(0.2)
+            raise Refused('intercom_setup_timeout', 503)
+        except Exception:
+            self.db.execute("UPDATE intercoms SET state='stopping' WHERE root=?", (root,))
+            self.db.commit()
+            try:
+                self.stop_intercom(ami, root)
+            except Exception:
+                pass  # The background reconciler retains and retries cleanup.
+            raise Refused('intercom_not_connected_check_status', 503) from None
 
     def resource(self, phone, data, content_type):
         now = time.time()
@@ -372,7 +471,7 @@ class Gateway:
 
     def mutate(self, phone_id, action, body):
         require(phone_id in self.phones, 'unknown_phone', 404)
-        require(action in ('dial', 'answer', 'hangup', 'speaker', 'message', 'image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop'),
+        require(action in ('dial', 'intercom', 'answer', 'hangup', 'speaker', 'message', 'image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop'),
                 'unknown_action', 404)
         require(isinstance(body, dict), 'json_object_required', 400)
         key = body.get('idempotency_key')
@@ -419,6 +518,8 @@ class Gateway:
         with AMI(self.config['ami']) as ami:
             endpoints, channels = ami.snapshot()
             self.reconcile_alerts(ami, channels)
+            if action == 'intercom':
+                return self.intercom(ami, phone, line, body.get('number'), endpoints, channels)
             if action == 'alert_stop':
                 alert_id = body.get('alert_id')
                 require(isinstance(alert_id, str) and re.fullmatch(r'[0-9a-f]{32}', alert_id), 'bad_alert_id', 400)
@@ -513,6 +614,7 @@ class Gateway:
                         self.last_pbx_start = started
                     endpoints, channels = ami.snapshot()
                     self.reconcile_alerts(ami, channels)
+                    self.reconcile_intercoms(ami, channels)
                     active = {item.get('Uniqueid') for item in channels}
                     self.auto_attempts.intersection_update(active)
                     for phone in self.phones.values():
@@ -521,7 +623,7 @@ class Gateway:
                         if not pref['autoanswer'] or pref['dnd'] or len(owned) != 1:
                             continue
                         item = owned[0]
-                        if self.is_alert_channel(item):
+                        if self.is_alert_channel(item) or self.is_intercom_channel(item):
                             continue
                         identity = item.get('Uniqueid')
                         if not identity or identity in self.auto_attempts or item.get('ChannelStateDesc') != 'Ringing':

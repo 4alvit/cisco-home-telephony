@@ -71,6 +71,9 @@ cisco 213 directory             # The same complete directory, not a line filter
 cisco 213 help                  # Local help; no config or network needed
 cisco 213 destinations          # Read the current dial/ring allowlists
 cisco 213 220                   # Place a call FROM 213 TO 220
+cisco 213 call 220              # Same ordinary call; the destination rings
+cisco 213 intercom 220          # Answer both Cisco phones on speaker for this call
+cisco 213 drop-in 220           # Alias for intercom
 cisco 213 dial 600              # Echo test FROM 213
 cisco 213 answer                # Answer the exact observed ringing call on 213
 cisco 213 pickup                # Alias for Answer; requires an actual ringing call
@@ -94,7 +97,41 @@ Commands are displayed only when the gateway advertises the relevant capability.
 
 Answer and Hangup send both the exact fresh channel name and its unique ID. They refuse if the selected line has no call, if there is more than one phone channel, or if a sibling line is active. The gateway checks the identity again before acting, and blocks automatic answering of timer/alarm alerts. A CLI status snapshot is not proof that a later action has already happened.
 
-### Pickup, speaker and automatic answering
+### Intercom / Drop In
+
+`cisco 213 intercom 220` (also `cisco 213 drop-in 220`) creates a two-way call
+between the exact selected lines and requests speaker answer on both phones.
+Neither person needs to accept it. Use two distinct, idle Cisco phones with
+their handsets on-hook. There can be a brief ring while the gateway observes
+the incoming call and presses Speaker. This is a local intercom feature, not
+an integration with Google or Alexa.
+
+Both phones must be available, free of other calls and active alerts, and have
+DND disabled. The destination must be a configured Cisco line in the dial
+allowlist; softphones, radio/service numbers, groups and external destinations
+are not intercom targets. Ordinary `call`, `dial` and numeric shorthand retain
+normal ringing behavior.
+
+The gateway does not enable persistent auto-answer. It creates a unique AMI
+channel identity, ignores call forwarding, and answers only isolated incoming
+channels belonging to that exact operation. It does not trust caller ID as
+proof of ownership. Each speaker key is sent at most once. A concurrent call,
+missing leg or failed setup aborts the attempt; cleanup targets only channels
+with the operation's identity. A gateway restart cancels incomplete setup and
+retains cleanup records for delayed calls instead of resuming auto-answer.
+
+Success reports `connection_state: "connected"` only after both exact lines
+are `Up` in the same Asterisk bridge. `speaker_requested` reports whether both
+Speaker commands were issued. It cannot prove speaker volume, handset/headset
+selection after user interaction, or that someone heard audio. To end it, use
+`cisco 213 hangup` or hang up on either phone. On timeout or an unknown result,
+inspect status before issuing another command; do not retry blindly.
+
+The implementation uses Asterisk's [AMI Originate and ChannelId](https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/AMI_Actions/Originate/),
+[CoreShowChannel identities and BridgeId](https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/AMI_Events/CoreShowChannel/),
+and Cisco's [Speaker key URI](https://www.cisco.com/c/en/us/td/docs/voice_ip_comm/cuipph/all_models/xsi/7_0/english/programming/guide/70xsi/xsi70uri.html).
+
+### Answering and persistent preferences
 
 `pickup` is an alias for `answer`: it answers one isolated, freshly observed incoming **Ringing** call on the selected line. It is not a mechanical handset lift and does not silently toggle the speaker when idle. If there is no ringing call, it refuses before sending a control request.
 

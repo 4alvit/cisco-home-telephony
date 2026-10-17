@@ -115,6 +115,12 @@ return credentials. Every mutation is a JSON POST to
 - `speaker`: `mode: "toggle"`; only an idle phone is accepted. This emulates a
   physical button, so there is no invented boolean speaker state.
 - `dnd` / `autoanswer`: `enabled: true` or `false`. Both default to false.
+- `intercom`: `line`, `number`. Establishes a one-time speaker call between two
+  distinct, idle, DND-off Cisco phones. Both exact lines must be in the inventory;
+  the destination must also be in the dial allowlist. Returns `connection_state:
+  "connected"`, `intercom_id`, and `speaker_requested` after observing both legs
+  in one bridge. It leaves persistent auto-answer preferences unchanged.
+  See [CLI intercom behavior and failure handling](cli.md#intercom--drop-in).
 - `alert`: `line`, `kind` (`"timer"` or `"alarm"`). Starts one alert with no
   application ring-duration limit. It returns a new `alert_id`, the selected
   line/kind and `ring_timeout_seconds: null`.

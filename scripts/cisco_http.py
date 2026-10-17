@@ -16,7 +16,8 @@ channel_identity_missing channel_identity_changed phone_not_ringing
 alert_requires_manual_answer_or_stop alert_not_found bad_alert_id
 previous_action_outcome_unknown idempotency_key_conflict
 speaker_toggle_requires_idle_phone operation_failed_do_not_retry_blindly
-too_many_pending_messages'''.split())
+too_many_pending_messages intercom_requires_cisco_destination intercom_requires_two_phones
+intercom_not_connected_check_status'''.split())
 HA_ERRORS = {
     'The selected line does not belong to this handset': 'ha_line_mapping_mismatch',
     'The timer belongs to the other line': 'ha_timer_owned_by_other_line',

@@ -16,7 +16,7 @@ import time
 from cisco_http import ERROR_REASONS, SCHEDULE_PATH, gateway_url, perform
 
 COMMANDS = {
-    'dial': 'dial NUMBER', 'answer': 'answer', 'hangup': 'hangup',
+    'dial': 'dial NUMBER', 'intercom': 'intercom NUMBER', 'answer': 'answer', 'hangup': 'hangup',
     'speaker_toggle': 'speaker toggle', 'dnd': 'dnd [on|off]',
     'autoanswer': 'autoanswer [on|off]', 'message': 'message TEXT [--title TITLE]',
     'image': 'image FILE [--title TITLE]', 'ring': 'ring [DESTINATION]',
@@ -272,6 +272,10 @@ def commands(phone):
               if key in phone['capabilities']]
     if 'answer' in phone['capabilities']:
         result.append('pickup')
+    if 'dial' in phone['capabilities']:
+        result.append('call NUMBER')
+    if 'intercom' in phone['capabilities']:
+        result.append('drop-in NUMBER')
     return result
 
 
@@ -312,15 +316,23 @@ def directory_result(data, selected_line=None):
 
 def make_action(args, data, phone):
     command, line = args.command, args.extension
-    action = {'stop-alert': 'alert_stop', 'pickup': 'answer'}.get(command, command)
+    action = {'stop-alert': 'alert_stop', 'pickup': 'answer', 'call': 'dial', 'drop-in': 'intercom'}.get(command, command)
     capability = 'speaker_toggle' if action == 'speaker' else action
     require(capability in phone['capabilities'], 'command_not_supported_by_gateway')
     body = {'line': line}
-    if action in ('dial', 'ring'):
+    if action in ('dial', 'ring', 'intercom'):
         number = args.number
-        require(number in data['dial_allowlist' if action == 'dial' else 'ring_allowlist'],
+        require(number in data['ring_allowlist' if action == 'ring' else 'dial_allowlist'],
                 'destination_not_allowlisted')
-        body['number' if action == 'dial' else 'destination'] = number
+        body['destination' if action == 'ring' else 'number'] = number
+        if action == 'intercom':
+            target = validate_inventory(data, number)
+            require(target['id'] != phone['id'], 'intercom_requires_two_phones')
+            for item in (phone, target):
+                require(item['online'], 'phone_unavailable')
+                require(not item['channels'], 'phone_busy')
+                require(not item['dnd'], 'do_not_disturb')
+                require(not item.get('alert') or item['alert']['state'] == 'ended', 'alert_already_active')
     elif action in ('answer', 'hangup'):
         selected = [c for c in phone['channels'] if c['line'] == line]
         if command == 'pickup' and not selected:
@@ -498,7 +510,10 @@ def parser():
     }
     for name in ('status', 'help', 'directory', 'destinations', 'answer', 'pickup', 'hangup'):
         sub.add_parser(name, help=descriptions[name], description=descriptions[name])
-    sub.add_parser('dial').add_argument('number')
+    sub.add_parser('dial', aliases=['call'], help='Call a number; the destination rings normally.').add_argument('number')
+    sub.add_parser('intercom', aliases=['drop-in'], help='Connect two idle Cisco phones with automatic speaker answer.',
+                   description='One-time speaker answer on both phones. Requires two distinct, idle Cisco phones; '
+                   'respects DND and does not change persistent auto-answer.').add_argument('number')
     sub.add_parser('ring').add_argument('number', nargs='?', default='640')
     sub.add_parser('speaker', description='Explicit idle speaker-key toggle for the whole phone. '
                    'Final speaker state is unknown; this is not an idempotent on/off command.').add_argument('mode', choices=['toggle'])
@@ -526,7 +541,7 @@ def parser():
     alarm.add_argument('--days', required=True, help='mon,tue,... or weekdays, weekend, daily')
     alarm.add_argument('--enable', action='store_true', help='enable this alarm; otherwise save it disabled')
     alarm.add_argument('--replace', action='store_true', help='explicitly replace an alarm owned by the sibling line')
-    for command_parser in sub.choices.values():
+    for command_parser in dict.fromkeys(sub.choices.values()):
         global_options(command_parser, inherited=True)
     for command_parser in (*timer_sub.choices.values(), *alarm_sub.choices.values()):
         global_options(command_parser, inherited=True)
@@ -597,6 +612,8 @@ def display(result):
     if destinations and 'dial NUMBER' in result['available_commands']:
         target = '220' if '220' in destinations else destinations[0]
         print(f'  cisco {line} {target}')
+        if 'intercom NUMBER' in result['available_commands']:
+            print(f'  cisco {line} intercom {target}  # Cisco phones only; answers both on speaker')
     if '600' in result['dial_allowlist'] and 'dial NUMBER' in result['available_commands']:
         print(f'  cisco {line} dial 600')
     if 'message TEXT [--title TITLE]' in result['available_commands']:
@@ -724,6 +741,15 @@ def main(argv=None):
                 result = {'status': 'accepted', 'selected_line': args.extension, 'phone_id': phone['id'],
                           'action': action, 'action_id': action_key,
                           'note': 'Request accepted; run status to observe the effect. No automatic retry.'}
+                if action == 'intercom':
+                    require(response.get('connection_state') == 'connected'
+                            and isinstance(response.get('intercom_id'), str)
+                            and re.fullmatch(r'cisco-intercom-[0-9a-f]{32}', response['intercom_id'])
+                            and type(response.get('speaker_requested')) is bool, 'unconfirmed_intercom_response')
+                    result.update(connection_state='connected', number=body['number'],
+                                  intercom_id=response['intercom_id'], speaker_requested=response['speaker_requested'],
+                                  note='Both lines were Up in the same PBX bridge. Speaker state and audibility '
+                                       'cannot be read back. Use hangup to end the call.')
                 if 'alert_id' in response:
                     require(isinstance(response['alert_id'], str) and re.fullmatch(r'[0-9a-f]{32}', response['alert_id']),
                             'invalid_alert_response')
