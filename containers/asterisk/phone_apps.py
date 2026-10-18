@@ -349,6 +349,17 @@ class PhoneApps:
             value = self.schedule(phone_id, line)
             slot = value['timer'] if operation.startswith('timer_') else value['alarm']
             exists = slot['active'] if operation.startswith('timer_') else slot['configured']
+            if operation == 'timer_cancel':
+                # Expiry clears the countdown but its alert keeps ringing. A
+                # cancellation must reach HA until that alert is terminal.
+                alert = value.get('alert')
+                active_alert = (alert if alert and alert['kind'] == 'timer'
+                                and alert['state'] != 'ended' else None)
+                if active_alert:
+                    require(active_alert['line'] == line, 'line_does_not_own_schedule', 409)
+                # A stale gateway observation cannot prove there is no alert.
+                # HA supports persisting cancellation and reporting uncertainty.
+                exists = exists or bool(active_alert) or not value.get('gateway_fresh')
             if exists:
                 require(slot['line'] == line, 'line_does_not_own_schedule', 409)
             if operation == 'timer_cancel' and not exists:

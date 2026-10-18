@@ -135,6 +135,10 @@ the entity belongs to the `camera` domain. Snapshots pass through HA's camera
 proxy and are converted to RGB PNG within the **298 × 156** Services pane. This
 is a refreshed still image, not a live video player. Images and private labels
 must not be copied into public screenshots or documentation.
+The returned frame can be cached by the HA camera integration. A notification
+camera may expose the last motion event rather than the current view; select
+the primary camera entity and check its frame timestamp. Any timestamp burned
+into the picture comes from the camera and may use a different time zone.
 
 ### Generate and deploy the matching profile
 

@@ -254,6 +254,37 @@ class PhoneAppsTests(unittest.TestCase):
         self.assertTrue(all(call[2] == 'status' for call in self.backend.calls))
         self.assertFalse(self.app.tokens)
 
+    def test_cancel_expired_countdown_still_stops_its_owned_ringing_alert(self):
+        self.backend.value['timer'].update(active=False, line='202')
+        self.backend.value['alert'] = {'id': 'e' * 32, 'kind': 'timer', 'state': 'ringing', 'line': '202'}
+        url = self.confirmation('/prepare', 'line=202&op=timer_cancel')
+        self.assertEqual(self.backend.calls[-1][2], 'status')
+        self.click(url)
+        self.assertEqual(self.backend.calls[-1][1:3], ('202', 'timer_cancel'))
+        self.assertRegex(self.backend.calls[-1][3]['request_id'], '^apps-[0-9a-f]{32}$')
+
+    def test_cancel_expired_timer_checks_alert_line_even_if_slot_claims_selected_line(self):
+        self.backend.value['timer'].update(active=False, line='201')
+        self.backend.value['alert'] = {'id': 'e' * 32, 'kind': 'timer', 'state': 'ringing', 'line': '202'}
+        with self.assertRaises(apps.AppError):
+            self.get('/prepare', 'line=201&op=timer_cancel')
+        self.assertFalse(self.app.tokens)
+        self.assertTrue(all(call[2] == 'status' for call in self.backend.calls))
+
+    def test_inactive_countdown_and_terminal_or_alarm_alert_remain_noops(self):
+        for kind, state in (('timer', 'ended'), ('alarm', 'ringing')):
+            self.backend.value['alert'] = {'id': 'e' * 32, 'kind': kind, 'state': state, 'line': '201'}
+            root = self.get('/prepare', 'op=timer_cancel')
+            self.assertEqual(root.tag, 'CiscoIPPhoneText')
+            self.assertIn('Nothing was changed', root.find('Text').text)
+        self.assertFalse(self.app.tokens)
+
+    def test_stale_gateway_does_not_claim_an_expired_timer_has_no_alert(self):
+        self.backend.value['gateway_fresh'] = False
+        url = self.confirmation('/prepare', 'op=timer_cancel')
+        self.click(url)
+        self.assertEqual(self.backend.calls[-1][2], 'timer_cancel')
+
     def test_existing_sibling_alarm_requires_selecting_its_line(self):
         self.backend.value['alarm'].update(configured=True, line='202')
         for op in ('alarm_enable', 'alarm_disable', 'alarm_set&at=0730&days=1'):
