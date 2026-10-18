@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="780" viewBox="0 0 1280 780" role="img" aria-labelledby="title desc">
+  <title id="title">Remote Cisco phones through a routed VPN</title>
+  <desc id="desc">Proposed design, not deployed. A Cisco 7945G connects through a PoE injector or switch to a remote VPN router. An encrypted two-way routed VPN connects that router to the home VPN router and existing Asterisk, Phone Gateway and Home Assistant services. Preserve the phone source IP without SNAT, use stable private addresses and non-overlapping subnets, and never expose SIP or TFTP to the public Internet. Compatibility of the built-in Cisco SSL VPN with the installed SIP firmware remains unproven.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#eff6ff"/><stop offset="1" stop-color="#f4f1fc"/></linearGradient>
+    <linearGradient id="tunnel" x2="1"><stop stop-color="#2366d9"/><stop offset="1" stop-color="#7953c7"/></linearGradient>
+    <marker id="arrow" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto-start-reverse"><path d="M1 1L7 4.5L1 8Z" fill="#48749d"/></marker>
+    <style>
+      text{font-family:Arial,Helvetica,sans-serif;fill:#18314d}
+      .title{font-size:32px;font-weight:700}.sub{font-size:17px;fill:#526a83}
+      .zone{font-size:16px;font-weight:700;letter-spacing:1.2px;fill:#526a83}
+      .label{font-size:21px;font-weight:700}.body{font-size:16px}.small{font-size:15px;fill:#526a83}
+      .white{fill:#fff}.edge{fill:none;stroke:#48749d;stroke-width:2.8;marker-start:url(#arrow);marker-end:url(#arrow)}
+      .bus{fill:none;stroke:#48749d;stroke-width:2.8}
+    </style>
+  </defs>
+  <rect width="1280" height="780" rx="26" fill="url(#bg)"/>
+  <text x="40" y="57" class="title">The same phone, away from home</text>
+  <text x="40" y="91" class="sub">Keep the SIP firmware. Put the VPN on a router. Preserve calling and remote control.</text>
+  <rect x="998" y="33" width="242" height="37" rx="18" fill="#fff" stroke="#b9cbe1"/>
+  <text x="1119" y="57" text-anchor="middle" font-size="14" font-weight="700" fill="#526a83">PROPOSED · NOT DEPLOYED</text>
+
+  <rect x="40" y="126" width="435" height="394" rx="22" fill="#fff" stroke="#c9daec"/>
+  <text x="62" y="158" class="zone">REMOTE LOCATION</text>
+  <rect x="60" y="181" width="168" height="158" rx="16" fill="#18314d"/>
+  <rect x="89" y="200" width="109" height="56" rx="6" fill="#c8e8ff"/>
+  <path d="M109 270h68m-68 14h68m-68 14h68" stroke="#6c8ca9" stroke-width="5" stroke-linecap="round"/>
+  <text x="144" y="323" text-anchor="middle" class="white" font-size="17" font-weight="700">Cisco 7945G</text>
+  <path d="M237 258H258" class="edge"/>
+  <rect x="268" y="215" width="186" height="88" rx="14" fill="#e8f7f1" stroke="#95cdb9"/>
+  <text x="361" y="247" text-anchor="middle" font-size="18" font-weight="700">PoE injector</text>
+  <text x="361" y="274" text-anchor="middle" class="body">or PoE switch</text>
+  <path d="M361 312V351" class="edge"/>
+  <rect x="60" y="361" width="394" height="98" rx="16" fill="#eaf2ff" stroke="#9abbeb"/>
+  <text x="81" y="397" class="label">Remote VPN router</text>
+  <text x="81" y="426" class="body">Local DHCP · Reserved phone address</text>
+  <text x="62" y="490" class="small">Ethernet phone; no VPN client install required</text>
+
+  <text x="602" y="229" text-anchor="middle" class="zone">INTERNET</text>
+  <path d="M533 288v-17a18 18 0 0 1 36 0v17" fill="none" stroke="#5e70b6" stroke-width="5"/>
+  <rect x="526" y="283" width="50" height="37" rx="8" fill="#5e70b6"/>
+  <circle cx="551" cy="300" r="4" fill="#fff"/>
+  <text x="590" y="299" class="body" font-weight="700">Encrypted</text>
+  <path d="M464 410H495" class="edge"/>
+  <rect x="506" y="361" width="194" height="98" rx="16" fill="url(#tunnel)"/>
+  <text x="603" y="394" text-anchor="middle" class="white" font-size="19" font-weight="700">Routed VPN</text>
+  <text x="603" y="420" text-anchor="middle" class="white" font-size="15">WireGuard or Tailscale</text>
+  <text x="603" y="442" text-anchor="middle" class="white" font-size="15">Two-way reachability</text>
+  <text x="603" y="490" text-anchor="middle" class="small">SIP + audio + management</text>
+
+  <rect x="729" y="126" width="511" height="394" rx="22" fill="#fff" stroke="#d4c9e8"/>
+  <path d="M709 410H738" class="edge"/>
+  <text x="751" y="158" class="zone">HOME NETWORK</text>
+  <rect x="748" y="361" width="199" height="98" rx="16" fill="#f0eafb" stroke="#bba5dc"/>
+  <text x="848" y="393" text-anchor="middle" font-size="19" font-weight="700">Home VPN router</text>
+  <text x="848" y="423" text-anchor="middle" class="body">Return route to phone</text>
+  <path d="M947 410H971M971 239V473" class="bus"/>
+  <path d="M971 239H992M971 356H992M971 473H992" class="bus"/>
+  <circle cx="971" cy="410" r="4.5" fill="#48749d"/>
+  <rect x="992" y="192" width="228" height="94" rx="14" fill="#e9f8f2" stroke="#abd8c6"/>
+  <text x="1011" y="225" class="label">Asterisk</text>
+  <text x="1011" y="253" class="body">Extensions · Calls · Radio</text>
+  <text x="1011" y="274" class="small">Audio remains through PBX</text>
+  <rect x="992" y="307" width="228" height="94" rx="14" fill="#eaf2ff" stroke="#b4cbee"/>
+  <text x="1011" y="340" class="label">Phone Gateway</text>
+  <text x="1011" y="368" class="body">Apps · CLI · Callbacks</text>
+  <text x="1011" y="389" class="small">Must reach the phone directly</text>
+  <rect x="992" y="423" width="228" height="78" rx="14" fill="#f1eafb" stroke="#d4c1ed"/>
+  <text x="1011" y="454" class="label">Home Assistant</text>
+  <text x="1011" y="482" class="body">Timers · Devices · Cameras</text>
+
+  <rect x="40" y="545" width="390" height="128" rx="17" fill="#fff" stroke="#c9daec"/>
+  <circle cx="70" cy="577" r="15" fill="#2566d8"/><text x="70" y="583" text-anchor="middle" class="white" font-size="17" font-weight="700">1</text>
+  <text x="97" y="583" font-size="19" font-weight="700">Stable private addressing</text>
+  <text x="61" y="614" class="body">Use a non-overlapping remote LAN.</text>
+  <text x="61" y="639" class="body">Update private inventory and DHCP/TFTP.</text>
+  <text x="61" y="660" class="small">Fresh profiles need a reachable TFTP service.</text>
+
+  <rect x="445" y="545" width="390" height="128" rx="17" fill="#fff" stroke="#c9daec"/>
+  <circle cx="475" cy="577" r="15" fill="#16876c"/><text x="475" y="583" text-anchor="middle" class="white" font-size="17" font-weight="700">2</text>
+  <text x="502" y="583" font-size="19" font-weight="700">Preserve the phone source IP</text>
+  <text x="466" y="614" class="body">No SNAT between phone and home services.</text>
+  <text x="466" y="639" class="body">Allow both directions through the tunnel.</text>
+  <text x="466" y="660" class="small">Required for source checks and remote control.</text>
+
+  <rect x="850" y="545" width="390" height="128" rx="17" fill="#fff" stroke="#c9daec"/>
+  <circle cx="880" cy="577" r="15" fill="#8055c6"/><text x="880" y="583" text-anchor="middle" class="white" font-size="17" font-weight="700">3</text>
+  <text x="907" y="583" font-size="19" font-weight="700">Keep telephony private</text>
+  <text x="871" y="614" class="body">No public SIP, TFTP or phone management.</text>
+  <text x="871" y="639" class="body">Allow only enrolled phones and services.</text>
+  <text x="871" y="660" class="small">Authenticate the VPN; restrict its inner routes.</text>
+
+  <rect x="40" y="699" width="1200" height="48" rx="13" fill="#fff4d8" stroke="#e9c775"/>
+  <text x="61" y="730" font-size="16" fill="#73500c"><tspan font-weight="700">Built-in Cisco SSL VPN:</tspan> compatibility with our installed SIP firmware is unproven; this design does not depend on it.</text>
+</svg>

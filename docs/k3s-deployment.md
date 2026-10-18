@@ -151,8 +151,11 @@ persist the rules through the existing mechanism. **Do not run
 `nft flush ruleset`**: it would remove k3s rules. The template allows LAN traffic,
 but other rules can still block it. NetworkPolicy support for hostNetwork
 depends on the CNI, so ordinary Pod NetworkPolicy is not considered protection
-here. Do not expose SIP/TFTP to WAN, ZeroTier/WireGuard peer networks or a home
-Cloudflare tunnel.
+here. Do not expose SIP/TFTP to WAN, a home Cloudflare tunnel, or arbitrary
+ZeroTier/WireGuard peers. The proposed [remote phone design](remote-phones-vpn.md)
+requires separately enrolled phone `/32` sources, explicit two-way routes and
+narrow rules inside the VPN. VPN membership alone grants no telephony access;
+this exception is not installed by the current deployment scripts.
 
 DHCP stays on the existing router. Within the phone scope, set Cisco option
 **150 = 192.168.50.10** (the TFTP IP), after confirming the selected address.

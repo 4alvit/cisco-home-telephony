@@ -101,6 +101,9 @@ The [second-line and wallpaper guide](docs/second-line-and-wallpaper.md) covers
 the independent 202 line and original generated background now installed on the
 pilot. Authenticated screenshots, remote keys and SSH diagnostics were verified;
 see [remote management](docs/phone-control.md) for legacy client compatibility.
+For use outside the home, see the [remote phone VPN investigation](docs/remote-phones-vpn.md):
+routed VPN routers are the proposed path; native VPN support is not verified for
+the installed SIP firmware.
 The [firmware archive guide](docs/firmware-archive.md) records a working preserved
 SR4-3 copy, byte-level checks, extraction steps and provenance limitations.
 
