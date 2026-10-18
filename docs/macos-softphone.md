@@ -75,6 +75,15 @@ uses older labels **Theme** and **Look and Feel** for the corresponding GUI
 pages. Compact voice calls retain a narrow dialer and controls. Chat/video
 functions can expand the window; use the ordinary audio call action.
 
+During this deployment's UI verification, shrinking Zoiper5 through native
+window automation reproduced blank content without a SIP call. Expanding it
+back to its prior normal dimensions restored the contacts and registration
+display without resetting the account. Compact mode controls the expanding
+chat/history panel, not a fixed native window size, as described in the
+[official manual](https://www.zoiper.com/pdf/User%20Guide%20Zoiper%205%20v.1.0.7.pdf).
+The underlying cause remains unconfirmed. If this occurs, restore the last
+working dimensions; no cache or account reset was needed in this case.
+
 The tested macOS installation writes its local configuration to
 `~/Library/Zoiper5/Config.xml`. Protect this file and backups as credentials;
 do not publish them. The [official configuration schema](https://github.com/ZoiPer/public-docs/blob/Desktop/configuration-data.md)
