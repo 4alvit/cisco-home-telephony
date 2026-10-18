@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800" viewBox="0 0 1280 800" role="img" aria-labelledby="title desc">
+  <title id="title">Cisco phone applications on a private home network</title>
+  <desc id="desc">Services opens an English menu on the Cisco phone. A dedicated source-restricted gateway listener serves XML, connects to Asterisk for calls and phone settings, and optionally to Home Assistant for schedules, devices and camera snapshots. Profile reload happens once; app content stays on the server.</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2="1"><stop stop-color="#f0f6ff"/><stop offset="1" stop-color="#f8f4ff"/></linearGradient>
+    <linearGradient id="phone" x2="0" y2="1"><stop stop-color="#253554"/><stop offset="1" stop-color="#111c30"/></linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 1 L9 5 L0 9" fill="none" stroke="#617697" stroke-width="1.7"/></marker>
+    <style>
+      text{font-family:Arial,Helvetica,sans-serif;fill:#172b4a}
+      .heading{font-size:32px;font-weight:700}.sub{font-size:17px;fill:#526781}
+      .card-title{font-size:23px;font-weight:700}.body{font-size:17px}.small{font-size:15px;fill:#526781}
+      .white{fill:#fff}.line{fill:none;stroke:#617697;stroke-width:2.7;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1280" height="800" rx="28" fill="url(#background)"/>
+  <text x="48" y="58" class="heading">Useful apps, directly on the phone</text>
+  <text x="48" y="90" class="sub">Cisco 7945G · English XML services · Local control · No cloud app store</text>
+
+  <rect x="48" y="132" width="324" height="490" rx="28" fill="url(#phone)"/>
+  <rect x="70" y="160" width="280" height="348" rx="10" fill="#eef5ff"/>
+  <path d="M80 160h260a10 10 0 0 1 10 10v44H70v-44a10 10 0 0 1 10-10z" fill="#2364d7"/>
+  <text x="88" y="192" class="white" font-size="21" font-weight="700">Home Phone Apps</text>
+  <rect x="80" y="226" width="260" height="34" rx="6" fill="#d6e6ff"/>
+  <text x="90" y="249" class="body">Phone Directory</text>
+  <text x="90" y="286" class="body">Internet Radio</text>
+  <text x="90" y="323" class="body">Timers &amp; Alarms</text>
+  <text x="90" y="360" class="body">Phone Settings</text>
+  <text x="90" y="397" class="body">Home Assistant</text>
+  <text x="90" y="434" class="body">Camera Snapshot</text>
+  <line x1="80" y1="453" x2="340" y2="453" stroke="#c6d5e9"/>
+  <text x="90" y="482" class="small">Select        Home        Exit</text>
+  <rect x="80" y="528" width="112" height="38" rx="19" fill="#d4e7ff"/>
+  <text x="101" y="553" font-size="17" font-weight="700">Services</text>
+  <circle cx="278" cy="548" r="25" fill="#526784"/>
+  <circle cx="278" cy="548" r="10" fill="#d4e7ff"/>
+  <text x="83" y="594" font-size="15" class="white">Two SIP lines remain available</text>
+
+  <path d="M382 306H443" class="line"/>
+  <text x="384" y="280" class="small">XML</text>
+  <path d="M452 338H390" class="line"/>
+  <text x="387" y="370" class="small">Input</text>
+
+  <rect x="454" y="182" width="342" height="366" rx="18" fill="#fff" stroke="#c4d6ee" stroke-width="2"/>
+  <rect x="454" y="182" width="342" height="12" rx="6" fill="#2465d8"/>
+  <text x="481" y="230" class="card-title">Phone gateway</text>
+  <text x="481" y="261" class="small">Existing k3s deployment</text>
+  <rect x="479" y="284" width="293" height="49" rx="10" fill="#edf4ff"/>
+  <text x="495" y="314" class="body">One listener per physical phone</text>
+  <text x="482" y="363" class="body">• Exact source-IP restriction</text>
+  <text x="482" y="397" class="body">• Private, separate app path</text>
+  <text x="482" y="431" class="body">• Review and confirm changes</text>
+  <text x="482" y="465" class="body">• Shared directory and radio list</text>
+  <text x="482" y="510" class="small">Credentials stay on the server</text>
+
+  <path d="M806 273H870" class="line"/>
+  <path d="M806 433H870" class="line"/>
+  <rect x="880" y="151" width="350" height="192" rx="18" fill="#fff" stroke="#c5e2da" stroke-width="2"/>
+  <rect x="880" y="151" width="350" height="12" rx="6" fill="#16896e"/>
+  <text x="905" y="202" class="card-title">Asterisk + phone control</text>
+  <text x="905" y="238" class="body">Calls and radio extensions</text>
+  <text x="905" y="269" class="body">DND and auto-answer settings</text>
+  <text x="905" y="307" class="small">Uses the selected source line</text>
+
+  <rect x="880" y="379" width="350" height="222" rx="18" fill="#fff" stroke="#d5c7ed" stroke-width="2"/>
+  <rect x="880" y="379" width="350" height="12" rx="6" fill="#8055c6"/>
+  <text x="905" y="431" class="card-title">Home Assistant</text>
+  <text x="905" y="466" class="body">Timers and weekly alarms</text>
+  <text x="905" y="497" class="body">Allowlisted device states / on / off</text>
+  <text x="905" y="528" class="body">Camera snapshots, 298 × 156</text>
+  <text x="905" y="568" class="small">Optional private backend connection</text>
+
+  <rect x="454" y="570" width="342" height="52" rx="12" fill="#e3edfb"/>
+  <text x="477" y="603" font-size="16" font-weight="700">No Internet-facing app endpoint</text>
+
+  <rect x="48" y="660" width="1182" height="98" rx="18" fill="#fff" stroke="#d8e2ef"/>
+  <circle cx="87" cy="701" r="19" fill="#2364d7"/><text x="81" y="707" class="white" font-size="18" font-weight="700">1</text>
+  <text x="121" y="695" font-size="18" font-weight="700">Prepare private config</text>
+  <text x="121" y="722" class="small">Preserve credentials and app paths</text>
+  <circle cx="484" cy="701" r="19" fill="#16896e"/><text x="478" y="707" class="white" font-size="18" font-weight="700">2</text>
+  <text x="517" y="695" font-size="18" font-weight="700">Reload phone profile</text>
+  <text x="517" y="722" class="small">Adds service URLs; no reflash</text>
+  <circle cx="871" cy="701" r="19" fill="#8055c6"/><text x="865" y="707" class="white" font-size="18" font-weight="700">3</text>
+  <text x="904" y="695" font-size="18" font-weight="700">Open Services</text>
+  <text x="904" y="722" class="small">Menu content stays on the gateway</text>
+</svg>

@@ -1,0 +1,16 @@
+{
+  "phones": [
+    {
+      "model": "CP-7945G",
+      "verified": false,
+      "mac": "REPLACE-WITH-VERIFIED-MAC",
+      "label": "201_202",
+      "lines": [{"extension": "201", "label": "201"}, {"extension": "202", "label": "202"}],
+      "transport": "tcp",
+      "firmware_load": "SIP45.9-4-2SR4-3S",
+      "authentication_url": "http://192.168.50.10:18080/auth/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "services_url": "http://192.168.50.10:18080/apps/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "directory_url": "http://192.168.50.10:18080/apps/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd/directory"
+    }
+  ]
+}

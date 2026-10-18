@@ -276,18 +276,18 @@ def phone_lines(phone):
     return [{"extension": phone["extension"], "label": phone["label"]}]
 
 
-def authentication_url(value):
-    """Limit the optional management callback to an explicit private IPv4 host."""
+def private_phone_url(value, setting="authentication_url"):
+    """Limit phone HTTP services to explicit private IPv4 hosts and plain paths."""
     if not isinstance(value, str) or len(value) > 255 or not value.isascii():
-        raise ValueError("authentication_url must be an ASCII private IPv4 HTTP(S) URL")
+        raise ValueError(f"{setting} must be an ASCII private IPv4 HTTP(S) URL")
     if any(ord(char) <= 32 or ord(char) == 127 for char in value):
-        raise ValueError("authentication_url cannot contain whitespace or control characters")
+        raise ValueError(f"{setting} cannot contain whitespace or control characters")
     try:
         parsed = urlsplit(value)
         address = ipaddress.IPv4Address(parsed.hostname)
         port = parsed.port
     except (ValueError, TypeError):
-        raise ValueError("authentication_url requires a private IPv4 literal and valid port") from None
+        raise ValueError(f"{setting} requires a private IPv4 literal and valid port") from None
     private = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
     if (parsed.scheme not in ("http", "https") or parsed.username is not None
             or parsed.password is not None or parsed.query or parsed.fragment
@@ -295,8 +295,13 @@ def authentication_url(value):
             or not any(address in ipaddress.IPv4Network(net) for net in private)
             or not re.fullmatch(r"/[A-Za-z0-9_/-]{1,255}", parsed.path)
             or "//" in parsed.path):
-        raise ValueError("authentication_url requires a private HTTP(S) host and plain absolute path without credentials/query/fragment")
+        raise ValueError(f"{setting} requires a private HTTP(S) host and plain absolute path without credentials/query/fragment")
     return value
+
+
+def authentication_url(value):
+    """Backward-compatible validator for the phone authentication callback."""
+    return private_phone_url(value)
 
 
 def phone_management_secrets(phones, out):
@@ -399,6 +404,9 @@ def validate(site, inventory, *, pbx_only=False):
             raise ValueError("background_image_access must be boolean")
         if "authentication_url" in phone:
             authentication_url(phone["authentication_url"])
+        for setting in ("services_url", "directory_url"):
+            if setting in phone:
+                private_phone_url(phone[setting], setting)
         for setting in ("ssh_enabled", "phone_personalization"):
             if setting in phone and type(phone[setting]) is not bool:
                 raise ValueError(f"{setting} must be boolean")
@@ -486,6 +494,25 @@ def phone_xml(phone, ip, ntp, passwords, management=None):
     sub(d,"encrConfig","false")
     if "authentication_url" in phone:
         sub(d,"authenticationURL",phone["authentication_url"])
+    for setting, tag in (("services_url", "servicesURL"), ("directory_url", "directoryURL")):
+        if setting in phone:
+            sub(d, tag, phone[setting])
+    if "services_url" in phone or "directory_url" in phone:
+        # Internal service entries are explicit, so the firmware need not infer
+        # an external URL from its default Service Provisioning policy.
+        services = sub(d, "phoneServices")
+        sub(services, "provisioning", 0)
+        entries = [("1", "Missed Calls", "Application:Cisco/MissedCalls"),
+                   ("1", "Received Calls", "Application:Cisco/ReceivedCalls"),
+                   ("1", "Placed Calls", "Application:Cisco/PlacedCalls")]
+        if "services_url" in phone:
+            entries.append(("0", "Home Apps", phone["services_url"]))
+        if "directory_url" in phone:
+            entries.append(("1", "Phone Directory", phone["directory_url"]))
+        for kind, name, url in entries:
+            service = ET.SubElement(services, "phoneService", {"type": kind, "category": "0"})
+            for tag, value in (("name", name), ("url", url), ("vendor", ""), ("version", "")):
+                sub(service, tag, value)
     if "phone_personalization" in phone:
         sub(d,"phonePersonalization",1 if phone["phone_personalization"] else 0)
     if phone.get("ssh_enabled",False):

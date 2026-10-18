@@ -1,0 +1,12 @@
+{
+  "url": "http://192.168.50.11:8123",
+  "token": "REPLACE_WITH_PRIVATE_HA_LONG_LIVED_ACCESS_TOKEN",
+  "entry_id": "REPLACE_WITH_HA_PHONE_CONTROL_ENTRY_ID",
+  "entities": [
+    {"id": "demo_temperature", "label": "Demo temperature", "entity_id": "sensor.demo_temperature", "control": false},
+    {"id": "demo_light", "label": "Demo light", "entity_id": "light.demo_light", "control": true}
+  ],
+  "cameras": [
+    {"id": "demo_camera", "label": "Demo camera", "entity_id": "camera.demo_camera"}
+  ]
+}

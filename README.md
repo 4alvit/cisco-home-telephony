@@ -65,6 +65,8 @@ conversion to MPP is not required.
   designs, account requirements and limitations.
 - [Persistent HA phone control](docs/phone-gateway.md): opt-in auto-answer,
   PBX DND, numeric dialing, text and photo delivery.
+- [Phone applications](docs/phone-applications.md): native English menus for
+  the directory, radio, timers, alarms, phone settings and selected HA devices.
 - [External SIP research](docs/extended-services-research.md), with disabled-by-default
   provider adapters and clear limits on free PSTN/Google Voice integration.
 - [Remote phone management](docs/phone-control.md): authenticated screenshots

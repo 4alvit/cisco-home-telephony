@@ -12,6 +12,7 @@ import re
 import secrets
 import softphones
 import service_catalog
+from configure_phone_apps import application_path
 
 from phone_control import load_config, write_new
 from render_gateway import gateway
@@ -40,7 +41,12 @@ def prepare(site, inventory, callbacks, ami, clients, api_port=18084):
                        'username': callback['username'], 'password': callback['password']}
         if 'room' in item:
             phone['room'] = softphones.room_name(item['room'])
+        path = application_path(item, phone, site['node_ipv4'])
+        if path is not None:
+            phone['apps_path'] = path
         phones.append(phone)
+    apps_enabled = any('apps_path' in phone for phone in phones)
+    require(not apps_enabled or all('apps_path' in phone for phone in phones), 'app_urls_required_for_all_phones', 400)
     clients_metadata = [{'extension': client['extension'], 'room': client.get('room')}
                         for client in softphones.validate(site, [line for phone in phones for line in phone['lines']])]
     local_numbers = ([line for phone in phones for line in phone['lines']]
@@ -57,6 +63,8 @@ def prepare(site, inventory, callbacks, ami, clients, api_port=18084):
               'ring_allowlist': ['640'] if '640' in numbers else [], 'services': services}
     if clients_metadata:
         result['softphones'] = clients_metadata
+    if apps_enabled:
+        result['applications'] = {'enabled': True}
     return gateway.validate(result)
 
 

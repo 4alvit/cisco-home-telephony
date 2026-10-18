@@ -10,6 +10,7 @@ import base64
 import hashlib
 import hmac
 import io
+import importlib.util
 import ipaddress
 import json
 import os
@@ -18,6 +19,7 @@ import re
 import secrets
 import socket
 import sqlite3
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +27,21 @@ from urllib import parse, request
 import xml.etree.ElementTree as ET
 
 MAX_BODY = 3 * 1024 * 1024
+
+
+def app_module(name):
+    """Load packaged siblings also when the gateway is imported by provisioners."""
+    module_name = '_cisco_gateway_' + name
+    if module_name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(module_name, Path(__file__).with_name(name + '.py'))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception:
+            sys.modules.pop(module_name, None)
+            raise
+    return sys.modules[module_name]
 
 
 class Refused(Exception):
@@ -120,6 +137,19 @@ def validate(config):
             'diagnostic', 'group', 'assistant', 'alert', 'radio', 'external', 'automation'},
             'bad_service_kind', 400)
         service_numbers.add(number)
+    applications = config.get('applications', {})
+    require(isinstance(applications, dict) and not set(applications) - {'enabled', 'home_assistant'}
+            and type(applications.get('enabled', False)) is bool, 'bad_applications', 400)
+    if 'home_assistant' in applications:
+        require(applications.get('enabled') is True, 'applications_disabled', 400)
+        app_module('phone_apps_ha').validate_config(applications['home_assistant'])
+    paths = set()
+    for phone in config['phones']:
+        path = phone.get('apps_path')
+        if applications.get('enabled') or path is not None:
+            require(isinstance(path, str) and re.fullmatch(r'/apps/[a-f0-9]{64}', path)
+                    and path not in paths, 'bad_apps_path', 400)
+            paths.add(path)
     return config
 
 
@@ -254,6 +284,13 @@ class Gateway:
         for phone in self.phones:
             self.db.execute('INSERT OR IGNORE INTO preferences VALUES (?, 0, 0)', (phone,))
         self.db.commit()
+
+        self.apps = None
+        if config.get('applications', {}).get('enabled'):
+            backend_config = config['applications'].get('home_assistant')
+            backend = (app_module('phone_apps_ha').HomeAssistantApps(backend_config)
+                       if backend_config else None)
+            self.apps = app_module('phone_apps').PhoneApps(self, backend)
 
     def preference(self, phone_id):
         row = self.db.execute('SELECT dnd,autoanswer FROM preferences WHERE phone=?', (phone_id,)).fetchone()
@@ -481,11 +518,12 @@ class Gateway:
             raise refused from None
 
     def resource(self, phone, data, content_type):
-        now = time.time()
-        self.resources = {key: value for key, value in self.resources.items() if value[0] > now}
-        require(len(self.resources) < 64, 'too_many_pending_messages', 429)
-        path = '/content/' + secrets.token_urlsafe(24)
-        self.resources[(phone['id'], path)] = (now + 120, data, content_type)
+        with self.lock:
+            now = time.time()
+            self.resources = {key: value for key, value in self.resources.items() if value[0] > now}
+            require(len(self.resources) < 64, 'too_many_pending_messages', 429)
+            path = '/content/' + secrets.token_urlsafe(24)
+            self.resources[(phone['id'], path)] = (now + 120, data, content_type)
         return f'http://{self.config["bind_ipv4"]}:{phone["port"]}{path}'
 
     def notify(self, phone, action, body):
@@ -747,6 +785,18 @@ class Handler(BaseHTTPRequestHandler):
                 allowed = (constant(values['UserID'], phone['username']) and constant(values['Password'], phone['password'])
                            and constant(values['devicename'], phone['device']))
                 return self.reply(200, b'AUTHORIZED' if allowed else b'UNAUTHORIZED', 'text/plain')
+            apps_path = phone.get('apps_path')
+            if gateway.apps and apps_path and (target.path == apps_path or target.path.startswith(apps_path + '/')):
+                require(self.command == 'GET' and len(self.path) <= 4096 and not self.body(0), 'bad_app_request', 400)
+                # HA schedule calls read gateway state in a separate request.
+                # Do not hold the gateway lock while invoking the application.
+                try:
+                    data, content_type = gateway.apps.handle(phone['id'], target.path[len(apps_path):] or '/', target.query)
+                except Exception as error:
+                    # Return a native error page, without disclosing exceptions,
+                    # HA response bodies, credentials or callback URLs.
+                    data, content_type = gateway.apps.error(getattr(error, 'reason', 'operation_failed'))
+                return self.reply(200, data, content_type)
             require(self.command == 'GET' and not target.query and not self.body(0), 'not_found', 404)
             # Separate resource lock would deadlock an Execute call awaiting its
             # phone callback; dict lookups are atomic and resources immutable.
