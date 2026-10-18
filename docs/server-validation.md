@@ -754,3 +754,83 @@ auto-answer off and no remaining channels on the tested phone. Original alarm
 time, weekdays and owner, and the original five-minute duration were restored
 through normal APIs. The last timer owner/ID, request history and alarm's
 configured flag remained as truthful history; no HA storage file was edited.
+
+### Complete service catalog and saved-alarm control
+
+The service update was built from commit
+`944c6adbd87420e5936012a2b6b8227c70c29e81`. Its
+[native AMD64 build and validation](https://github.com/4alvit/cisco-home-telephony/actions/runs/39080730730)
+passed, including 319 unit tests (two additional tests skipped) and the isolated
+Asterisk smoke checks. The downloaded image archive, imported image config and
+registry manifest were verified before both PBX and gateway deployments were
+updated. The temporary GitHub image artifact was deleted after import.
+
+The deployed catalog contains **21 local extension numbers and 19 service
+codes**. Zoiper's local contacts were reconciled with this catalog while
+preserving its account configuration and unrelated contacts. The directory
+includes the radio stations, three children's stations, Assist, diagnostic
+services, the incoming-call group and saved-alarm control. The Mac's existing
+registration recovered after its exact source address was reconciled across
+the PBX ACL and the persistent and runtime firewall rules. No subnet-wide
+exception was added.
+
+All five connected Cisco handsets retrieved the updated `dialplan.xml` after
+guarded individual restarts. Both lines on each handset returned with available
+SIP contacts at their verified addresses. The complete 22-file TFTP set still
+matched its frozen hashes; the remaining configured handsets were unplugged
+and were not power-cycled.
+The exact temporary TFTP Job, pods, UDP 69 listener, source rules and cleanup
+timers were then removed or stopped. Verification preserved the latest Mac
+source correction and all unrelated firewall rules.
+
+Cisco Phone Control **0.4.0** was installed from a checked component snapshot.
+Its existing registry identities, dashboard, selections and schedules were
+preserved. Readback verified all 19 service labels in each of the ten phone
+dial-number selectors. API checks confirmed that an unconfigured alarm remains unconfigured,
+including request replay, and that a saved alarm can be toggled from its
+sibling line without changing the owner, time or weekdays. A configured-alarm
+test restored the prior disabled state. These API checks are separate from
+the dialled 641 voice check.
+
+A subsequent **641** call from an authenticated secondary Cisco line passed.
+The PBX selected the expected pre-generated Baya “not configured” prompt by
+verified WAV hash and transmitted **214 RTP frames**. HA completed the matching
+call-derived request with `not_configured`; every real timer and alarm setting,
+DND preference and auto-answer preference remained unchanged. The call ended
+and its exact channel was absent. This verifies prompt selection and delivery
+from Asterisk, without claiming a separate human listening confirmation.
+
+The live **`cisco 212 intercom 220`** acceptance passed: both requested line
+identities reached `Up` in the same bridge after speakerphone commands. Replaying
+the same operation key returned the original result without creating another
+call. The exact owned call was then ended, with no channels left and every
+phone's DND and persistent auto-answer preferences preserved. This is a verified
+connection/control result, not a new human voice-quality test.
+
+A bounded **621** call then observed all **five currently online eligible
+recipients**, including the Mac. Its actual Dial list matched the configured
+membership after DND filtering; neither line of the excluded physical handset
+was requested or observed. No answer was requested or observed during the
+4.2-second check. Cleanup left zero owned channels and preserved DND and
+auto-answer preferences. This confirms the local group behavior; it is not an
+incoming PSTN acceptance call.
+
+Three external accounts registered after deployment. SIP2SIP and Linphone
+have the fixed test routes **802** and **803**; Callcentric's outbound route
+remains withheld because its account review still blocks calling. No PSTN DID
+was verified in these three SIP accounts. A separate Google Voice account has
+an assigned US number, recorded only in the ignored private number book; it
+is not connected to Asterisk. Provider incoming routes remain disabled.
+The configured **621** group is therefore a local ring group ready for a
+separately verified incoming provider route, not evidence of PSTN reachability.
+
+Bounded synthetic calls then verified both external routes, without calling a
+household handset or recording speech. **802** answered and exchanged RTP;
+between two samples its transmitted/received counters rose from **260/214** to
+**510/416**, but the local reported-loss count rose from **44 to 91**. That
+result establishes connectivity, with an unresolved media-quality limitation.
+**803** answered and exchanged RTP through Linphone, with counters rising from
+**252/222** to **503/429** and reported loss remaining **zero**. Both tests ended
+only their own channels and verified none remained. These counters do not
+verify intelligibility, the external service's DTMF menu or language-teaching
+capability. No packet capture was taken to locate the 802 loss.

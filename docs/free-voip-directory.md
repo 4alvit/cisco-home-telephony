@@ -9,14 +9,16 @@ assigned numbers and room assignments belong in private configuration.
 ## Short codes and useful public destinations
 
 - **802 — SIP2SIP echo:** `4444@sip2sip.info`. This is the provider's documented
-  microphone test. Speak briefly and listen for your own voice. A previous
+  microphone test. Speak briefly and listen for your own voice. The latest
   synthetic call answered and exchanged RTP in both directions, but its
   receive-loss estimate increased; that pilot did not establish clean audio.
 - **803 — The Test Call through Linphone:** `thetestcall@sip.linphone.org`.
   This independent operator publishes an interactive phone-test menu. It is
-  a verified published peer, not a Linphone-operated echo service. Configure
-  the Linphone profile's fixed `target` as `thetestcall`; provisioning alone
-  does not establish reachability or acceptable audio.
+  a verified published peer, not a Linphone-operated echo service. The deployed
+  Linphone profile's fixed `target` is `thetestcall`. A bounded synthetic call
+  answered, exchanged RTP in both directions with zero sampled receive loss,
+  and cleaned up completely. Human listening, menu operation and DTMF checks
+  remain pending. See the [measured pilot results](external-sip.md#latest-deployed-route-pilots).
 - **801 — Callcentric test, currently withheld:** `17771234567` is the fixed
   test destination for an eligible Callcentric account. The reviewed account
   still has an outbound risk-review block, so leave its `target` as `null` and
@@ -95,19 +97,31 @@ country.
 
 **No assigned PSTN DID or DID country has been verified for these three
 integrations.** This is an account-audit result, not a claim about every old
-account the operator might hold. In particular, a pre-existing Google Voice or
-sipgate number would need its own account review. Public test-service numbers
-and shared SIP Broker access numbers belong to their operators, not to this
-installation.
+account the operator might hold. A separate private account review verified
+an existing US Google Voice number; it is not an Asterisk SIP trunk. Any old
+sipgate account still requires its own review. Public test-service numbers and
+shared SIP Broker access numbers belong to their operators, not to this
+installation. Account identities and the assigned Google Voice number remain
+in the ignored private records.
 
 Incoming SIP calls can be possible without a DID, but accepting them still
 requires a reviewed provider-identification policy and an explicit local route.
 Registration does not automatically enable incoming calls to the house. The
-current incoming configuration remains disabled. Any future ring group should
-be generated from the private inventory, with exclusions applied to the whole
-physical telephone so its second line does not defeat the exclusion. Do not
-publish the real group membership or room labels. Follow the implementation and
-source-policy limits in [Incoming-call isolation](external-sip.md#incoming-call-isolation).
+provider incoming configuration remains disabled. The implemented optional
+**621 — Incoming calls group** is deployed. A bounded local call verified all
+five currently online eligible recipients and excluded the omitted handset;
+the call ended with no owned channels left.
+It rings only the explicit private list of Cisco primary
+lines and declared softphones, respects gateway DND, and rejects secondary
+Cisco lines as group members. Excluding the physical handset's primary line
+therefore excludes that handset completely from this group.
+
+Creating 621 does not open an incoming provider path. The supported Callcentric
+inbound profile may separately select `inbound.target: "621"` after its account,
+source ranges and incoming delivery are approved and tested. SIP2SIP and Linphone
+inbound remain unsupported. Do not publish the real membership or room labels.
+See [621 configuration](phone-services.md#configure-621-without-opening-provider-inbound)
+and [Incoming-call isolation](external-sip.md#incoming-call-isolation).
 
 ## Actual language-learning services
 

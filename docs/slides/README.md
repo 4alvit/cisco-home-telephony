@@ -45,24 +45,31 @@ and native Assist acceptance remains a separate result. Native Assist on primary
 218 is still pending because that handset was unplugged before onboarding.
 Each phone needs its first 630 call, Allow calls and its Russian Baya pipeline.
 
-The dedicated Mac 209 account uses
-TCP/IPv4. Telephone registered but stalled in macOS Contacts authorization when
-dialing. Contacts access was not granted. The verified Linphone 6.2.3 app replaces
-it and registered through documented local XML provisioning. A bounded 20-second
-209-to-600 call reached Up/Echo with PCMU, increasing RTP in both directions
-and zero reported loss in the sampled counters. Cleanup left zero channels.
-The user confirmed hearing the Mac echo. Official Deti FM channels 708–710
+The dedicated Mac 209 account uses TCP/IPv4. **Zoiper5 is the current compact
+client**, replacing the earlier Telephone and Linphone trials. Its registration
+and an echo call to 600 passed, with the user confirming audible echo. Earlier
+Linphone tests also reached Up/Echo with PCMU and increasing RTP in both
+directions; those historical results do not describe the current app's interface.
+Official Deti FM channels 708–710
 are deployed and produced PCM through the installed worker. A listener confirmed
 music on 708; this is not an audible-playback result for every station. To dial
 these new numbers without refreshing a Cisco profile, leave the handset down
 and speaker/headset off, enter all digits, then press Dial rather than a line key.
 Account activation does not establish SIP registration or working external audio.
-All three configured providers reached `Registered`. The fixed SIP2SIP echo call
-answered and exchanged RTP in both directions, but reported receive loss;
-satisfactory media quality and human listening are not established.
-Callcentric remains blocked for outbound calls
-pending provider review, and Linphone has no verified call peer. Those two
-profiles are registration-only.
+All three configured providers reached `Registered`. The latest bounded SIP2SIP
+802 echo call answered and exchanged RTP in both directions: transmitted packets
+increased from 260 to 510 and received packets from 214 to 416, while the local
+receive-loss counter increased from 44 to 91.
+
+The deployed Linphone 803 route uses the independently published **The Test
+Call** peer. Its bounded live pilot also answered: transmitted packets increased
+from 252 to 503 and received packets from 222 to 429, with locally reported
+receive loss staying at zero in both samples. Both tests ended with zero active
+channels after exact cleanup. These observations verify answered calls and
+packet exchange. They do not establish voice quality, an overall loss percentage
+or working menu interaction. **Human listening and DTMF menu tests remain
+pending.** Callcentric remains blocked for outbound calls pending provider
+review, with 801 withheld.
 Successful container/runtime checks do not replace human-audible phone tests.
 See the [dated validation record](../server-validation.md) for detailed results.
 

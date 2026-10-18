@@ -94,7 +94,8 @@ For example, one entry is:
 Kinds are `diagnostic`, `group`, `assistant`, `alert`, `radio`, `external` and
 `automation`. Numbers are unique within the generated number map;
 service numbers cannot collide with either line of a phone or a software
-client. A label may be shared by different services; the number is the identity.
+client. Alarm shortcut 641 applies only to a configured physical Cisco handset;
+listing it in a softphone address book does not assign that softphone an alarm. A label may be shared by different services; the number is the identity.
 Service labels are 1–80 printable ASCII characters, starting with a letter or
 digit and without leading or trailing spaces.
 

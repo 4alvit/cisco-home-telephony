@@ -10,9 +10,13 @@ counter increased, so this establishes connectivity, **not clean audio quality**
 see the pilot evidence below. A Callcentric IP Freedom account
 was created at $0, but its provider risk review currently blocks outbound calls
 and account changes. No support ticket was automatically opened and no support
-message has been sent. Linphone email activation is complete; no verified fixed
-test peer has been selected. Both are deployed for registration only, without
-801/803 call routes; these numbers reach the existing reject fallback. A relaunched FWD account was created,
+message has been sent. Linphone email activation is complete. The latest
+deployment selects the independent **The Test Call** peer for Linphone and
+includes **803**, together with the optional **621** incoming group. The latest
+synthetic 803 call answered, exchanged RTP in both directions with zero reported
+receive loss, and cleaned up completely. Menu/DTMF and human listening checks
+remain pending. Callcentric's target
+remains null, so **801 remains withheld**. A relaunched FWD account was created,
 but calling requires identity verification whose next step presented a
 **Verification Fee** checkout; no payment or identity document was supplied, and
 no FWD profile is enabled. Account identifiers and credentials remain private.
@@ -26,7 +30,25 @@ without an authentication or configuration change. Do not treat a transient
 registration state alone as evidence of a wrong password, and do not change
 credentials or broaden firewall rules without diagnostics.
 
-## Observed SIP2SIP pilot and quality limit
+## Latest deployed-route pilots
+
+Two bounded synthetic calls exercised the final deployed configuration using
+Asterisk's `Milliwatt` audio source. Neither called a household handset or
+recorded anyone's voice:
+
+- **802 / SIP2SIP:** answered; transmitted packets increased **260 → 510** and
+  received packets **214 → 416**. The local receive-loss estimate rose
+  **44 → 91**, so the media-quality concern remains open.
+- **803 / The Test Call through Linphone:** answered; transmitted packets
+  increased **252 → 503** and received packets **222 → 429**. The sampled local
+  receive-loss estimate stayed at **zero**.
+
+Each pilot ended with **zero owned channels and zero total channels**. These
+measurements confirm answer, bidirectional RTP and cleanup. No person listened,
+and the pilots did not navigate the remote menu or verify DTMF responses.
+Zero sampled loss is not a guarantee of future call quality.
+
+## Earlier SIP2SIP pilot and quality limit
 
 The synthetic 802 call to the provider's documented `4444@sip2sip.info` echo
 service ran on **2026-10-17, 20:49:48–20:50:02 UTC**. Both samples reported the
@@ -78,7 +100,8 @@ existing network restrictions while identifying any loss source.
   [Account settings](https://sip2sip.info/settings/) and
   [test addresses](https://sip2sip.info/help/).
 - **803 — Linphone:** calls one explicitly configured SIP peer name at
-  `sip.linphone.org`. There is no invented echo-test number. A free individual
+  `sip.linphone.org`. The deployed profile selects `thetestcall`, labelled
+  **The Test Call (English menu)** in the service catalog. A free individual
   account and a real peer are required; registration may require email/phone
   verification. Third-party SIP devices are supported by the service.
   [Official FAQ](https://www.linphone.org/en/faq/).
@@ -87,9 +110,11 @@ No Linphone-operated echo service was verified. The independent
 [The Test Call operator's page](https://thetestcall.blogspot.com/), updated
 2026-07-20, publishes `sip:thetestcall@sip.linphone.org`, lists PCMU/PCMA/G.722,
 and provides real-time echo on menu option 3. This is a possible explicitly
-reviewed peer, not an official Linphone test service. It has not been called or
-configured here; its current reachability and audio quality remain unverified.
-The deployed Linphone target remains null and route 803 remains absent.
+reviewed peer, not an official Linphone test service. Its route is deployed,
+with the account identity kept in private configuration. The latest synthetic
+pilot confirmed reachability and bidirectional RTP with zero sampled receive
+loss. Menu behavior, DTMF and subjective audio quality remain unverified. See the
+[published menu and test boundaries](free-voip-directory.md#using-the-803-menu).
 
 Only enabled profiles with a non-null target add their number to Asterisk and
 the Cisco exact-match `dialplan.xml`. Each call route has one fixed destination. Callcentric destinations
@@ -209,12 +234,34 @@ published ranges before deployment. Do not widen the Cisco phone ACL or use
 `0.0.0.0/0` to make incoming calls work.
 
 An enabled inbound profile accepts the exact account identifier as the called
-extension and rings **one** explicitly chosen, inventoried local 200–299 line.
-Every other destination is rejected. Its separate context cannot include or jump
-to `home`, so it cannot access another provider, Assist, radio or arbitrary local
-extensions. PBX-only generation cannot enable inbound calls without an inventory.
-When the local phone gateway is enabled, its PBX DND setting is respected. This
-does not synchronize native Cisco DND.
+extension. Its private `external_sip.accounts[].inbound.target` may select
+**one inventoried local 200–299 line**, or **621** when the reviewed incoming
+group is enabled. This is separate from the account's outbound `target` field.
+Every other called destination is rejected. The provider context does not
+include `home`: its only permitted cross-context jump is the literal
+`Goto(home,621,1)` for that selected group. It cannot choose another provider,
+Assist, radio or an arbitrary local extension. PBX-only generation cannot enable
+inbound calls without a verified inventory.
+
+The [621 group configuration](phone-services.md#configure-621-without-opening-provider-inbound)
+requires an explicit list of Cisco primary lines and optional declared
+softphones. Secondary Cisco lines, duplicate recipients and unknown numbers are
+rejected. Omitting a physical handset's primary line excludes that handset from
+the group; its second line does not create another recipient. Group calls ring
+for up to 25 seconds, respect gateway DND and ignore SIP redirects. They do not
+enable speakerphone auto-answer. A direct inbound line also respects gateway
+DND when the gateway is enabled. This does not synchronize native Cisco DND.
+
+Enabling 621 creates a local group, not a provider inbound route. The deployed
+configuration includes that local group, while all provider inbound switches remain
+disabled. Real incoming delivery still needs explicit provider activation,
+source-policy verification and a separate acceptance call. Keep the actual
+membership and room labels in private configuration.
+
+A bounded local 621 acceptance call reached all five currently online eligible
+recipients without targeting either line of the excluded handset. Exact-call
+cleanup left zero owned channels and preserved DND/auto-answer settings. This
+tests the local group, not an incoming provider or PSTN path.
 
 SIP2SIP and Linphone incoming profiles remain blocked until an appropriate
 provider-authentication/source policy has been reviewed. Their absence of fixed
@@ -241,6 +288,19 @@ for an actual incoming pilot are a separate, explicit network operation.
    call duration at 120 seconds and ignore SIP forwarding requests.
 6. If incoming is enabled, test its exact target and prove other extension numbers
    are rejected. Keep private receipts, excluding credentials.
+
+For Cisco firmware checks, correlate **App Load ID**, the current **LLDP firmware
+advertisement**, and a fresh **PJSIP contact at the verified handset address**.
+The web page's separate **Version** field can retain an older SCCP label after a
+successful SIP conversion. Verify the physical MAC and these independent
+indicators before deciding that another firmware conversion is needed.
+
+A missing LLDP row alone does not prove that a phone is unplugged. Before a
+remote PoE operation, repeat the switch forwarding-table, link and power checks
+and verify the handset's MAC directly through its web status page. An LLDP
+omission may be tolerated only when the same single handset MAC is learned on
+the expected powered port in repeated snapshots and its model and SIP load
+match; a conflicting neighbor or ambiguous port must stop the operation.
 
 To disable, turn off `external_sip.enabled`, regenerate and deploy. The external
 transport, registrations and routes disappear from generated configuration. If
