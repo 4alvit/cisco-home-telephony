@@ -884,3 +884,25 @@ retained as a backup.
 The phone screenshots, camera frames, real inventory, HA configuration and
 deployment evidence remain in ignored local storage. Public diagrams and
 examples contain no household labels, addresses or camera pictures.
+
+## Stable DHCP reservations — 2026-10-18
+
+All ten physical phones have unique OpenWrt/dnsmasq reservations and permanent
+local DNS names in a dedicated address block outside the dynamic pool. The
+block remains within the existing LAN prefix. Both extensions on a phone share
+its address. Existing phone-specific TFTP tags were retained.
+
+The private inventory, Asterisk source ACLs and transport local networks,
+gateway address mapping, and running/persistent host firewall rules were updated
+together. All ten forward/reverse DNS pairs were verified. Two handsets were
+connected during this migration: both acquired their new DHCP addresses,
+registered both SIP lines, exposed the expected application URLs and returned
+authenticated screenshots. Home Assistant reported both devices as Idle. The
+Mac softphone stayed registered at its existing address. No new audible call
+test was performed during this address migration.
+
+Eight handsets were unplugged; their reservations and matching server settings
+are ready for their next connection. Both PoE cycles preserved every switch-port
+configuration. The temporary TFTP window was closed after verification. The
+real address/room/MAC table and rollback evidence remain in ignored local
+storage; the public [address runbook](static-phone-addresses.md) uses examples.

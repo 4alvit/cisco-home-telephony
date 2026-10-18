@@ -131,6 +131,11 @@ phone's actual clock. This project does not install an NTP server.
 
 ## 3. Admit exact phone addresses and scope DHCP option 150
 
+For permanent addressing, use the site's reserved phone block outside its
+dynamic pool. The [OpenWrt/dnsmasq address runbook](static-phone-addresses.md)
+covers coordinated DHCP, DNS, Asterisk and gateway changes when a provisional
+address needs to move.
+
 Reserve each new phone's current verified address when safe, after checking
 leases and static configuration for duplicate MACs or IPs. For an illustrative
 PBX at `192.168.50.10`, the complete endpoint allowlist might be:

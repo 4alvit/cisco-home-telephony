@@ -164,6 +164,11 @@ For dnsmasq this is usually `dhcp-option=tag:phones,150,192.168.50.10`, but the
 not blindly paste this line into global configuration. For one test phone you
 can set Alternate TFTP manually. Do not run a second DHCP server on the LAN.
 
+Reserve a stable address for each physical phone outside the dynamic pool.
+Follow the [OpenWrt/dnsmasq address runbook](static-phone-addresses.md) when
+assigning or moving addresses: the gateway callback source, Asterisk ACLs and
+persistent host firewall must agree with DHCP.
+
 ## 5. Deliver firmware to the selected node
 
 Only the firmware directory is created on the node; it contains no password
