@@ -18,7 +18,8 @@ and [enhanced phone services, including supported SIP phones and signed MIDlets]
 
 ## Use the menu
 
-Press **Services**, choose **Home Apps**, then select an entry. **Home** returns
+Press **Services**. On the tested SIP firmware this opens **Home Phone Apps**
+directly; if a service list appears, choose **Home Apps**. **Home** returns
 to the main menu and **Exit** closes it. The main menu shows the selected source
 line; **Select line** switches between the two numbers on this physical phone.
 The default is the first line. Selecting a different line cannot control a

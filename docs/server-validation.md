@@ -834,3 +834,53 @@ result establishes connectivity, with an unresolved media-quality limitation.
 only their own channels and verified none remained. These counters do not
 verify intelligibility, the external service's DTMF menu or language-teaching
 capability. No packet capture was taken to locate the 802 loss.
+
+### Native phone applications
+
+The XML applications implementation was checked with **375 unit tests passing
+and two skipped** (377 total). The [GitHub validation, image builds and isolated
+smoke tests](https://github.com/4alvit/cisco-home-telephony/actions/runs/39087703904)
+passed for `12c04ef7e6fa3501161906e0ed0b066a178f1674`.
+Its gateway deployment uses a private immutable image built from the previously
+verified runtime, replacing only the gateway and two app
+modules. The running files' hashes were checked against the reviewed source.
+The Asterisk runtime and dialplan did not require a restart for this change.
+
+On an actual Cisco 7945G, **Services** opened Home Phone Apps directly after
+the updated SEP profile was fetched. **Directories** retained the three native
+call-history lists and added Phone Directory. Both pages of the 40-number
+catalog rendered on the handset. These are XML services; no signed Java MIDlet
+was installed in the separate Applications list.
+
+Handset acceptance covered the following operations:
+
+- Starting a five-minute timer on a selected secondary line through the native
+  form and confirmation menu, then canceling it before expiry. HA readback
+  confirmed the exact owner line and the inactive final state.
+- Calling the echo service from that secondary line through a confirmation
+  menu. Asterisk showed the requested PJSIP identity connected to extension
+  600; the exact test channel was then ended. This was a call-control check,
+  not an additional human audio-quality confirmation.
+- Turning Do Not Disturb and persistent auto-answer on and off, with gateway
+  readback. Both original preferences were restored and no test calls remained.
+- Rendering the weekly alarm form and checking Enable saved alarm when no
+  alarm exists. The phone displayed “No alarm has been configured. Nothing was
+  changed.” The complete saved alarm state remained unchanged.
+- Rendering four allowlisted HA entities and confirming an explicit off
+  command for an already-off light. The gateway verified its resulting state;
+  this did not test a physical light transition.
+- Displaying an allowlisted camera snapshot on the color screen. All three
+  selected camera endpoints also passed bounded retrieval and conversion checks.
+
+Three connected handsets fetched their matching profiles, exposed the expected
+service URLs and returned to SIP registration. Seven other handsets were offline
+at the end of the rollout; their generated profiles are ready, but require a new
+bounded TFTP window when they are connected. The temporary TFTP Job, pods,
+listener, owned firewall exceptions and cleanup timer were removed. Unrelated
+firewall policy and every switch-port configuration were preserved. The verified
+candidate became the canonical private configuration, with the previous version
+retained as a backup.
+
+The phone screenshots, camera frames, real inventory, HA configuration and
+deployment evidence remain in ignored local storage. Public diagrams and
+examples contain no household labels, addresses or camera pictures.
