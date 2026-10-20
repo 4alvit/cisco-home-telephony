@@ -23,6 +23,9 @@
 - [directory-data-flow.svg](directory-data-flow.svg): architecture only, from
   private inventory through validated server configuration and the authenticated
   gateway API to the CLI. It contains no directory entries, names or numbers.
+- [native-app-feasibility.svg](native-app-feasibility.svg): existing screen APIs,
+  the proposed local voice path, native-code gates and video limitations.
+  This is an assessment, not a deployed-feature diagram.
 
 Each file is a standalone SVG containing editable text and vector objects.
 There are no MAC addresses, passwords or delivery details. Diagram sources and

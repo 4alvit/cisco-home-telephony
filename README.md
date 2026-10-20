@@ -35,6 +35,9 @@ conversion to MPP is not required.
   cover spoken confirmations, missing-alarm behavior and private recipient selection.
 - **Use free external SIP services:** the [provider and practice directory](docs/free-voip-directory.md)
   lists published test menus, account restrictions and the difference between a SIP identity and an incoming telephone number.
+- **Evaluate a voice assistant or video:** the [7945G software feasibility study](docs/native-app-feasibility.md)
+  compares stock XML/RTP, signed Java applications and firmware work, with
+  effort estimates and explicit limits on native video.
 
 ![CLI setup and first-use flow](docs/diagrams/cli-setup-flow.svg)
 

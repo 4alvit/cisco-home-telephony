@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1100" viewBox="0 0 1440 1100" role="img" aria-labelledby="title desc">
+  <title id="title">Cisco 7945G software feasibility</title>
+  <desc id="desc">Existing XML applications, a proposed stock RTP bridge to a local voice service, video limits and estimated development stages. No live deployment is claimed.</desc>
+  <defs>
+    <linearGradient id="header" x1="0" x2="1"><stop stop-color="#172554"/><stop offset="1" stop-color="#0e7490"/></linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#2563eb"/></marker>
+    <style>
+      text{font-family:Arial,Helvetica,sans-serif;fill:#172554}
+      .h{font-size:27px;font-weight:700}.t{font-size:20px}.s{font-size:17px}.label{font-size:15px;font-weight:700;letter-spacing:1px}
+      .white{fill:#fff}.muted{fill:#475569}.line{stroke:#2563eb;stroke-width:3;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1440" height="1100" fill="#f1f5f9"/>
+  <rect width="1440" height="124" fill="url(#header)"/>
+  <text x="44" y="53" class="white" font-size="36" font-weight="700">Cisco 7945G: voice, applications and video</text>
+  <text x="46" y="91" class="white t">Feasibility assessment · 19 October 2026 · Stock phone + local voice service</text>
+
+  <rect x="40" y="150" width="438" height="164" rx="16" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <text x="62" y="182" class="label" style="fill:#047857">EXISTING FOUNDATION</text>
+  <text x="62" y="217" class="h">XML screen applications</text>
+  <text x="62" y="251" class="t">Menus · timers · directory · HA controls</text>
+  <text x="62" y="283" class="s muted">Authenticated gateway and camera stills</text>
+
+  <rect x="501" y="150" width="438" height="164" rx="16" fill="#eff6ff" stroke="#93c5fd"/>
+  <text x="523" y="182" class="label" style="fill:#1d4ed8">DOCUMENTED · PILOT REQUIRED</text>
+  <text x="523" y="217" class="h">Stock RTP audio APIs</text>
+  <text x="523" y="251" class="t">Speakerphone capture and playback</text>
+  <text x="523" y="283" class="s muted">Verify mute, visible state and call priority</text>
+
+  <rect x="962" y="150" width="438" height="164" rx="16" fill="#fffbeb" stroke="#fcd34d"/>
+  <text x="984" y="182" class="label" style="fill:#a16207">SEPARATE RESEARCH TRACK</text>
+  <text x="984" y="217" class="h">Native code / MIDlets</text>
+  <text x="984" y="251" class="t">MIPS / CNU · Cisco signing barriers</text>
+  <text x="984" y="283" class="s muted">Decompilation does not establish deployment</text>
+
+  <rect x="40" y="342" width="1360" height="302" rx="18" fill="#fff" stroke="#cbd5e1"/>
+  <text x="65" y="382" class="h">Proposed voice path — wake detection runs on the local server</text>
+  <rect x="66" y="412" width="315" height="155" rx="12" fill="#dbeafe"/>
+  <text x="87" y="449" class="h">Cisco 7945G</text>
+  <text x="87" y="482" class="t">Visible listening + physical mute</text>
+  <text x="87" y="511" class="t">G.711 microphone / speaker</text>
+  <text x="87" y="540" class="s muted">Ordinary calls preempt media</text>
+
+  <path d="M384 479H446" class="line"/>
+  <text x="396" y="461" class="s" style="fill:#1d4ed8">RTP</text>
+  <rect x="461" y="412" width="434" height="155" rx="12" fill="#e0e7ff"/>
+  <text x="482" y="449" class="h">Local voice adapter</text>
+  <text x="482" y="482" class="t">Decode → frontend → wake detector</text>
+  <text x="482" y="511" class="t">Context · cancel · multi-phone arbitration</text>
+  <text x="482" y="540" class="s muted">No recording by default · bounded sessions</text>
+
+  <path d="M899 479H961" class="line"/>
+  <rect x="977" y="412" width="395" height="155" rx="12" fill="#cffafe"/>
+  <text x="998" y="449" class="h">Home Assistant / voice</text>
+  <text x="998" y="482" class="t">STT → conversation → Baya TTS</text>
+  <text x="998" y="511" class="t">Replace cloud STT for full offline use</text>
+  <text x="998" y="540" class="s muted">Saved pipeline audit; runtime not retested</text>
+  <path d="M1169 577V602H220V577" class="line"/>
+  <rect x="570" y="587" width="368" height="30" rx="8" fill="#fff"/>
+  <text x="581" y="609" class="s" style="fill:#1d4ed8">Speech response + XML status updates</text>
+
+  <rect x="40" y="672" width="663" height="164" rx="16" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <text x="63" y="704" class="label" style="fill:#047857">PRACTICAL DISPLAY PATH</text>
+  <text x="63" y="741" class="h">Status, avatar and refreshed camera stills</text>
+  <text x="63" y="775" class="t">298 × 156 XML image pane · Stop / expiry / timestamp</text>
+  <text x="63" y="807" class="s muted">Try 2–5 s refresh in a pilot; this is not a measured frame rate.</text>
+
+  <rect x="726" y="672" width="674" height="164" rx="16" fill="#fff1f2" stroke="#fda4af"/>
+  <text x="749" y="704" class="label" style="fill:#be123c">NO STOCK NATIVE VIDEO PATH</text>
+  <text x="749" y="741" class="h">SIP / H.264 video on the handset screen</text>
+  <text x="749" y="775" class="t">Video Advantage used a PC. Asterisk adds no decoder.</text>
+  <text x="749" y="807" class="s muted">Use a true video endpoint, or a separate video-to-stills bridge.</text>
+
+  <text x="43" y="891" class="h">Effort gates — one experienced engineer, existing infrastructure</text>
+  <rect x="40" y="916" width="318" height="115" rx="14" fill="#1d4ed8"/>
+  <text x="62" y="953" class="white h">2–4 days</text>
+  <text x="62" y="983" class="white t">Prove stock RTP behavior</text>
+  <text x="62" y="1010" class="white s">Go / no-go on one real phone</text>
+  <rect x="379" y="916" width="318" height="115" rx="14" fill="#4338ca"/>
+  <text x="401" y="953" class="white h">+ 3–6 weeks</text>
+  <text x="401" y="983" class="white t">Prototype + reliable rollout</text>
+  <text x="401" y="1010" class="white s">Acoustic / offline work may add time</text>
+  <rect x="719" y="916" width="318" height="115" rx="14" fill="#92400e"/>
+  <text x="741" y="953" class="white h">1–2 weeks</text>
+  <text x="741" y="983" class="white t">Native execution investigation</text>
+  <text x="741" y="1010" class="white s">Deployment route remains unproven</text>
+  <rect x="1058" y="916" width="342" height="115" rx="14" fill="#9f1239"/>
+  <text x="1080" y="953" class="white h">6–12+ engineer-months</text>
+  <text x="1080" y="983" class="white t">Major firmware / video rewrite</text>
+  <text x="1080" y="1010" class="white s">Conditional research; success uncertain</text>
+  <text x="43" y="1070" class="s muted">Estimates, not completed features. No audio capture, calls or firmware changes were performed during this assessment.</text>
+</svg>
