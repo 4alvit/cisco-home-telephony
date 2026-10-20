@@ -38,11 +38,15 @@ resulting registry digests in k3s, not image IDs or mutable tags.
 
 ## Voice runtime export
 
-The same manual run also exports the separate, smoke-tested voice runtime as
+Select `export_target=voice` when dispatching a voice update. The default
+`export_target=pbx` exports Asterisk and TFTP; a run exports only one family
+while still building and checking all three images. The voice artifact is
 `verified-voice-amd64-COMMIT_SHA`. Download it to a different private directory
 so its provenance and checksums cannot overwrite the PBX export:
 
 ```sh
+gh workflow run validate.yml --repo 4alvit/cisco-home-telephony \
+  --ref main -f export_images=true -f export_target=voice
 mkdir -p .local/ci-voice
 gh run download RUN_ID --repo 4alvit/cisco-home-telephony \
   --name verified-voice-amd64-COMMIT_SHA --dir .local/ci-voice
@@ -61,8 +65,9 @@ registry, or from the verified image manifest imported into the node's
 container runtime. Keep the source commit, artifact checksum and resulting
 manifest digest together in private deployment records.
 
-The voice archive uses gzip level 9 and has a 250 MiB export limit. The combined
-voice, Asterisk and TFTP exports must still fit below 400 MiB. These are workflow
+The voice archive uses gzip level 9 and has a 250 MiB export limit. The PBX
+pair has a 400 MiB export limit. Exporting one family keeps a single run below
+400 MiB; old artifacts from other runs still consume storage. These are workflow
 guards, not additional GitHub storage allowances. A successful image smoke
 checks dependencies and synthetic media with networking disabled; it does not
 prove that a live phone or Home Assistant pipeline works. Follow the separate

@@ -9,6 +9,14 @@ on:
         type: boolean
         required: false
         default: false
+      export_target:
+        description: Image family to export within the per-run storage limit
+        type: choice
+        options:
+          - pbx
+          - voice
+        required: false
+        default: pbx
 permissions:
   contents: read
 concurrency:
@@ -43,7 +51,7 @@ jobs:
       - name: Build and smoke-test the isolated voice runtime
         run: bash scripts/build-voice-image.sh cisco-home-ci
       - name: Export verified voice runtime
-        if: github.event_name == 'workflow_dispatch' && inputs.export_images && github.ref == 'refs/heads/main'
+        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'voice' && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
           mkdir -p .build/voice-image-artifacts
@@ -54,10 +62,10 @@ jobs:
           cd .build/voice-image-artifacts
           sha256sum voice-amd64.tar.gz image.json source.json > SHA256SUMS
           voice_bytes=$(du -sb . | cut -f1)
-          printf 'Verified voice artifact size: %s bytes (limit: 250 MiB; combined exports remain capped at 400 MiB)\n' "$voice_bytes"
+          printf 'Verified voice artifact size: %s bytes (limit: 250 MiB; only voice exported)\n' "$voice_bytes"
           test "$voice_bytes" -lt $((250 * 1024 * 1024))
       - name: Upload verified voice runtime
-        if: github.event_name == 'workflow_dispatch' && inputs.export_images && github.ref == 'refs/heads/main'
+        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'voice' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: verified-voice-amd64-${{ github.sha }}
@@ -70,7 +78,7 @@ jobs:
       - name: Isolated smoke with synthetic generated configuration
         run: bash scripts/smoke-containers.sh cisco-home-ci
       - name: Export verified amd64 images
-        if: github.event_name == 'workflow_dispatch' && inputs.export_images && github.ref == 'refs/heads/main'
+        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target != 'voice' && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
           mkdir -p .build/image-artifacts
@@ -83,11 +91,11 @@ jobs:
           printf '{"source_commit":"%s","run_id":"%s","platform":"linux/amd64"}\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" > .build/image-artifacts/source.json
           cd .build/image-artifacts
           sha256sum asterisk-amd64.tar.gz tftp-amd64.tar.gz images.json source.json > SHA256SUMS
-          total_bytes=$(( $(du -sb . | cut -f1) + $(du -sb ../voice-image-artifacts | cut -f1) ))
-          printf 'Combined verified image artifact size: %s bytes (limit: 400 MiB)\n' "$total_bytes"
+          total_bytes=$(du -sb . | cut -f1)
+          printf 'Verified PBX image artifact size: %s bytes (limit: 400 MiB; only PBX exported)\n' "$total_bytes"
           test "$total_bytes" -lt $((400 * 1024 * 1024))
       - name: Upload verified amd64 images
-        if: github.event_name == 'workflow_dispatch' && inputs.export_images && github.ref == 'refs/heads/main'
+        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target != 'voice' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: verified-amd64-images-${{ github.sha }}
