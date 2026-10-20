@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1080" viewBox="0 0 1200 1080" role="img" aria-labelledby="title desc">
+  <title id="title">Offline voice pipeline acceptance with actual ONNX wake detection</title>
+  <desc id="desc">A private positive WAV passes through production PCMU and RTP processing, actual frozen ONNX wake detection, the production service and Home Assistant client, a scripted Home Assistant peer with a nonzero WAV response, and production playback with RTP byte verification. Separate matched no-wake, Stop, focus preemption and provider-failure scenarios check their own outcomes. Controller cleanup must pass before fixture rescue. This is not physical acoustic acceptance.</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2="1">
+      <stop stop-color="#0b1630"/>
+      <stop offset="1" stop-color="#172747"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#b9cde7"/>
+    </marker>
+    <style>
+      text{font-family:Arial,Helvetica,sans-serif}
+      .heading{fill:#f5f8ff;font-size:30px;font-weight:700}
+      .subtitle{fill:#c4d4ec;font-size:17px}
+      .title{fill:#f5f8ff;font-size:22px;font-weight:700}
+      .body{fill:#dae5f5;font-size:17px}
+      .small{fill:#b9cde7;font-size:15px}
+      .tag{font-size:14px;font-weight:700;letter-spacing:.7px}
+      .scenario{fill:#dae5f5;font-size:16px}
+      .flow{fill:none;stroke:#b9cde7;stroke-width:2.5;marker-end:url(#arrow)}
+      .production{fill:#133b4b;stroke:#39d1c0;stroke-width:2}
+      .private{fill:#2b2553;stroke:#ab92ff;stroke-width:2}
+      .scripted{fill:#453422;stroke:#ffbc62;stroke-width:2}
+    </style>
+  </defs>
+  <rect width="1200" height="1080" rx="24" fill="url(#background)"/>
+  <text x="48" y="60" class="heading">Offline voice pipeline: verify the complete digital path</text>
+  <text x="48" y="92" class="subtitle">In-memory datagrams · simulated phone controls and focus · no live Home Assistant or physical audio</text>
+  <circle cx="55" cy="122" r="6" fill="#ab92ff"/>
+  <text x="70" y="127" class="small">Private inputs / actual model</text>
+  <circle cx="313" cy="122" r="6" fill="#39d1c0"/>
+  <text x="328" y="127" class="small">Production code</text>
+  <circle cx="508" cy="122" r="6" fill="#ffbc62"/>
+  <text x="523" y="127" class="small">Scripted provider boundary</text>
+
+  <rect x="48" y="155" width="344" height="184" rx="16" class="private"/>
+  <text x="70" y="184" class="tag" fill="#c9b8ff">1 / PRIVATE RECORDING</text>
+  <text x="70" y="218" class="title">Positive speech WAV</text>
+  <text x="70" y="252" class="body">16 kHz · mono · signed 16-bit PCM</text>
+  <text x="70" y="280" class="body">Select the fixture before scoring</text>
+  <text x="70" y="308" class="body">No microphone capture</text>
+  <path d="M396 248H418" class="flow"/>
+
+  <rect x="428" y="155" width="344" height="184" rx="16" class="production"/>
+  <text x="450" y="184" class="tag" fill="#68e6d6">2 / PRODUCTION TELEPHONY</text>
+  <text x="450" y="218" class="title">PCMU / RTP input</text>
+  <text x="450" y="252" class="body">Production PCMU encode at 8 kHz</text>
+  <text x="450" y="280" class="body">RTP receive and PCM decode</text>
+  <text x="450" y="308" class="body">Decoded 16 kHz PCM feeds wake</text>
+  <path d="M776 248H798" class="flow"/>
+
+  <rect x="808" y="155" width="344" height="184" rx="16" class="private"/>
+  <text x="830" y="184" class="tag" fill="#c9b8ff">3 / ACTUAL ONNX WAKE</text>
+  <text x="830" y="218" class="title">Frozen private model inputs</text>
+  <text x="830" y="252" class="body">Manifest + three ONNX models</text>
+  <text x="830" y="280" class="body">Qualified threshold unchanged</text>
+  <text x="830" y="308" class="body">A real wake event is required</text>
+  <path d="M980 343V382" class="flow"/>
+  <text x="48" y="369" class="small">Follow 1 → 6. A complete reply requires both exact input and output checks.</text>
+
+  <rect x="808" y="392" width="344" height="184" rx="16" class="production"/>
+  <text x="830" y="421" class="tag" fill="#68e6d6">4 / PRODUCTION SERVICE</text>
+  <text x="830" y="455" class="title">Service → HA client</text>
+  <text x="830" y="489" class="body">Capture exact post-trigger PCM</text>
+  <text x="830" y="517" class="body">One end-of-stream marker</text>
+  <text x="830" y="545" class="body">No pre-roll · no automatic rearm</text>
+  <path d="M804 485H782" class="flow"/>
+
+  <rect x="428" y="392" width="344" height="184" rx="16" class="scripted"/>
+  <text x="450" y="421" class="tag" fill="#ffd197">5 / SCRIPTED HA PEER</text>
+  <text x="450" y="455" class="title">Validate input; reply</text>
+  <text x="450" y="489" class="body">Exact expected PCM required</text>
+  <text x="450" y="517" class="body">Nonzero fixture WAV response</text>
+  <text x="450" y="545" class="body">No real STT, intents or TTS</text>
+  <path d="M424 485H402" class="flow"/>
+
+  <rect x="48" y="392" width="344" height="184" rx="16" class="production"/>
+  <text x="70" y="421" class="tag" fill="#68e6d6">6 / PRODUCTION PLAYBACK</text>
+  <text x="70" y="455" class="title">Verify returned audio</text>
+  <text x="70" y="489" class="body">Production playback and RTP</text>
+  <text x="70" y="517" class="body">Compare output bytes to fixture</text>
+  <text x="70" y="545" class="body">Nonzero audio alone is not a pass</text>
+
+  <text x="48" y="623" class="title">Four additional scenarios, each with its own expected outcome</text>
+  <rect x="48" y="646" width="258" height="131" rx="14" fill="#202c49" stroke="#7e9dd4"/>
+  <text x="68" y="676" class="tag" fill="#b8d1ff">MATCHED NO-WAKE</text>
+  <text x="68" y="707" class="scenario">Same-length silence</text>
+  <text x="68" y="732" class="scenario">No HA conversation</text>
+  <text x="68" y="757" class="scenario">No RTP audio output</text>
+  <rect x="330" y="646" width="258" height="131" rx="14" fill="#173f48" stroke="#4fbcbd"/>
+  <text x="350" y="676" class="tag" fill="#87e1dd">EXPLICIT STOP</text>
+  <text x="350" y="707" class="scenario">Stop during playback</text>
+  <text x="350" y="732" class="scenario">Expected cancellation</text>
+  <text x="350" y="757" class="scenario">No output after Stop</text>
+  <rect x="612" y="646" width="258" height="131" rx="14" fill="#342b48" stroke="#b898d4"/>
+  <text x="632" y="676" class="tag" fill="#dfbcff">FOCUS PREEMPTION</text>
+  <text x="632" y="707" class="scenario">Lose focus during playback</text>
+  <text x="632" y="732" class="scenario">Expected interruption</text>
+  <text x="632" y="757" class="scenario">No completed reply claim</text>
+  <rect x="894" y="646" width="258" height="131" rx="14" fill="#46312e" stroke="#e9a087"/>
+  <text x="914" y="676" class="tag" fill="#ffc0a5">PROVIDER FAILURE</text>
+  <text x="914" y="707" class="scenario">Scripted provider error</text>
+  <text x="914" y="732" class="scenario">Expected failed turn</text>
+  <text x="914" y="757" class="scenario">Cleanup must still pass</text>
+
+  <rect x="48" y="805" width="1104" height="143" rx="16" fill="#101f39" stroke="#527095" stroke-width="1.5"/>
+  <text x="70" y="839" class="title">Controller cleanup must pass before fixture rescue</text>
+  <text x="70" y="870" class="body">Stop confirmed · transport, media and HA closed · owner released · stale stream rejected</text>
+  <text x="70" y="898" class="body">A scenario can pass without a completed reply. Cleanup success alone cannot prove turn success.</text>
+  <text x="70" y="926" class="small">Negative controls must fail: never-fire detector · dropped/corrupted input · altered output · suppressed cleanup</text>
+
+  <text x="48" y="988" class="title" fill="#ffd197">No physical acoustic acceptance</text>
+  <text x="48" y="1018" class="body">No claim about real speech recognition, HA intent accuracy, voice quality, speakers or room acoustics.</text>
+  <text x="48" y="1047" class="small">Keep recordings, model files and detailed reports private. An injected test detector is not actual ONNX acceptance.</text>
+</svg>

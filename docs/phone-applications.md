@@ -85,6 +85,19 @@ future weekly occurrences. **Cancel timer** cancels the pending timer and its
 active timer alert. **Disable saved alarm** disables future occurrences and
 stops its active alarm. See the full [alert ownership contract](phone-gateway.md#alert-identity-and-manual-stop).
 
+**View current schedule** also shows the alert's kind, exact line and state.
+A finished countdown can show as off while its timer alert is still ringing.
+When the gateway observation is unavailable, any retained alert is labeled
+last observed and its current state remains unknown. **Refresh** reads the
+current status without issuing a new schedule change or Stop request.
+
+After **Stop ringing alert**, **Stop requested** means cleanup is still
+pending and ringing may continue. **Alert stopped** appears only when the
+gateway reports that exact alert as ended. The result shows its line, alert ID
+and state; **Refresh** opens Phone Status, including the current alert's kind,
+line and state. Inspect that status before starting another operation. A
+missing or mismatched Stop result is reported as unconfirmed.
+
 ## Install into an existing deployment
 
 Use the updated repository image and the existing persistent gateway from the

@@ -15,6 +15,20 @@ on:
       - 'scripts/render_voice_wake_job.py'
       - 'tests/test_voice_wake_*.py'
       - 'tests/test_render_voice_wake_job.py'
+  pull_request:
+    paths:
+      - '.github/workflows/voice-wake.yml'
+      - 'containers/voice-wake/**'
+      - 'containers/voice/**'
+      - 'containers/asterisk/phone_*.py'
+      - 'voice_assistant/**'
+      - 'scripts/build-voice-wake-image.sh'
+      - 'scripts/build-voice-image.sh'
+      - 'scripts/voice_session.py'
+      - 'scripts/render_voice_job.py'
+      - 'scripts/render_voice_wake_job.py'
+      - 'tests/test_voice_wake_*.py'
+      - 'tests/test_render_voice_wake_job.py'
   workflow_dispatch:
     inputs:
       export_image:

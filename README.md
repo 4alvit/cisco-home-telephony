@@ -52,6 +52,9 @@ conversion to MPP is not required.
   [latency analysis](docs/local-voice-performance.md) measures each response stage.
 - **Test the integrated voice path:** the [offline acceptance harness](docs/voice-integration-test.md)
   exercises synthetic sessions without contacting a real phone or Home Assistant.
+  The [voice pipeline check](docs/voice-pipeline-acceptance.md) adds private
+  positive wake recordings, production telephone codecs, audio-byte comparisons
+  and explicit cleanup checks against a scripted HA peer.
 - **Understand the code and infrastructure:** the [maintainer map](docs/code-and-infrastructure-map.md)
   connects entry points, control and audio paths, persistent state, recovery,
   test coverage, failure-handling repairs and remaining limits.

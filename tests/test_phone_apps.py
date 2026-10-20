@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 import threading
 import unittest
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 import xml.etree.ElementTree as ET
 
@@ -29,6 +30,7 @@ class FakeGateway:
                        'dial_allowlist': ['201', '202', '203', '204', '209', '600', '701']}
         self.calls = []
         self.alert = None
+        self.stop_state = 'ended'
         self.fail = False
         self.resources = []
 
@@ -40,7 +42,10 @@ class FakeGateway:
         self.calls.append((phone_id, action, payload))
         if self.fail:
             raise RuntimeError('Private backend URL and token must never be displayed')
-        return {'status': 'accepted'}
+        result = {'status': 'accepted', 'action_id': payload['idempotency_key']}
+        if action == 'alert_stop':
+            result.update(alert_id=payload['alert_id'], state=self.stop_state)
+        return result
 
     def resource(self, phone, data, mime):
         self.resources.append((phone['id'], data, mime))
@@ -99,6 +104,10 @@ class PhoneAppsTests(unittest.TestCase):
     def confirmation(self, path='/set', query='line=202&setting=dnd&enabled=1'):
         root = self.get(path, query)
         return root.find('MenuItem/URL').text
+
+    def refresh(self, root):
+        return self.click(next(key.find('URL').text for key in root.findall('SoftKeyItem')
+                               if key.find('Name').text == 'Refresh'))
 
     def test_root_is_native_menu_and_preserves_selected_line(self):
         root = self.get(query='line=202')
@@ -308,6 +317,102 @@ class PhoneAppsTests(unittest.TestCase):
         self.assertEqual(self.gateway.calls[0][1], 'alert_stop')
         self.assertEqual(self.gateway.calls[0][2]['alert_id'], 'f' * 32)
         self.assertEqual(self.gateway.calls[0][2]['line'], '202')
+
+    def test_alert_stop_pending_is_not_completed_and_refresh_only_reads_status(self):
+        for state in ('starting', 'ringing', 'stopping', 'unknown'):
+            with self.subTest(state=state):
+                self.gateway.calls.clear()
+                self.gateway.stop_state = state
+                self.gateway.alert = {'id': 'f' * 32, 'line': '202', 'kind': 'timer', 'state': state}
+                url = self.confirmation('/stop-alert', 'line=201')
+                root = self.click(url)
+                self.assertEqual(root.find('Title').text, 'Stop requested')
+                text = root.find('Text').text
+                self.assertIn('cleanup is still pending', text)
+                self.assertIn('may continue ringing', text)
+                self.assertIn('Line: 202', text)
+                self.assertIn('Alert ID: ' + 'f' * 32, text)
+                self.assertIn('State: ' + state, text)
+                refreshed = self.refresh(root)
+                self.assertEqual(refreshed.find('Title').text, 'Phone Status')
+                self.assertIn('Alert: timer on line 202, ' + state, refreshed.find('Text').text)
+                self.refresh(refreshed)
+                self.assertEqual(len(self.gateway.calls), 1)
+                with self.assertRaises(apps.AppError):
+                    self.click(url)
+                self.assertEqual(len(self.gateway.calls), 1)
+
+    def test_alert_stop_ended_is_reported_as_stopped(self):
+        self.gateway.alert = {'id': 'f' * 32, 'line': '202', 'kind': 'alarm', 'state': 'ringing'}
+        root = self.click(self.confirmation('/stop-alert', 'line=201'))
+        self.assertEqual(root.find('Title').text, 'Alert stopped')
+        self.assertIn('State: ended', root.find('Text').text)
+        self.assertNotIn('pending', root.find('Text').text)
+        self.gateway.alert['state'] = 'ended'
+        refreshed = self.refresh(root)
+        self.assertIn('Last alert: alarm on line 202, ended', refreshed.find('Text').text)
+        self.assertEqual(len(self.gateway.calls), 1)
+
+    def test_alert_stop_rejects_unconfirmed_or_mismatched_result_without_replay(self):
+        self.gateway.alert = {'id': 'f' * 32, 'line': '202', 'kind': 'timer', 'state': 'ringing'}
+        changes = ({'state': None}, {'state': []}, {'state': 'private response text'},
+                   {'alert_id': 'e' * 32}, {'action_id': 'wrong-action'}, {'status': 'ok'})
+        for change in changes:
+            with self.subTest(change=change):
+                url = self.confirmation('/stop-alert', 'line=201')
+                token = parse_qs(urlsplit(url).query)['token'][0]
+                response = {'status': 'accepted', 'action_id': 'apps-' + token,
+                            'alert_id': 'f' * 32, 'state': 'ended', **change}
+                with patch.object(self.gateway, 'mutate', return_value=response) as mutate:
+                    with self.assertRaises(apps.AppError):
+                        self.click(url)
+                    with self.assertRaises(apps.AppError):
+                        self.click(url)
+                    mutate.assert_called_once()
+        data, _ = apps.PhoneApps.error('alert_stop_not_confirmed')
+        text = ET.fromstring(data).find('Text').text
+        self.assertIn('unconfirmed', text)
+        self.assertIn('Phone Status', text)
+
+    def test_schedule_shows_expired_timer_alert_and_refresh_does_not_cancel_it(self):
+        self.backend.value['timer'].update(line='202', active=False)
+        self.backend.value['alert'] = {'id': 'f' * 32, 'line': '202', 'kind': 'timer', 'state': 'ringing'}
+        root = self.get('/schedule-status', 'line=201')
+        text = root.find('Text').text
+        self.assertIn('Timer line 202: off', text)
+        self.assertIn('Alert: timer on line 202, ringing', text)
+        self.assertIn('a timer alert has not ended', text)
+        self.assertIn('Use Stop ringing alert', text)
+        self.refresh(root)
+        self.assertEqual([call[1:3] for call in self.backend.calls],
+                         [('201', 'status'), ('201', 'status')])
+        self.assertFalse(self.gateway.calls)
+        self.assertFalse(self.app.tokens)
+
+    def test_schedule_alerts_distinguish_active_ended_absent_and_stale(self):
+        for kind in ('timer', 'alarm'):
+            for state in ('starting', 'ringing', 'stopping', 'unknown', 'ended'):
+                with self.subTest(kind=kind, state=state):
+                    self.backend.value['alert'] = {'id': 'f' * 32, 'line': '202',
+                                                  'kind': kind, 'state': state}
+                    text = self.get('/schedule-status').find('Text').text
+                    label = 'Last alert' if state == 'ended' else 'Alert'
+                    self.assertIn(f'{label}: {kind} on line 202, {state}', text)
+                    if state == 'ended' or kind == 'alarm':
+                        self.assertNotIn('a timer alert has not ended', text)
+        self.backend.value['alert'] = None
+        self.assertIn('Alert: None', self.get('/schedule-status').find('Text').text)
+        self.backend.value['gateway_fresh'] = False
+        text = self.get('/schedule-status').find('Text').text
+        self.assertIn('Current alert state is unknown', text)
+        self.assertNotIn('Alert: None', text)
+        self.backend.value['alert'] = {'id': 'f' * 32, 'line': '202', 'kind': 'timer', 'state': 'ringing'}
+        text = self.get('/schedule-status').find('Text').text
+        self.assertIn('Current alert state is unknown', text)
+        self.assertIn('Last observed alert: timer on line 202, ringing', text)
+        self.assertNotIn('Use Stop ringing alert', text)
+        self.assertTrue(all(call[2] == 'status' for call in self.backend.calls))
+        self.assertFalse(self.gateway.calls)
 
     def test_schedule_and_phone_status_render_without_side_effects(self):
         self.backend.value['timer'].update(active=True, remaining_seconds=93)

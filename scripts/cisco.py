@@ -452,6 +452,7 @@ def schedule_request(args, phone, config):
 
 
 def schedule_result(value, phone, line):
+    require(isinstance(value, dict), 'invalid_ha_schedule')
     lines = value.get('lines')
     require(isinstance(lines, list) and 1 <= len(lines) <= 2 and
             all(isinstance(number, str) and re.fullmatch(r'2[0-9]{2}', number) for number in lines) and
@@ -474,7 +475,7 @@ def schedule_result(value, phone, line):
     require(timer.get('id') is None or isinstance(timer['id'], str) and re.fullmatch(r'[0-9a-f]{32}', timer['id']),
             'invalid_ha_timer_id')
     deadline, remaining = timer.get('deadline'), timer.get('remaining_seconds')
-    require(deadline is None or type(deadline) in (float, int) and math.isfinite(deadline) and deadline >= 0,
+    require(deadline is None or type(deadline) in (float, int) and 0 <= deadline <= sys.float_info.max,
             'invalid_ha_timer_deadline')
     require(remaining is None or type(remaining) is int and remaining >= 0, 'invalid_ha_timer_remaining')
     require(alarm.get('line') in phone['lines'] and type(alarm.get('enabled')) is bool and
@@ -846,17 +847,33 @@ def main(argv=None):
             require('home_assistant' in config, 'home_assistant_schedule_config_required')
             ha_config = config['home_assistant']
             body = schedule_request(args, phone, ha_config)
-            action_key = body.get('request_id')
             ha = Gateway(ha_config, args.timeout)
-            if args.dry_run and action_key is not None:
+            saved_alarm_change = body['operation'] in ('alarm_enable', 'alarm_disable')
+            dry_run = args.dry_run and 'request_id' in body
+            if saved_alarm_change or dry_run:
                 current = ha.request(SCHEDULE_PATH, {key: body[key] for key in ('entry_id', 'line')} |
                                      {'operation': 'status'})
                 current = schedule_result(current, None, args.extension)
+                if saved_alarm_change:
+                    require(current['operation_result'] in ('applied', 'status'),
+                            'ha_schedule_state_unconfirmed')
+                    require(current['alarm']['configured'], 'ha_alarm_not_configured')
+                    require(current['alarm']['line'] == args.extension, 'ha_alarm_owned_by_other_line')
+                    phone = {'id': current['phone'], 'lines': current['lines']}
+                    body['phone'] = phone['id']
+            if dry_run:
                 result = {'status': 'dry_run', 'selected_line': args.extension, 'phone_id': current['phone'],
                           'action': body['operation'], 'request': {key: value for key, value in body.items()
                                                                  if key != 'entry_id'}}
             else:
-                value = schedule_result(ha.request(SCHEDULE_PATH, body), None, args.extension)
+                action_key = body.get('request_id')
+                value = schedule_result(ha.request(SCHEDULE_PATH, body), phone, args.extension)
+                if saved_alarm_change and value['operation_result'] != 'outcome_unknown':
+                    alarm = value['alarm']
+                    require(value['operation_result'] in ('applied', 'replayed')
+                            and alarm['configured'] and alarm['line'] == args.extension
+                            and alarm['enabled'] == (body['operation'] == 'alarm_enable'),
+                            'ha_alarm_change_unconfirmed')
                 result = {'status': 'ok' if action_key is None else 'accepted', 'selected_line': args.extension,
                           'phone_id': value['phone'], 'schedule': value}
                 if action_key is not None:

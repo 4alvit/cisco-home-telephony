@@ -278,6 +278,94 @@ class SessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.display.close.assert_called_once()
         self.assertEqual(self.remove_signal.call_count, self.add_signal.call_count)
 
+    async def test_cancellation_during_service_close_drains_ordered_cleanup(self):
+        entered, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+        async def close():
+            entered.set()
+            await release.wait()
+            completed.set()
+
+        self.service.close = close
+        finish = self.watchdog.finish.return_value
+
+        def finish_after_service():
+            self.assertTrue(completed.is_set())
+            return finish
+
+        self.watchdog.finish.side_effect = finish_after_service
+        task = asyncio.create_task(subject.run_session(
+            self.args, self.config, {}, self.phone, self.voice))
+        try:
+            await asyncio.wait_for(entered.wait(), 2)
+            for _ in range(2):
+                task.cancel()
+                await asyncio.sleep(0)
+                self.assertFalse(task.done())
+                self.assertFalse(completed.is_set())
+                self.watchdog.finish.assert_not_called()
+                self.display.close.assert_not_called()
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 2)
+            self.assertTrue(completed.is_set())
+            self.assertTrue(self.session.stop_confirmed)
+            self.assert_observer_stopped()
+            self.watchdog.finish.assert_called_once()
+            self.display.close.assert_called_once()
+            self.assertEqual(self.remove_signal.call_count, self.add_signal.call_count)
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_cancellation_during_watchdog_finish_drains_worker(self):
+        entered, release, completed = threading.Event(), threading.Event(), threading.Event()
+        finish = self.watchdog.finish.return_value
+
+        def blocked_finish():
+            entered.set()
+            if not release.wait(2):
+                raise AssertionError("test did not release watchdog worker")
+            completed.set()
+            return finish
+
+        self.watchdog.finish.side_effect = blocked_finish
+        task = asyncio.create_task(subject.run_session(
+            self.args, self.config, {}, self.phone, self.voice))
+        try:
+            self.assertTrue(await asyncio.to_thread(entered.wait, 1))
+            for _ in range(2):
+                task.cancel()
+                await asyncio.sleep(0)
+                self.assertFalse(task.done())
+                self.assertFalse(completed.is_set())
+                self.display.close.assert_not_called()
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 2)
+            self.assertTrue(completed.is_set())
+            self.watchdog.finish.assert_called_once()
+            self.display.close.assert_called_once()
+            self.assertEqual(self.remove_signal.call_count, self.add_signal.call_count)
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_service_close_cancellation_cannot_skip_independent_cleanup(self):
+        self.service.close_error = asyncio.CancelledError("synthetic-provider-cancellation")
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(subject.run_session(
+                self.args, self.config, {}, self.phone, self.voice), 2)
+        self.assertTrue(self.session.stop_confirmed)
+        self.assert_observer_stopped()
+        self.watchdog.finish.assert_called_once()
+        self.display.close.assert_called_once()
+        self.assertEqual(self.remove_signal.call_count, self.add_signal.call_count)
+
     async def test_transport_stop_exception_still_runs_supervisor_and_closes_display(self):
         self.session.stop = mock.Mock(side_effect=RuntimeError("synthetic-stop-failure"))
         result, error = await self.invoke()

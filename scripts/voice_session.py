@@ -87,29 +87,50 @@ async def run_session(args, config, private, phone, voice):
     except Exception:
         error = 'voice_session_failed'
     finally:
-        try:
-            await asyncio.to_thread(session.stop, error or 'session_finished')
-        except Exception:
-            cleanup_errors.append('transport_cleanup_failed')
-        finally:
-            stopped.set()
-            observer.done.set()
-        try:
-            await service.close()
-        except Exception:
-            cleanup_errors.append('assistant_cleanup_failed')
-        try:
-            report = await asyncio.to_thread(watchdog.finish)
-        except Exception:
-            cleanup_errors.append('supervisor_cleanup_failed')
-        try:
-            if display:
-                display.close()
-        except Exception:
-            cleanup_errors.append('display_cleanup_failed')
-        finally:
-            for number in (signal.SIGINT, signal.SIGTERM):
-                loop.remove_signal_handler(number)
+        async def cleanup():
+            nonlocal report
+            cancelled = False
+            try:
+                await asyncio.to_thread(session.stop, error or 'session_finished')
+            except (Exception, asyncio.CancelledError) as cleanup_error:
+                cancelled |= isinstance(cleanup_error, asyncio.CancelledError)
+                cleanup_errors.append('transport_cleanup_failed')
+            finally:
+                stopped.set()
+                observer.done.set()
+            try:
+                await service.close()
+            except (Exception, asyncio.CancelledError) as cleanup_error:
+                cancelled |= isinstance(cleanup_error, asyncio.CancelledError)
+                cleanup_errors.append('assistant_cleanup_failed')
+            try:
+                report = await asyncio.to_thread(watchdog.finish)
+            except (Exception, asyncio.CancelledError) as cleanup_error:
+                cancelled |= isinstance(cleanup_error, asyncio.CancelledError)
+                cleanup_errors.append('supervisor_cleanup_failed')
+            try:
+                if display:
+                    display.close()
+            except (Exception, asyncio.CancelledError) as cleanup_error:
+                cancelled |= isinstance(cleanup_error, asyncio.CancelledError)
+                cleanup_errors.append('display_cleanup_failed')
+            finally:
+                for number in (signal.SIGINT, signal.SIGTERM):
+                    loop.remove_signal_handler(number)
+            return cancelled
+
+        # Keep the existing cleanup order and component deadlines. Cancelling
+        # to_thread's await does not stop its worker; drain the one cleanup task
+        # before propagating cancellation, including repeated caller requests.
+        cleanup_task = asyncio.create_task(cleanup())
+        cancelled = False
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                cancelled = True
+        if cleanup_task.result() or cancelled:
+            raise asyncio.CancelledError
     return {'error': error, 'result': asdict(result) if result else None, 'states': states,
             'capture_observed': bool(media.receiver.counters['received']),
             'input': dict(media.receiver.counters), 'output_frames': sink.frames_sent,

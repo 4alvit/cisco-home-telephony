@@ -20,6 +20,7 @@ PAGE_SIZE = 20
 TOKEN_TTL = 90
 MAX_TOKENS_PER_PHONE = 24
 DAYS = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
+ALERT_STATES = frozenset(('starting', 'ringing', 'stopping', 'ended', 'unknown'))
 
 
 class AppError(Exception):
@@ -86,13 +87,22 @@ class PhoneApps:
         self.navigation(root, phone_id, line, select=True)
         return xml(root)
 
-    def text(self, phone_id, line, title, value):
+    def text(self, phone_id, line, title, value, *, refresh=None):
         root = ET.Element('CiscoIPPhoneText')
         child(root, 'Title', safe(title, 32))
-        child(root, 'Prompt', 'Press Home or Exit')
+        child(root, 'Prompt', 'Refresh to check current status' if refresh else 'Press Home or Exit')
         child(root, 'Text', safe(value, 1900))
+        if refresh:
+            self.softkey(root, 'Refresh', self.url(phone_id, refresh, line=line), 1)
         self.navigation(root, phone_id, line)
         return xml(root)
+
+    @staticmethod
+    def alert_summary(alert, *, stale=False):
+        if not alert:
+            return 'Alert: None'
+        label = 'Last observed alert' if stale else 'Last alert' if alert['state'] == 'ended' else 'Alert'
+        return f'{label}: {alert["kind"]} on line {alert["line"]}, {alert["state"]}'
 
     @staticmethod
     def error(reason):
@@ -111,6 +121,7 @@ class PhoneApps:
             'ha_timer_replace_required': 'A timer already exists. Cancel it before starting a new one.',
             'ha_request_outcome_unknown': 'Home Assistant did not confirm the result. Check current status before trying again.',
             'ha_change_not_confirmed': 'Home Assistant did not confirm the change. Check current status before trying again.',
+            'alert_stop_not_confirmed': 'The alert Stop result is unconfirmed. Open Phone Status and check the alert before trying again.',
             'voice_control_unavailable': 'Voice control is not configured for this phone.',
             'voice_phone_busy': 'A voice session owns the phone audio, or its cleanup is unconfirmed. Open Voice Assistant for status and Stop guidance before trying this action again.',
             'voice_response_invalid': 'Voice status is unconfirmed. Check status before any new attempt.',
@@ -373,8 +384,8 @@ class PhoneApps:
             value += '\nDo Not Disturb: ' + ('On' if phone['dnd'] else 'Off')
             value += '\nAuto-answer: ' + ('On' if phone['autoanswer'] else 'Off')
             value += '\nActive calls: ' + str(len(channels))
-            value += '\nAlert: ' + (phone['alert']['state'] if phone.get('alert') else 'None')
-            return self.text(phone_id, line, 'Phone Status', value)
+            value += '\n' + self.alert_summary(phone.get('alert'))
+            return self.text(phone_id, line, 'Phone Status', value, refresh='/status')
         if path == '/settings':
             phone = self.current_phone(phone_id)
             entries = []
@@ -417,9 +428,16 @@ class PhoneApps:
             text += ('enabled' if alarm['enabled'] else 'disabled') if alarm['configured'] else 'not configured'
             if alarm['configured']:
                 text += '\n' + alarm['time'] + ' ' + ' '.join(DAYS[day] for day in alarm['weekdays'])
-            if not value.get('gateway_fresh'):
-                text += '\nPhone connection status is unavailable.'
-            return self.text(phone_id, line, 'Schedule Status', text)
+            alert = value.get('alert')
+            if value.get('gateway_fresh'):
+                text += '\n' + self.alert_summary(alert)
+                if alert and alert['kind'] == 'timer' and alert['state'] != 'ended' and not timer['active']:
+                    text += '\nThe countdown is off; a timer alert has not ended. Use Stop ringing alert.'
+            else:
+                text += '\nCurrent alert state is unknown; phone connection status is unavailable.'
+                if alert:
+                    text += '\n' + self.alert_summary(alert, stale=True)
+            return self.text(phone_id, line, 'Schedule Status', text, refresh='/schedule-status')
         if path == '/timer':
             require(self.backend is not None, 'backend_unavailable', 503)
             return self.form(phone_id, line, 'Start Timer', 'timer_start', [('Minutes (1-1440)', 'minutes', '5', 'N')])
@@ -522,7 +540,21 @@ class PhoneApps:
             if row['kind'] == 'gateway':
                 result = self.gateway.mutate(phone_id, row['action'],
                         {'line': line, 'idempotency_key': 'apps-' + token, **payload})
-                require(result.get('status') == 'accepted', 'action_not_confirmed', 503)
+                require(isinstance(result, dict) and result.get('status') == 'accepted',
+                        'action_not_confirmed', 503)
+                if row['action'] == 'alert_stop':
+                    state = result.get('state')
+                    require(result.get('action_id') == 'apps-' + token
+                            and result.get('alert_id') == payload['alert_id']
+                            and isinstance(state, str) and state in ALERT_STATES,
+                            'alert_stop_not_confirmed', 503)
+                    ended = state == 'ended'
+                    message = ('Alert stopped.' if ended else 'Stop requested; cleanup is still pending.')
+                    message += f'\nLine: {line}\nAlert ID: {payload["alert_id"]}\nState: {state}'
+                    if not ended:
+                        message += '\nThe alert may continue ringing. Refresh before a new attempt.'
+                    return self.text(phone_id, line, 'Alert stopped' if ended else 'Stop requested',
+                                     message, refresh='/status')
             elif row['kind'] == 'schedule':
                 result = self.schedule(phone_id, line, row['action'], request_id='apps-' + token, **payload)
                 if result.get('operation_result') in ('not_active', 'not_configured'):

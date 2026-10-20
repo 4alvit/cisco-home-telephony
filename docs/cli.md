@@ -222,6 +222,13 @@ cisco 213 alarm set 06:45 --days tue,thu --enable --replace
 
 Timer duration is a whole number of minutes from 1 to 1,440. Alarm time is 24-hour `HH:MM` in the **HA timezone**, which is shown by `schedule`; it is not implicitly the Mac timezone. Days are `mon,tue,wed,thu,fri,sat,sun`, or the aliases `weekdays`, `weekend`, and `daily`. Duplicate days and invalid times are refused. `alarm set` saves disabled unless `--enable` is present. `--replace` is available only for a new timer or alarm definition. Cancel, On, Off and Stop refuse to act on a sibling line's owned slot or alert; select that owning line explicitly instead.
 
+`alarm on` and `alarm off` first read the saved schedule. If no alarm has been
+configured, they exit with `ha_alarm_not_configured` without sending a change
+request; create one explicitly with `alarm set`. An invalid or uncertain status
+response also prevents the change. The same checks apply to `--dry-run`, which
+only reads status once. A saved alarm with no selected weekdays still exists,
+even though it has no scheduled occurrence.
+
 Starting a timer when another countdown is pending requires `--replace`. Moving an existing alarm to the sibling line also requires `--replace`. Listing the schedule shows both owners so this limitation is visible before making changes. The system does not silently create a second timer slot, stack several weekly alarms, or retarget the shared phone using line-number arithmetic.
 
 Pending schedules persist in HA. A due occurrence is saved as claimed before it is sent to the gateway. Events missed while HA is down are not replayed, and a running scheduler skips events more than 20 seconds late. Busy phones, DND, an existing active/unknown alert, unavailable services and ambiguous outcomes are not retried. The repeated autumn DST minute runs once; a nonexistent spring minute is skipped. These are convenience alerts, not a guaranteed wake-up service.
@@ -231,6 +238,12 @@ Pending schedules persist in HA. A due occurrence is saved as claimed before it 
 The scheduler uses HA's [REST service response interface](https://developers.home-assistant.io/docs/api/rest/#post-apiservicesdomainservice), with an explicit request ID for mutations. The CLI filters responses to the selected schedule; it does not expose unrelated `changed_states`. If the service is absent, refuses the request, or times out, the CLI reports failure without falling back to non-atomic helper changes. Inspect the schedule before deciding what to do next.
 
 Schedule commands go directly to the loaded HA integration. It resolves the exact selected line against one unambiguous phone in its validated current or cached gateway inventory; the CLI sends no guessed primary ID and maintains no stale local map. While the gateway is unreachable, the service can still read persisted schedules, cancel an owned pending timer or disable an owned alarm. Starting or enabling a schedule requires fresh gateway state. An offline cancellation may persist locally while the already-ringing state remains unknown; the CLI preserves the local schedule state in its error result. Use physical dismissal if a ringing phone cannot be reached.
+
+For alarm On/Off, the CLI binds the change and its response to the phone and
+line returned by the preceding status read. It confirms the requested enabled
+state before reporting success. A failed preflight is a refusal with no action
+ID; a failed or inconsistent response after sending the change is
+`not_confirmed`, with the action ID retained and no automatic retry.
 
 ## Scripts, errors and retries
 

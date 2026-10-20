@@ -36,8 +36,9 @@ def schedule():
 
 
 class ScheduleTests(unittest.TestCase):
-    def invoke(self, args, *, response=None, configured=True, failure=None, gateway_failure=False):
+    def invoke(self, args, *, response=None, responses=None, configured=True, failure=None, gateway_failure=False):
         calls = []
+        replies = iter(responses) if responses is not None else None
         class FakeGateway:
             def __init__(self, settings, _timeout): self.settings = settings
             def request(self, path, body=None):
@@ -48,6 +49,11 @@ class ScheduleTests(unittest.TestCase):
                     return gateway_inventory()
                 if failure:
                     raise failure
+                if replies is not None:
+                    reply = next(replies)
+                    if isinstance(reply, Exception):
+                        raise reply
+                    return copy.deepcopy(reply)
                 return copy.deepcopy(schedule() if response is None else response)
         with patch.object(cisco, 'Gateway', FakeGateway), \
                 patch.object(cisco, 'load_config', return_value=config() if configured else {}), \
@@ -92,14 +98,142 @@ class ScheduleTests(unittest.TestCase):
             code, _, calls = self.invoke(['alarm', 'set', at, '--days', days])
             self.assertEqual(code, 1); self.assertEqual(len(calls), 0)
 
-    def test_cancel_and_alarm_toggles_preserve_ownership_without_override(self):
-        for args, operation in [(['timer', 'cancel'], 'timer_cancel'),
-                                (['alarm', 'on'], 'alarm_enable'), (['alarm', 'off'], 'alarm_disable')]:
-            code, _, calls = self.invoke(args)
+    def test_timer_cancel_preserves_ownership_without_override(self):
+        code, _, calls = self.invoke(['timer', 'cancel'])
+        self.assertEqual(code, 0)
+        self.assertEqual(calls[0][2]['operation'], 'timer_cancel')
+        self.assertEqual(calls[0][2]['line'], '213')
+        self.assertNotIn('replace', calls[0][2])
+
+    def test_alarm_toggles_read_saved_alarm_then_mutate_exact_owner(self):
+        for action, operation in [('on', 'alarm_enable'), ('off', 'alarm_disable')]:
+            with self.subTest(action=action):
+                before = schedule()
+                before['alarm'].update(line='213', configured=True, enabled=action == 'off')
+                after = copy.deepcopy(before)
+                after['alarm']['enabled'] = action == 'on'
+                code, result, calls = self.invoke(
+                    ['alarm', action, '--idempotency-key', 'saved-alarm-123'],
+                    responses=[before, after])
+                self.assertEqual(code, 0)
+                self.assertEqual(result['status'], 'accepted')
+                self.assertEqual(calls, [
+                    ('home_assistant', cisco.SCHEDULE_PATH, {
+                        'entry_id': 'synthetic-entry-123', 'line': '213', 'operation': 'status'}),
+                    ('home_assistant', cisco.SCHEDULE_PATH, {
+                        'entry_id': 'synthetic-entry-123', 'phone': '212', 'line': '213',
+                        'operation': operation, 'request_id': 'saved-alarm-123'})])
+
+    def test_absent_alarm_never_creates_defaults_even_in_dry_run(self):
+        absent = schedule()
+        absent['alarm']['line'] = '213'
+        for action in ('on', 'off'):
+            for dry_run in ([], ['--dry-run']):
+                with self.subTest(action=action, dry_run=dry_run):
+                    code, result, calls = self.invoke(['alarm', action, *dry_run], response=absent)
+                    self.assertEqual(code, 1)
+                    self.assertEqual(result['status'], 'refused')
+                    self.assertEqual(result['reason'], 'ha_alarm_not_configured')
+                    self.assertNotIn('action_id', result)
+                    self.assertEqual([call[2]['operation'] for call in calls], ['status'])
+
+    def test_alarm_owned_by_sibling_is_not_changed(self):
+        before = schedule()
+        before['alarm']['configured'] = True
+        for action in ('on', 'off'):
+            code, result, calls = self.invoke(['alarm', action], response=before)
+            self.assertEqual(code, 1)
+            self.assertEqual(result['reason'], 'ha_alarm_owned_by_other_line')
+            self.assertNotIn('action_id', result)
+            self.assertEqual([call[2]['operation'] for call in calls], ['status'])
+
+    def test_alarm_preflight_rejects_malformed_or_uncertain_state_before_mutation(self):
+        valid = schedule()
+        valid['alarm'].update(line='213', configured=True)
+        malformed = [None, [], {}, 'unknown']
+        for key, value in [('configured', None), ('configured', 'true'), ('configured', 1),
+                           ('enabled', 'off'), ('time', '25:00'), ('weekdays', [True]),
+                           ('weekdays', [7]), ('line', '219')]:
+            data = copy.deepcopy(valid)
+            data['alarm'][key] = value
+            malformed.append(data)
+        data = copy.deepcopy(valid)
+        del data['alarm']['configured']
+        malformed.append(data)
+        data = copy.deepcopy(valid)
+        data['timer']['deadline'] = 10 ** 1000
+        malformed.append(data)
+        for key, value in [('phone', '218'), ('line', '212'), ('lines', ['213', '213']),
+                           ('schema_version', True), ('operation_result', 'outcome_unknown'),
+                           ('operation_result', 'replayed'), ('operation_result', 'not_active')]:
+            data = copy.deepcopy(valid)
+            data[key] = value
+            malformed.append(data)
+        for action in ('on', 'off'):
+            for data in malformed:
+                with self.subTest(action=action, response=data):
+                    code, result, calls = self.invoke(['alarm', action], responses=[data])
+                    self.assertEqual(code, 1)
+                    self.assertEqual(result['status'], 'refused')
+                    self.assertNotIn('action_id', result)
+                    self.assertEqual([call[2]['operation'] for call in calls], ['status'])
+
+    def test_saved_alarm_dry_run_reads_once_and_preserves_empty_weekdays(self):
+        before = schedule()
+        before['alarm'].update(line='213', configured=True, weekdays=[])
+        for action in ('on', 'off'):
+            code, result, calls = self.invoke(['alarm', action, '--dry-run'], response=before)
             self.assertEqual(code, 0)
-            self.assertEqual(calls[0][2]['operation'], operation)
-            self.assertEqual(calls[0][2]['line'], '213')
-            self.assertNotIn('replace', calls[0][2])
+            self.assertEqual(result['status'], 'dry_run')
+            self.assertEqual(result['request']['phone'], '212')
+            self.assertEqual(result['request']['line'], '213')
+            self.assertNotIn('entry_id', result['request'])
+            self.assertEqual([call[2]['operation'] for call in calls], ['status'])
+
+    def test_alarm_read_failure_is_distinct_from_uncertain_write(self):
+        before = schedule()
+        before['alarm'].update(line='213', configured=True)
+        for action in ('on', 'off'):
+            failure = cisco.Refused('network_outcome_unknown')
+            code, result, calls = self.invoke(['alarm', action], responses=[failure])
+            self.assertEqual(code, 1)
+            self.assertEqual(result['status'], 'refused')
+            self.assertNotIn('action_id', result)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][2]['operation'], 'status')
+            code, result, calls = self.invoke(
+                ['alarm', action, '--idempotency-key', 'saved-alarm-123'],
+                responses=[before, failure])
+            self.assertEqual(code, 1)
+            self.assertEqual(result['status'], 'not_confirmed')
+            self.assertEqual(result['action_id'], 'saved-alarm-123')
+            self.assertEqual(len(calls), 2)
+
+    def test_alarm_reply_must_confirm_selected_saved_alarm_and_action(self):
+        before = schedule()
+        before['alarm'].update(line='213', configured=True)
+        for action in ('on', 'off'):
+            for changed in ('mapping', 'owner', 'configured', 'enabled', 'operation_result'):
+                after = copy.deepcopy(before)
+                after['alarm']['enabled'] = action == 'on'
+                if changed == 'mapping':
+                    after.update(phone='213', lines=['213'])
+                    after['timer']['line'] = '213'
+                elif changed == 'operation_result':
+                    after['operation_result'] = 'not_active'
+                else:
+                    key, value = {
+                        'owner': ('line', '212'),
+                        'configured': ('configured', False),
+                        'enabled': ('enabled', action != 'on'),
+                    }[changed]
+                    after['alarm'][key] = value
+                with self.subTest(action=action, changed=changed):
+                    code, result, calls = self.invoke(['alarm', action], responses=[before, after])
+                    self.assertEqual(code, 1)
+                    self.assertEqual(result['status'], 'not_confirmed')
+                    self.assertIn('action_id', result)
+                    self.assertEqual(len(calls), 2)
 
     def test_status_lists_both_slot_owners_and_timezone(self):
         for args in (['schedule'], ['timer'], ['alarm'], ['timer', 'status'], ['alarm', 'status']):
@@ -153,10 +287,11 @@ class ScheduleTests(unittest.TestCase):
 
     def test_gateway_down_does_not_block_ha_status_or_owned_cancellation(self):
         data = schedule(); data['gateway_fresh'] = False
+        data['alarm'].update(line='213', configured=True)
         for args in (['schedule'], ['timer', 'cancel'], ['alarm', 'off']):
             code, result, calls = self.invoke(args, response=data, gateway_failure=True)
             self.assertEqual(code, 0)
-            self.assertEqual(len(calls), 1)
+            self.assertEqual(len(calls), 2 if args == ['alarm', 'off'] else 1)
             self.assertEqual(calls[0][0], 'home_assistant')
             self.assertNotIn('phone', calls[0][2])
             self.assertEqual(result['phone_id'], '212')
