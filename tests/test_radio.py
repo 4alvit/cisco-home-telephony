@@ -189,11 +189,11 @@ class RadioIsolation(unittest.TestCase):
         self.assertEqual(args[args.index("-c:a") + 1], "pcm_s16le")
         self.assertNotIn("https", " ".join(args))
 
-    def test_agi_uses_wideband_channel_driver_and_returns_after_worker_hangup(self):
+    def run_agi(self, *, response="200 result=0\n", frames=50, alive=False, failed=False):
         token = uuid.UUID("00000000-0000-4000-8000-000000000001")
         listener = Mock()
         listener.getsockname.return_value = ("127.0.0.1", 32123)
-        call = Mock(failed=False)
+        call = Mock(failed=failed, frames=frames)
         cfg = json.dumps({"enabled": True, "stations": ["echo"], "max_seconds": 30})
         with patch.object(r.sys, "argv", ["radio.py", "echo"]), \
                 patch.object(r.sys, "stdin", io.StringIO("\n")), \
@@ -205,8 +205,13 @@ class RadioIsolation(unittest.TestCase):
                 patch.object(r, "Call", return_value=call), \
                 patch.object(r.threading, "Thread") as worker, \
                 patch.object(r.signal, "signal"), patch.object(r.signal, "alarm"), \
-                patch.object(r, "command", return_value="200 result=0\n") as command:
+                patch.object(r, "command", return_value=response) as command:
+            worker.return_value.is_alive.return_value = alive
             self.assertEqual(r.main(), 0)
+        return token, listener, call, worker, command
+
+    def test_agi_uses_wideband_channel_driver_and_returns_after_worker_hangup(self):
+        token, listener, call, worker, command = self.run_agi()
         self.assertEqual([item.args[0] for item in command.call_args_list], [
             f"EXEC Dial AudioSocket/127.0.0.1:32123/{token}/c(slin16),5,g",
             'SET VARIABLE RADIOSTATUS "ok"',
@@ -216,6 +221,16 @@ class RadioIsolation(unittest.TestCase):
         listener.bind.assert_called_once_with(("127.0.0.1", 0))
         listener.close.assert_called_once_with()
         self.assertTrue(call.close.called)
+
+    def test_agi_reports_failed_when_dial_is_rejected_or_worker_did_not_play(self):
+        for options in ({"response": "200 result=-1\n"}, {"response": "200 result=unknown\n"},
+                        {"frames": 0}, {"alive": True}, {"failed": True},
+                        {"frames": 0, "alive": True}):
+            with self.subTest(options=options):
+                _, _, call, _, command = self.run_agi(**options)
+                self.assertEqual(command.call_args_list[-1].args,
+                                 ('SET VARIABLE RADIOSTATUS "failed"',))
+                self.assertTrue(call.close.called)
 
     def test_slot_limit_releases_after_call(self):
         with tempfile.TemporaryDirectory() as tmp:

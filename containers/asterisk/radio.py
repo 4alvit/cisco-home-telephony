@@ -451,11 +451,16 @@ def main():
         # Dial's channel codec option prevents the app_audiosocket 8 kHz
         # conversion. The local leg answers immediately; g returns to AGI
         # after worker termination so RADIOSTATUS/failure handling still runs.
-        command(f"EXEC Dial AudioSocket/127.0.0.1:{listener.getsockname()[1]}"
-                f"/{token}/c(slin16),5,g")
+        response = command(f"EXEC Dial AudioSocket/127.0.0.1:{listener.getsockname()[1]}"
+                           f"/{token}/c(slin16),5,g")
         call.close()
         thread.join(timeout=3)
-        command('SET VARIABLE RADIOSTATUS "' + ("failed" if call.failed else "ok") + '"')
+        result = re.match(r"200 result=(-?\d+)(?:\s|$)", response)
+        # Dial can fail before the socket worker even accepts a connection.
+        # An untouched failed=False flag alone is not successful playback.
+        played = (result is not None and int(result[1]) >= 0
+                  and not thread.is_alive() and not call.failed and call.frames > 0)
+        command('SET VARIABLE RADIOSTATUS "' + ("ok" if played else "failed") + '"')
     except (OSError, ValueError, EOFError, KeyError, json.JSONDecodeError):
         # Never log request URLs, AGI environment, caller data or redirect query tokens.
         with contextlib.suppress(OSError):
