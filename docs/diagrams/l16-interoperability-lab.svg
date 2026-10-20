@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="760" viewBox="0 0 1120 760" role="img" aria-labelledby="title desc">
+  <title id="title">Isolated L16 interoperability laboratory</title>
+  <desc id="desc">Two distinct reference signals cross a loopback SIP and AudioSocket bridge inside a network-isolated Asterisk container. Packet diagnostics, exact PCM checks and G722 controls are separate from physical telephone acceptance.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0L9 4.5L0 9Z" fill="#d6ecff"/></marker>
+    <style>text{font-family:system-ui,Arial,sans-serif;fill:#ecf6ff}.title{font-size:29px;font-weight:700}.h{font-size:22px;font-weight:700}.body{font-size:17px}.small{font-size:15px;fill:#b6d1e4}.line{stroke:#d6ecff;stroke-width:3;fill:none;marker-end:url(#arrow)}</style>
+  </defs>
+  <rect width="1120" height="760" rx="24" fill="#0b192b"/>
+  <text x="38" y="52" class="title">L16 / 16000: prove each audio direction</text>
+  <text x="38" y="85" class="body">Synthetic signals • dedicated loopback PBX • network none • no physical phones</text>
+  <rect x="38" y="116" width="1044" height="330" rx="20" fill="#10243a" stroke="#6388a6" stroke-dasharray="8 6"/>
+  <text x="60" y="150" class="small">DISPOSABLE OWNED CONTAINER — no published ports, finite lifetime</text>
+  <rect x="60" y="175" width="290" height="230" rx="15" fill="#113d48" stroke="#4bd7c8" stroke-width="2"/>
+  <text x="80" y="211" class="h">Synthetic SIP peer</text>
+  <text x="80" y="244" class="body">Caller and callee roles</text>
+  <text x="80" y="275" class="body">Read PT from each SDP</text>
+  <text x="80" y="306" class="body">L16 PCM: big-endian</text>
+  <text x="80" y="337" class="body">320 samples / 640 bytes</text>
+  <text x="80" y="372" class="small">20 ms → timestamp +320</text>
+  <rect x="410" y="175" width="300" height="230" rx="15" fill="#233967" stroke="#8eaaff" stroke-width="2"/>
+  <text x="431" y="211" class="h">Asterisk 22.11.0</text>
+  <text x="431" y="244" class="body">PJSIP ↔ AudioSocket</text>
+  <text x="431" y="275" class="body">Explicit c(slin16) bridge</text>
+  <text x="431" y="306" class="body">Native call deadline</text>
+  <text x="431" y="337" class="body">Dedicated lab dialplan</text>
+  <text x="431" y="372" class="small">No household configuration</text>
+  <rect x="770" y="175" width="290" height="230" rx="15" fill="#41305c" stroke="#caa0ff" stroke-width="2"/>
+  <text x="790" y="211" class="h">AudioSocket peer</text>
+  <text x="790" y="244" class="body">Two distinct reference signals</text>
+  <text x="790" y="275" class="body">Type 0x12: 16 kHz mono</text>
+  <text x="790" y="306" class="body">PCM: little-endian</text>
+  <text x="790" y="337" class="body">Length header: big-endian</text>
+  <text x="790" y="372" class="small">20 ms → 640 PCM bytes</text>
+  <path d="M350 270H401" class="line"/>
+  <path d="M410 310H359" class="line"/>
+  <path d="M710 270H761" class="line"/>
+  <path d="M770 310H719" class="line"/>
+  <rect x="38" y="475" width="508" height="128" rx="16" fill="#163a32" stroke="#67cfa1"/>
+  <text x="60" y="510" class="h">Check bytes and timing</text>
+  <text x="60" y="543" class="body">Exact PCM each way • PT • sequence • clock</text>
+  <text x="60" y="576" class="small">Injected swaps, wrong clocks, pacing, loss and reorder</text>
+  <rect x="574" y="475" width="508" height="128" rx="16" fill="#43371e" stroke="#efc778"/>
+  <text x="596" y="510" class="h">G.722 control in both roles</text>
+  <text x="596" y="543" class="body">16 kHz audio ≠ 16 kHz RTP clock</text>
+  <text x="596" y="576" class="small">20 ms → timestamp +160 • actual codec + tone checks</text>
+  <rect x="38" y="632" width="1044" height="90" rx="16" fill="#3b2932" stroke="#dc8f9f"/>
+  <text x="60" y="666" class="h">Separate acceptance gate</text>
+  <text x="60" y="699" class="body">PBX lab success does not prove handset sound, firmware compatibility or safe live expiry.</text>
+</svg>
