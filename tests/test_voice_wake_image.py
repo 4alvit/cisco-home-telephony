@@ -198,6 +198,20 @@ class WakeImageBuildTests(unittest.TestCase):
 
 
 class BaseCompatibilityTests(unittest.TestCase):
+    def test_base_manifest_covers_every_file_copied_into_manual_image(self):
+        copied = {}
+        for line in (ROOT / "containers/voice/Dockerfile").read_text().splitlines():
+            if not line.startswith("COPY "):
+                continue
+            fields = shlex.split(line, comments=True)
+            destination = fields[-1]
+            for source in fields[1:-1]:
+                installed = (destination + Path(source).name
+                             if destination.endswith("/") else destination)
+                self.assertNotIn(source, copied)
+                copied[source] = installed
+        self.assertEqual(builder.BASE_FILES, copied)
+
     def test_manifest_reads_explicit_commit_not_current_dirty_tree(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

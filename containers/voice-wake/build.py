@@ -32,7 +32,7 @@ BASE_FILES = {
                     "phone_voice_control", "phone_voice_display", "phone_gateway",
                     "phone_apps", "phone_apps_ha")},
     **{f"voice_assistant/{name}.py": f"/workspace/voice_assistant/{name}.py"
-       for name in ("__init__", "config", "audio", "service", "ha", "playback")},
+       for name in ("__init__", "config", "audio", "service", "ha", "pipeline", "playback")},
     "containers/voice/requirements.lock": "/opt/voice/requirements.lock",
     "containers/voice/smoke.py": "/opt/voice/smoke.py",
     "containers/voice/stage_private.py": "/opt/voice/stage_private.py",
