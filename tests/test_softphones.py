@@ -75,6 +75,37 @@ class SoftphoneTests(unittest.TestCase):
             self.assertNotIn('auth-softphone-',self.read_configs(out)['pjsip.conf'])
             provision.generate(self.site,self.inventory,out);self.assertEqual(path.read_bytes(),saved)
 
+    def test_local_softphone_wideband_preference_retains_g711_and_endpoint_identity(self):
+        for transport in ('tcp', 'udp'):
+            with self.subTest(transport=transport), tempfile.TemporaryDirectory() as tmp:
+                site = copy.deepcopy(self.site)
+                site['softphones'][0]['transport'] = transport
+                provision.generate(site, self.inventory, tmp)
+                configs = self.read_configs(tmp)
+                self.check(configs, site)
+                secret = json.loads((Path(tmp) / 'softphone-secrets.json').read_text())['209']
+                endpoint, _ = softphones.render_client(site, site['softphones'][0], secret)
+                body = endpoint.split('\n[auth-softphone-', 1)[0]
+                values = dict(line.split('=', 1) for line in body.splitlines() if '=' in line)
+                self.assertEqual(configs['pjsip.conf'].count(endpoint), 1)
+                self.assertEqual(values['allow'].split(','), ['g722', 'ulaw', 'alaw'])
+                self.assertEqual(values['disallow'], 'all')
+                self.assertEqual(values['incoming_call_offer_pref'], 'local')
+                self.assertEqual(values['outgoing_call_offer_pref'], 'local_merge')
+                self.assertEqual(values['transport'], 'transport-' + transport)
+                self.assertEqual(values['auth'], 'auth-softphone-209')
+                self.assertEqual(values['permit'], '192.168.50.90/32')
+                self.assertEqual(values['direct_media'], 'no')
+                self.assertNotIn('preferred_codec_only', values)
+                self.assertFalse(any(key.startswith('codec_prefs_') for key in values))
+                for old in (
+                        endpoint.replace('allow=g722,ulaw,alaw', 'allow=ulaw,alaw'),
+                        endpoint.replace('outgoing_call_offer_pref=local_merge\n', '')):
+                    with self.subTest(stale=old), self.assertRaisesRegex(
+                            ValueError, 'softphone configuration differs'):
+                        softphones.check(site, dict(configs, **{
+                            'pjsip.conf': configs['pjsip.conf'].replace(endpoint, old)}))
+
     def test_distinct_clients_cannot_share_a_secret_or_reuse_cisco_secret(self):
         with tempfile.TemporaryDirectory() as tmp:
             out=Path(tmp);provision.generate(self.site,self.inventory,out)

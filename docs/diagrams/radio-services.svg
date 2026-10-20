@@ -30,12 +30,12 @@
       <text x="165" y="309" font-size="18" fill="#AAB9D0">No audio archive</text>
       <text x="508" y="211" font-size="26" font-weight="600">One worker per call</text>
       <text x="508" y="248" font-size="21">AGI → FFmpeg pipe</text>
-      <text x="508" y="281" font-size="20">8 kHz PCM · 20 ms frames</text>
+      <text x="508" y="281" font-size="20">16 kHz PCM · 20 ms frames</text>
       <text x="508" y="310" font-size="18" fill="#AAB9D0">Time + concurrency limits</text>
       <text x="853" y="212" font-size="27" font-weight="600">Asterisk</text>
       <text x="853" y="249" font-size="21">Loopback AudioSocket</text>
       <text x="853" y="282" font-size="20">Per-call UUID</text>
-      <text x="853" y="311" font-size="18" fill="#AAB9D0">G.711 to the phone</text>
+      <text x="853" y="311" font-size="18" fill="#AAB9D0">G.722 · G.711 fallback</text>
       <text x="1143" y="213" font-size="26" font-weight="600">Phone / Mac</text>
       <text x="1143" y="254" font-size="30" font-weight="700">701–710</text>
       <text x="1143" y="289" font-size="20">Hang up to stop</text>

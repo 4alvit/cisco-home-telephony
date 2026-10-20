@@ -29,10 +29,11 @@ def probe(name):
                 kind, data = radio.receive_frame(conn)
                 if kind == 0:
                     break
-                if kind != 0x10 or len(data) != 320:
+                if kind != radio.AUDIO_KIND or len(data) != radio.FRAME_BYTES:
                     raise ValueError("unexpected audio frame")
                 frames += 1
-                peak = max(peak, max(abs(x) for x in struct.unpack("<160h", data)))
+                peak = max(peak, max(abs(x) for x in struct.unpack(
+                    "<" + "h" * radio.FRAME_SAMPLES, data)))
     except (OSError, EOFError, ValueError):
         pass
     finally:
@@ -40,6 +41,7 @@ def probe(name):
     decoder_reaped = call.proc is not None and call.proc.poll() is not None
     worker_stopped = not thread.is_alive()
     return {"station": name, "decoded_frames": frames, "peak": peak,
+            "sample_rate": radio.SAMPLE_RATE,
             "decoder_reaped": decoder_reaped, "worker_stopped": worker_stopped,
             "passed": frames >= 25 and peak > 0 and decoder_reaped and worker_stopped}
 

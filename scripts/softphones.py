@@ -90,12 +90,17 @@ def render_client(site, client, password):
     if not isinstance(password, str) or not re.fullmatch(SECRET_PATTERN, password):
         raise ValueError('invalid softphone secret')
     extension, label = client['extension'], client.get('room', client['label'])
+    # Prefer wideband on local clients, retaining G.711-only client support.
+    # These are active Asterisk 22 policies; codec_prefs_* is reserved.
+    # https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/Module_Configuration/res_pjsip/#incoming_call_offer_pref
     pjsip = f'''[{extension}]
 type=endpoint
 transport=transport-{client['transport']}
 context=home
 disallow=all
-allow=ulaw,alaw
+allow=g722,ulaw,alaw
+incoming_call_offer_pref=local
+outgoing_call_offer_pref=local_merge
 auth=auth-softphone-{extension}
 aors={extension}
 direct_media=no

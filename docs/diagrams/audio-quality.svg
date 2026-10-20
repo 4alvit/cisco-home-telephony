@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="840" viewBox="0 0 1120 840" role="img" aria-labelledby="title desc">
+  <title id="title">Cisco 7945G radio: preserve 16 kHz audio and negotiate G.722</title>
+  <desc id="desc">The narrowband baseline downsamples radio to 8 kHz and permits G.711 only. The new source implementation decodes to 16 kHz PCM, uses an explicit AudioSocket slin16 channel and prefers G.722 on local endpoints. G.711 fallback remains. Digital testing, profile application and physical listening are separate acceptance steps. G722/8000 is normal RTP clock signaling.</desc>
+  <defs>
+    <style>
+      text { font-family: Arial, Helvetica, sans-serif; }
+      .title { font-size: 29px; font-weight: 700; fill: #f8fafc; }
+      .subtitle { font-size: 16px; fill: #cbd5e1; }
+      .section { font-size: 19px; font-weight: 700; fill: #0f172a; }
+      .label { font-size: 17px; font-weight: 700; fill: #0f172a; }
+      .body { font-size: 15px; fill: #334155; }
+      .small { font-size: 13px; fill: #475569; }
+    </style>
+  </defs>
+  <rect width="1120" height="840" rx="20" fill="#f1f5f9"/>
+  <path d="M20 0H1100Q1120 0 1120 20V114H0V20Q0 0 20 0" fill="#0f172a"/>
+  <text x="34" y="46" class="title">Better sound needs the whole audio path</text>
+  <text x="34" y="79" class="subtitle">Radio 708 and other stations · Cisco 7945G · Asterisk 22.11.0 · no paid codec required</text>
+
+  <text x="34" y="157" class="section">NARROWBAND BASELINE — two independent limits</text>
+  <g transform="translate(34 178)">
+    <rect width="236" height="137" rx="13" fill="#dbeafe" stroke="#93c5fd"/>
+    <text x="18" y="32" class="label">Curated radio source</text>
+    <text x="18" y="63" class="body">Original AAC or MP3</text>
+    <text x="18" y="89" class="body">Source quality may vary</text>
+    <text x="18" y="116" class="small">Metadata is not a listening test</text>
+  </g>
+  <text x="279" y="252" font-size="18" fill="#64748b">→</text>
+  <g transform="translate(306 178)">
+    <rect width="236" height="137" rx="13" fill="#fee2e2" stroke="#fca5a5"/>
+    <text x="18" y="32" class="label">8 kHz radio decoder</text>
+    <text x="18" y="63" class="body">Mono PCM16</text>
+    <text x="18" y="89" class="body">320 bytes per 20 ms</text>
+    <text x="18" y="116" class="small">High-frequency detail is discarded</text>
+  </g>
+  <text x="551" y="252" font-size="18" fill="#64748b">→</text>
+  <g transform="translate(578 178)">
+    <rect width="236" height="137" rx="13" fill="#ffedd5" stroke="#fdba74"/>
+    <text x="18" y="32" class="label">G.711-only endpoint</text>
+    <text x="18" y="63" class="body">ulaw / alaw</text>
+    <text x="18" y="89" class="body">Another 8 kHz restriction</text>
+    <text x="18" y="116" class="small">G.722 alone cannot undo step 2</text>
+  </g>
+  <text x="823" y="252" font-size="18" fill="#64748b">→</text>
+  <g transform="translate(850 178)">
+    <rect width="236" height="137" rx="13" fill="#e2e8f0" stroke="#cbd5e1"/>
+    <text x="18" y="32" class="label">Narrowband sound</text>
+    <text x="18" y="63" class="body">Telephone voice band</text>
+    <text x="18" y="89" class="body">Not an 8-bit PCM file</text>
+    <text x="18" y="116" class="small">Loss, clipping and hardware vary</text>
+  </g>
+
+  <text x="34" y="361" class="section">NEW SOURCE IMPLEMENTATION — deployment and listening must be verified separately</text>
+  <g transform="translate(34 382)">
+    <rect width="236" height="155" rx="13" fill="#dbeafe" stroke="#93c5fd"/>
+    <text x="18" y="32" class="label">Same radio source</text>
+    <text x="18" y="63" class="body">Keep curated URLs</text>
+    <text x="18" y="89" class="body">Keep the initial gain</text>
+    <text x="18" y="116" class="small">Compare bandwidth, not loudness</text>
+    <text x="18" y="139" class="small">No new MOH service</text>
+  </g>
+  <text x="279" y="466" font-size="18" fill="#64748b">→</text>
+  <g transform="translate(306 382)">
+    <rect width="236" height="155" rx="13" fill="#ccfbf1" stroke="#5eead4"/>
+    <text x="18" y="32" class="label">16 kHz radio decoder</text>
+    <text x="18" y="63" class="body">Mono PCM16</text>
+    <text x="18" y="89" class="body">640 bytes per 20 ms</text>
+    <text x="18" y="116" class="small">AudioSocket type 0x12</text>
+    <text x="18" y="139" class="small">32,000 PCM bytes per second</text>
+  </g>
+  <text x="551" y="466" font-size="18" fill="#64748b">→</text>
+  <g transform="translate(578 382)">
+    <rect width="236" height="155" rx="13" fill="#d1fae5" stroke="#6ee7b7"/>
+    <text x="18" y="32" class="label">Explicit 16 kHz input</text>
+    <text x="18" y="63" class="body">Dial AudioSocket</text>
+    <text x="18" y="89" class="body">Channel: c(slin16)</text>
+    <text x="18" y="116" class="small">Prefer G.722 on local endpoints</text>
+    <text x="18" y="139" class="small">Keep G.711 fallback</text>
+  </g>
+  <text x="823" y="466" font-size="18" fill="#64748b">→</text>
+  <g transform="translate(850 382)">
+    <rect width="236" height="155" rx="13" fill="#ede9fe" stroke="#c4b5fd"/>
+    <text x="18" y="32" class="label">G.722-capable phone</text>
+    <text x="18" y="63" class="body">Up to about 7 kHz band</text>
+    <text x="18" y="89" class="body">Handset and speaker</text>
+    <text x="18" y="116" class="small">Suitable wideband headset, too</text>
+    <text x="18" y="139" class="small">Actual codec must be checked</text>
+  </g>
+
+  <g transform="translate(34 569)">
+    <rect width="510" height="112" rx="13" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="20" y="31" class="label">G722/8000 in SDP is correct</text>
+    <text x="20" y="59" class="body">RTP clock: 8 kHz · audio sampling: 16 kHz</text>
+    <text x="20" y="85" class="small">48 kHz input does not extend the final G.722 audio bandwidth</text>
+  </g>
+  <g transform="translate(566 569)">
+    <rect width="520" height="112" rx="13" fill="#fef3c7" stroke="#fbbf24"/>
+    <text x="20" y="31" class="label">Verify three different things</text>
+    <text x="20" y="59" class="body">Digital path → applied profile / codec → heard result</text>
+    <text x="20" y="85" class="small">A passed test does not mean the physical phone was updated</text>
+  </g>
+  <text x="34" y="727" class="body">Digital acceptance: retain a 5–6 kHz test component; check duration, pitch, fallback and decoder cleanup.</text>
+  <text x="34" y="756" class="body">Physical acceptance: compare one phone on radio 708, then verify internal and Mac-to-phone calls.</text>
+  <text x="34" y="798" class="small">Separate interface: Cisco XML assistant RTP remains G.711 mu-law. This SIP/radio change does not alter its media contract.</text>
+</svg>

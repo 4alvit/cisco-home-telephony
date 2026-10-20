@@ -126,7 +126,7 @@ esac
             binary.write_text("""#!/bin/sh
 case "$2" in
   'pjsip show transports') printf '%s\\n' "$TEST_TRANSPORTS" ;;
-  'module show like app_audiosocket') printf '%s\\n' "$TEST_MODULE" ;;
+  'module show like chan_audiosocket') printf '%s\\n' "$TEST_MODULE" ;;
   *) exit 98 ;;
 esac
 """)
@@ -137,11 +137,18 @@ esac
             command[2] = command[2].replace("/var/lib/asterisk/agi-bin/radio.py", shlex.quote(str(root / "radio.py")))
             env = dict(os.environ, PATH=directory + os.pathsep + os.environ["PATH"],
                        TEST_TRANSPORTS="Transport: transport-udp udp 0 0 192.168.50.58:5060\nTransport: transport-tcp tcp 0 0 192.168.50.58:5060")
-            for state, expected in (("Running", 0), ("Not Running", 1)):
-                env["TEST_MODULE"] = "app_audiosocket.so AudioSocket 0 " + state
-                result = subprocess.run(command, env=env, capture_output=True, timeout=5)
-                self.assertEqual(result.returncode, expected)
-            env["TEST_MODULE"] = "app_audiosocket.so AudioSocket 0 Running"
+            # The old application can be loaded while the new channel driver
+            # is absent. Only the channel driver can preserve the 16 kHz path.
+            for module, success in (
+                    ("chan_audiosocket.so AudioSocket Channel 0 Running", True),
+                    ("chan_audiosocket.so AudioSocket Channel 0 Not Running", False),
+                    ("app_audiosocket.so AudioSocket Application 0 Running", False),
+                    ("Module Description Use Count Status Support Level\n0 modules loaded", False)):
+                with self.subTest(module=module):
+                    env["TEST_MODULE"] = module
+                    result = subprocess.run(command, env=env, capture_output=True, timeout=5)
+                    self.assertEqual(result.returncode == 0, success)
+            env["TEST_MODULE"] = "chan_audiosocket.so AudioSocket Channel 0 Running"
             (root / "radio.py").unlink()
             self.assertNotEqual(subprocess.run(command, env=env, capture_output=True, timeout=5).returncode, 0)
 

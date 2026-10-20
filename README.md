@@ -27,6 +27,8 @@ conversion to MPP is not required.
   walks through private configuration, k3s deployment, phone registration and acceptance checks.
 - **Diagnose a problem:** follow the [Asterisk operations guide](docs/asterisk-operations.md)
   to separate power/provisioning, SIP registration, call routing, RTP audio and remote control.
+- **Improve call and radio sound:** [wideband audio](docs/audio-quality.md) explains
+  G.722, the 16 kHz radio path, codec checks and safe fallback to G.711.
 - **Look up a command:** the [CLI reference](docs/cli.md) covers calls, one-time speaker
   intercom, DND, timers, weekday alarms, text and images.
 - **Find a number:** the [combined directory](docs/phone-directory.md) includes
@@ -199,7 +201,7 @@ Assistant Assist. Optional **640** plays bounded alarm audio, and **701-710**
 select internet radio when enabled. External SIP profiles are disabled by
 default; there are no unrestricted PSTN routes, voicemail or emergency calls. Use a working external phone service for emergency calls.
 
-Default profile: **SIP TCP 5060**, G.711, and RTP through Asterisk. The server also
+Default profile: **SIP TCP 5060**, G.722 preferred with G.711 fallback, and RTP through Asterisk. The server also
 listens on UDP 5060 for explicitly configured UDP phones. Asterisk RTP uses UDP
 **10000–10199**; phone RTP uses **16384–16482**. Temporary TFTP uses UDP
 **69 + 20000–20031**, with a provisioning window of up to one hour. Use a trusted
