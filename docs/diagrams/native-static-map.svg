@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900" role="img" aria-labelledby="title desc">
+  <title id="title">Native firmware: recovered paths and remaining gates</title>
+  <desc id="desc">Private retained images can now be mapped to startup, display and DSP interfaces. Verification and loader compatibility remain gates before custom-code installation.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8" fill="none" stroke="#64748b" stroke-width="2"/></marker>
+    <style>text{font-family:Arial,Helvetica,sans-serif;fill:#18334e}.title{font-size:34px;font-weight:700}.sub{font-size:19px;fill:#536c82}.label{font-size:22px;font-weight:700}.body{font-size:18px}.small{font-size:16px;fill:#536c82}.edge{stroke:#64748b;stroke-width:2.5;fill:none;marker-end:url(#arrow)}</style>
+  </defs>
+  <rect width="1400" height="900" rx="24" fill="#f2f6fb"/>
+  <text x="55" y="65" class="title">Native firmware: from opaque bytes to mapped interfaces</text>
+  <text x="55" y="102" class="sub">Static evidence • SIP45.9-4-2SR4-3S • No firmware execution or device changes</text>
+  <rect x="55" y="145" width="390" height="135" rx="16" fill="#e1eaff" stroke="#89a6e7" stroke-width="2"/>
+  <text x="80" y="183" class="label">Retained private inputs</text>
+  <text x="80" y="217" class="body">Hashes, ELF relocations, CVM payload</text>
+  <text x="80" y="248" class="small">Vendor bytes and disassembly stay private</text>
+  <path d="M450 213 H505" stroke="#64748b" stroke-width="2.5" fill="none"/>
+  <path d="M503 208 L513 213 L503 218 Z" fill="#64748b"/>
+  <rect x="520" y="145" width="825" height="135" rx="16" fill="#dff5f1" stroke="#63b9ad" stroke-width="2"/>
+  <text x="545" y="183" class="label">Bounded segmented-image map</text>
+  <text x="545" y="217" class="body">File-backed regions + memory-only regions + declared entry</text>
+  <text x="545" y="248" class="small">Exact CVM byte coverage; one memory-boundary discrepancy remains explicit</text>
+  <path d="M700 285 V314 H260 V335 M700 314 V335 M700 314 H1140 V335" stroke="#64748b" stroke-width="2.5" fill="none"/>
+  <path d="M255 333 L260 343 L265 333 Z M695 333 L700 343 L705 333 Z M1135 333 L1140 343 L1145 333 Z" fill="#64748b"/>
+  <rect x="55" y="350" width="400" height="210" rx="16" fill="#e9e4ff" stroke="#a69bd8" stroke-width="2"/>
+  <text x="80" y="390" class="label">Startup + runtime ABI</text>
+  <text x="80" y="430" class="body">Argument vector → initialization → main</text>
+  <text x="80" y="464" class="body">Runtime table and syscall convention</text>
+  <text x="80" y="503" class="small">Corroborated across three programs</text>
+  <text x="80" y="530" class="small">Relocatable modules use a different path</text>
+  <rect x="500" y="350" width="400" height="210" rx="16" fill="#e1f2ff" stroke="#78b4df" stroke-width="2"/>
+  <text x="525" y="390" class="label">Display caller ↔ driver</text>
+  <text x="525" y="430" class="body">Capabilities, drawing request, stride</text>
+  <text x="525" y="464" class="body">ARGB → RGB565; pixel duplication</text>
+  <text x="525" y="503" class="small">Logical 320 × 240 coordinates</text>
+  <text x="525" y="530" class="small">Frame timing and call ownership unknown</text>
+  <rect x="945" y="350" width="400" height="210" rx="16" fill="#fff0d7" stroke="#dcaf60" stroke-width="2"/>
+  <text x="970" y="390" class="label">Host ↔ DSP buffers</text>
+  <text x="970" y="430" class="body">Control messages ≠ audio frames</text>
+  <text x="970" y="464" class="body">Internal linear-audio branch mapped</text>
+  <text x="970" y="503" class="small">Consistent with 16-bit / 16-kHz audio</text>
+  <text x="970" y="530" class="small">SIP reachability and packing unresolved</text>
+  <path d="M260 565 V595 H700 V620 M700 565 V620 M1140 565 V595 H700" stroke="#64748b" stroke-width="2.5" fill="none"/>
+  <path d="M695 618 L700 628 L705 618 Z" fill="#64748b"/>
+  <rect x="55" y="635" width="1290" height="140" rx="16" fill="#ffe6e4" stroke="#d88680" stroke-width="2"/>
+  <text x="80" y="675" class="label">Custom-code installation remains unproven</text>
+  <text x="80" y="714" class="body">Map authenticated verification + loader setup + relocation rules + authorized deployment route</text>
+  <text x="80" y="746" class="small">Mapped interfaces do not prove installability, sample-byte order, a video decoder or live performance.</text>
+  <text x="55" y="831" class="label">Next checkpoint: 2–5 engineering days of focused static work</text>
+  <text x="55" y="865" class="small">Keep server-side applications moving; make the native execution decision from evidence.</text>
+</svg>
