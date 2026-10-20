@@ -29,6 +29,10 @@ VOICE_PUBLIC_ERRORS = frozenset((
     'voice_state_unavailable', 'voice_owner_unavailable', 'voice_start_failed',
     'voice_start_uncertain', 'voice_signal_failed', 'voice_session_failed',
     'voice_stop_unconfirmed'))
+VOICE_EXTERNAL_OWNER_NOTE = (
+    "The gateway cannot stop this session. For a wake Job, use Stop on its live wake screen, "
+    "or have the operator shut down the exact owning Job with its normal grace period. "
+    "Confirm cleanup before starting again.")
 MAX_FILE = 2 * 1024 * 1024
 SCHEDULE_COMMANDS = ['schedule', 'timer [status]', 'timer start MINUTES [--replace]',
     'timer cancel', 'alarm [status]', 'alarm set HH:MM --days DAYS [--enable] [--replace]',
@@ -574,14 +578,26 @@ def voice_command(args, config, *, on_dispatch=None):
                 'selected_line': args.extension, 'microphone_started': False}
     require('valid' not in value, 'invalid_voice_response')
     value = voice_status(value)
+    # Use only validated public fields; a foreign journal is not a local child
+    # that this gateway can signal. Recovery alone does not imply foreign ownership.
+    external_owner = (value['state'] == 'external_owner'
+                      or value.get('error') == 'voice_owner_unavailable')
+    guidance = ({'gateway_stop_available': False, 'reason': 'voice_owner_unavailable',
+                 'note': VOICE_EXTERNAL_OWNER_NOTE} if external_owner else {})
     if operation == 'stop':
         require(value['session_id'] == args.session_id, 'voice_session_changed')
         if args.dry_run:
+            if external_owner:
+                return {'status': 'unavailable', 'action': 'voice_stop',
+                        'session_id': args.session_id, 'selected_line': args.extension,
+                        'voice': value, **guidance}
             return {'status': 'dry_run', 'action': 'voice_stop',
                     'session_id': args.session_id, 'selected_line': args.extension}
     elif operation == 'start':
         require(value['session_id'] is not None, 'invalid_voice_response')
     result = {'status': 'ok' if operation == 'status' else 'accepted', 'voice': value}
+    if operation == 'status':
+        result.update(guidance)
     if key is not None:
         result['action_id'] = key
     return result
@@ -815,7 +831,11 @@ def main(argv=None):
                     print('Reason: ' + value['error'])
                 if 'action_id' in result:
                     print('Action: ' + result['action_id'])
-            return int(result.get('voice', {}).get('state') in {
+                if result.get('gateway_stop_available') is False:
+                    print('Gateway Stop available: False')
+                    print(result['note'])
+            return int(result.get('gateway_stop_available') is False
+                       or result.get('voice', {}).get('state') in {
                 'failed', 'recovery_required', 'external_owner'})
         phone = None
         if args.command not in ('schedule', 'timer', 'alarm'):

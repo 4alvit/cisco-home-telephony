@@ -188,7 +188,16 @@ never rearms automatically. Stop requires the exact ID returned by Start or
 status; repeating an old Stop cannot stop a replacement session.
 
 Start dry-run validates through the gateway without launching the runner.
-Stop dry-run only reads status and checks the ID. `--json` returns sanitized
+Stop dry-run reads status and checks both the exact ID and whether the reported
+ownership permits gateway Stop; it sends no Stop POST. For `external_owner` or
+the sanitized error `voice_owner_unavailable`, it returns
+`status: "unavailable"`, `gateway_stop_available: false`, and exits nonzero,
+retaining the sanitized voice status and session ID. Status and this dry run
+explain how to use the live wake screen's **Stop** or the
+[exact wake Job's normal shutdown](voice-wake-k3s.md#start-and-stop-an-attended-attempt).
+Local `recovery_required` sessions retain gateway Stop unless ownership is
+reported unavailable. A successful dry run does not guarantee later delivery
+or confirm that capture has stopped. `--json` returns sanitized
 metadata. An accepted request is not proof of capture or physical closure:
 check `stop_confirmed`, and treat `recovery_required` as unresolved ownership.
 Do not automatically retry an uncertain Start. See the

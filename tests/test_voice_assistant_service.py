@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import asdict
 import io
 import json
 from pathlib import Path
@@ -9,7 +10,7 @@ from types import SimpleNamespace
 import unittest
 import wave
 
-from voice_assistant.config import NeverWake, build_service, load_config, private_path
+from voice_assistant.config import NeverWake, build_service, load_config, private_path, validate_config
 from voice_assistant.ha import AudioPayload, HAClient
 from voice_assistant.playback import FFmpegDecoder, PCMOutput, WavePlayback, decode_wave
 from voice_assistant.service import AssistantService, ServiceSettings
@@ -76,13 +77,14 @@ class Playback:
 
 
 class ServiceTests(unittest.IsolatedAsyncioTestCase):
-    def make(self, *, settings=None, assist=None, playback=None, factory=None, phones=None):
+    def make(self, *, settings=None, assist=None, playback=None, factory=None, phones=None,
+             on_reply=None):
         self.assist, self.playback = assist or Assist(), playback or Playback()
         self.events = []
         service = AssistantService(settings or ServiceSettings(enabled=True, duplicate_window_seconds=0),
                                    phones or {"alpha": True, "beta": True},
                                    factory or (lambda _: Trigger()), self.assist, self.playback,
-                                   self.events.append)
+                                   self.events.append, on_reply=on_reply)
         self.addAsyncCleanup(service.close)
         return service
 
@@ -239,6 +241,180 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         service.end_utterance("alpha", stream)
         await service.wait_idle("alpha")
         self.assertIsNone(self.assist.calls[-1])
+
+    async def test_reply_callback_is_current_speaking_stream_before_playback(self):
+        delivered = []
+        def on_reply(phone, stream, text):
+            self.assertEqual(service.status(phone).state, "speaking")
+            self.assertTrue(service.owns_reply(phone, stream))
+            self.assertEqual(self.playback.plays, [])
+            delivered.append((phone, stream, text))
+        service = self.make(on_reply=on_reply)
+        stream = await service.activate("alpha")
+        self.assertFalse(service.owns_reply("alpha", stream))
+        service.end_utterance("alpha", stream)
+        await service.wait_idle("alpha")
+        self.assertEqual(delivered, [("alpha", stream, "Synthetic response")])
+        self.assertFalse(service.owns_reply("alpha", stream))
+        self.assertFalse(service.owns_reply("unknown", stream))
+        self.assertNotIn("Synthetic response",
+                         json.dumps([asdict(event) for event in self.events]))
+        self.assertEqual(set(asdict(service.status("alpha"))), {"phone_id", "state", "reason"})
+
+    async def test_reply_text_is_xml_safe_bounded_and_never_coerces_objects(self):
+        class TextAssist(Assist):
+            async def run(self, *args, **kwargs):
+                result = await super().run(*args, **kwargs)
+                result.text = self.text
+                return result
+        class DangerousText:
+            def __str__(self):
+                raise AssertionError("untrusted response was coerced")
+        class TextSubclass(str):
+            pass
+        prefix = 'A < B & "C"\t\n\r'
+        for text, expected in (
+                (prefix + "\x00\x01\x1f\ud800\ufffe\uffff" + "😀" * 2000,
+                 (prefix + "😀" * 2000)[:1000]),
+                ("\x00" * 4096 + "do not scan this suffix", None),
+                ("", None), (None, None), (123, None),
+                (DangerousText(), None), (TextSubclass("not exact str"), None)):
+            with self.subTest(kind=type(text).__name__):
+                assist, delivered = TextAssist(), []
+                assist.text = text
+                service = self.make(assist=assist, on_reply=lambda *args: delivered.append(args))
+                stream = await service.activate("alpha")
+                service.end_utterance("alpha", stream)
+                await service.wait_idle("alpha")
+                self.assertEqual(delivered, [] if expected is None else
+                                 [("alpha", stream, expected)])
+                self.assertEqual(service.status("alpha").reason, "turn_complete")
+                self.assertEqual(len(self.playback.plays), 1)
+
+    async def test_reply_callback_failure_cannot_break_playback_or_cleanup(self):
+        def broken(*args):
+            raise RuntimeError("synthetic private response in UI failure")
+        service = self.make(on_reply=broken)
+        stream = await service.activate("alpha")
+        service.end_utterance("alpha", stream)
+        await service.wait_idle("alpha")
+        self.assertEqual(len(self.playback.plays), 1)
+        self.assertIn("alpha", self.playback.stops)
+        self.assertEqual(service.status("alpha").reason, "turn_complete")
+        self.assertNotIn("synthetic private", json.dumps([asdict(e) for e in self.events]))
+        await service.activate("beta")
+        self.assertEqual(service.status("beta").state, "listening")
+
+    async def test_late_provider_reply_after_preemption_or_replacement_is_suppressed(self):
+        class LateAssist(Assist):
+            async def run(self, audio, **kwargs):
+                self.started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    # A provider can finish despite cancellation. Its old token
+                    # still must not regain display ownership.
+                    return SimpleNamespace(conversation_id="old", text="Late private reply",
+                                           tts_url=None)
+        for action in ("preempt", "replace"):
+            with self.subTest(action=action):
+                replies, assist = [], LateAssist()
+                service = self.make(assist=assist, on_reply=lambda *args: replies.append(args))
+                old = await service.activate("alpha")
+                await asyncio.wait_for(assist.started.wait(), 1)
+                if action == "preempt":
+                    await service.preempt("alpha", "call")
+                else:
+                    new = await service.listen("alpha")
+                    self.assertNotEqual(old, new)
+                    self.assertEqual(service.status("alpha").state, "armed")
+                self.assertEqual(replies, [])
+                self.assertEqual(self.playback.plays, [])
+                self.assertFalse(service.owns_reply("alpha", old))
+
+    async def test_preemption_during_playback_revokes_reply_ownership(self):
+        class HeldPlayback(Playback):
+            def __init__(self):
+                super().__init__()
+                self.started = asyncio.Event()
+            async def play(self, phone, result):
+                self.started.set()
+                await asyncio.Event().wait()
+        playback, replies = HeldPlayback(), []
+        service = self.make(playback=playback, on_reply=lambda *args: replies.append(args))
+        stream = await service.activate("alpha")
+        service.end_utterance("alpha", stream)
+        await asyncio.wait_for(playback.started.wait(), 1)
+        self.assertTrue(service.owns_reply("alpha", stream))
+        self.assertFalse(service.owns_reply("alpha", "stale-stream"))
+        self.assertFalse(service.owns_reply("beta", stream))
+        await service.preempt("alpha", "call")
+        self.assertEqual(len(replies), 1)
+        self.assertFalse(service.owns_reply("alpha", stream))
+        self.assertEqual(service.status("alpha").state, "stopped")
+
+    async def test_cancellation_queued_at_speaking_suppresses_reply_and_playback(self):
+        for target in ("current", "owner"):
+            with self.subTest(target=target):
+                replies = []
+                service = self.make(on_reply=lambda *args: replies.append(args))
+                def cancel_when_speaking(event):
+                    self.events.append(event)
+                    if event.state == "speaking":
+                        task = (asyncio.current_task() if target == "current" else
+                                service._sessions[event.phone_id].task)
+                        task.cancel()
+                service._on_event = cancel_when_speaking
+                stream = await service.activate("alpha")
+                service.end_utterance("alpha", stream)
+                await service.wait_idle("alpha")
+                self.assertEqual(replies, [])
+                self.assertEqual(self.playback.plays, [])
+                self.assertIn("alpha", self.playback.stops)
+                self.assertFalse(service.owns_reply("alpha", stream))
+
+    async def test_cancellation_queued_by_reply_callback_prevents_playback(self):
+        replies = []
+        def on_reply(*args):
+            replies.append(args)
+            asyncio.current_task().cancel()
+        service = self.make(on_reply=on_reply)
+        stream = await service.activate("alpha")
+        service.end_utterance("alpha", stream)
+        await service.wait_idle("alpha")
+        self.assertEqual(replies, [("alpha", stream, "Synthetic response")])
+        self.assertEqual(self.playback.plays, [])
+        self.assertIn("alpha", self.playback.stops)
+        self.assertFalse(service.owns_reply("alpha", stream))
+
+    async def test_builder_reply_callback_requires_explicit_config_opt_in(self):
+        for option in ("missing", False, True):
+            with self.subTest(option=option), tempfile.TemporaryDirectory() as tmp:
+                config = load_config(Path(__file__).parents[1] /
+                                     "examples/local-voice-assistant.example.json")
+                config.pop("display_reply_text", None)
+                if option != "missing":
+                    config["display_reply_text"] = option
+                config["service"].update(enabled=True, duplicate_window_seconds=0)
+                config["phones"] = {"alpha": True}
+                root = Path(tmp)
+                (root / ".local/voice").mkdir(parents=True)
+                (root / ".local/voice/ha-token.txt").write_text("synthetic-token")
+                replies = []
+                class Sink:
+                    async def stop(self, phone):
+                        pass
+                service = build_service(config, root, Sink(),
+                                        on_reply=lambda *args: replies.append(args))
+                service.assist = Assist()
+                try:
+                    stream = await service.activate("alpha")
+                    service.end_utterance("alpha", stream)
+                    await service.wait_idle("alpha")
+                    self.assertEqual(replies, [("alpha", stream, "Synthetic response")]
+                                     if option is True else [])
+                finally:
+                    await service.close()
 
     async def test_preempt_cancels_pending_turn_and_invalidates_old_frames(self):
         service = self.make()
@@ -516,6 +692,27 @@ class ConfigAndAudioTests(unittest.TestCase):
         config = load_config(Path(__file__).parents[1] / "examples/local-voice-assistant.example.json")
         self.assertFalse(config["service"]["enabled"])
         self.assertFalse(any(config["phones"].values()))
+
+    def test_display_reply_option_accepts_only_exact_booleans_and_rejects_unknown_keys(self):
+        example = Path(__file__).parents[1] / "examples/local-voice-assistant.example.json"
+        for value in (False, True):
+            config = load_config(example)
+            config["display_reply_text"] = value
+            self.assertIs(validate_config(config)["display_reply_text"], value)
+        config = load_config(example)
+        config.pop("display_reply_text", None)
+        self.assertFalse(validate_config(config).get("display_reply_text", False))
+        for value in ("true", "false", 1, 0, None, [], {}):
+            with self.subTest(value=value):
+                config = load_config(example)
+                config["display_reply_text"] = value
+                with self.assertRaisesRegex(ValueError, "display_reply_text"):
+                    validate_config(config)
+        config = load_config(example)
+        config["display_reply_text"] = True
+        config["display_reply_history"] = True
+        with self.assertRaises(ValueError):
+            validate_config(config)
 
     def test_private_paths_reject_escape_including_symlinks(self):
         with tempfile.TemporaryDirectory() as tmp:

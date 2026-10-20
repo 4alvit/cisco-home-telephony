@@ -36,13 +36,22 @@ async def run_session(args, config, private, phone, voice):
     sink = RtpPCMSink(session, phone['id'])
     states = []
     display = None
+    display_ref = None
     controller = None
     stopped = threading.Event()
+    captions_stopped = threading.Event()
     loop = asyncio.get_running_loop()
+
+    def request_stop(reason='explicit_stop'):
+        captions_stopped.set()
+        if controller:
+            controller.request_stop(reason)
 
     def on_event(event):
         states.append(event.state)
         if display and event.reason != 'new_session':
+            if event.state in ('stopped', 'error'):
+                captions_stopped.set()
             labels = {'armed': 'Listening', 'listening': 'Listening', 'thinking': 'Thinking',
                       'speaking': 'Speaking', 'stopped': 'Stopped', 'error': 'Error'}
             try:
@@ -54,15 +63,30 @@ async def run_session(args, config, private, phone, voice):
             except Exception:
                 # A missing status display stops capture instead of leaving an
                 # invisible listener active. Initial setup failure also aborts.
-                if controller:
-                    controller.request_stop()
+                request_stop()
+
+    def on_reply(phone_id, stream_id, text):
+        # Replies belong only to this ephemeral display, never to state events
+        # or the JSON report. No fetch, push, sleep or media-lease extension.
+        if (captions_stopped.is_set() or stopped.is_set() or display is None
+                or display_ref is None or display.session_ref is not display_ref
+                or phone_id != phone['id'] or session.state != 'active'
+                or not service.owns_reply(phone_id, stream_id)):
+            return
+        try:
+            display.update_status('Speaking', text)
+        except Exception:
+            request_stop()
 
     def display_stop(*_args):
+        captions_stopped.set()
         if controller:
-            loop.call_soon_threadsafe(controller.request_stop, 'display_stop')
+            loop.call_soon_threadsafe(request_stop, 'display_stop')
         return stopped.wait(5) and session.stop_confirmed
 
     service = build_service(voice, Path(args.workspace).resolve(), sink, on_event=on_event,
+                            on_reply=(on_reply if voice.get('display_reply_text') is True
+                                      and args.display_port else None),
                             compressed_decoder=FFmpegDecoder(args.ffmpeg, max_seconds=30))
     controller = PhoneVoiceController(session, service, phone['id'], duration=config['duration_seconds'],
                                       receive_idle_seconds=config.get('receive_idle_seconds', 3))
@@ -80,13 +104,15 @@ async def run_session(args, config, private, phone, voice):
                                          request_timeout=8)
             display.start()
             ref = display.start_status('Thinking', 'Preparing a bounded voice session.')
+            display_ref = ref
             await asyncio.to_thread(gateway.execute, phone, ref.page_url, 2)
         for number in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(number, controller.request_stop, 'shutdown')
+            loop.add_signal_handler(number, request_stop, 'shutdown')
         result = await controller.run(mode='wake' if voice['wake']['mode'] == 'onnx' else 'manual')
     except Exception:
         error = 'voice_session_failed'
     finally:
+        captions_stopped.set()
         async def cleanup():
             nonlocal report
             cancelled = False

@@ -32,7 +32,8 @@ def dry_value():
 
 
 class VoiceCLITests(unittest.TestCase):
-    def invoke(self, args, *, value=None, envelope=None, failure=None, prefix=None):
+    def invoke(self, args, *, value=None, envelope=None, failure=None, prefix=None,
+               line='202', human=False):
         calls = []
         def request(path, body=None):
             calls.append((path, copy.deepcopy(body)))
@@ -47,8 +48,9 @@ class VoiceCLITests(unittest.TestCase):
         with mock.patch.object(cisco, 'load_config', return_value={}), \
              mock.patch.object(cisco.Gateway, 'request', side_effect=request), \
              contextlib.redirect_stdout(output):
-            code = cisco.main([*(prefix or ['--json']), '202', 'voice', *args])
-        return code, json.loads(output.getvalue()), calls
+            options = prefix if prefix is not None else ([] if human else ['--json'])
+            code = cisco.main([*options, line, 'voice', *args])
+        return code, output.getvalue() if human else json.loads(output.getvalue()), calls
 
     def start_args(self, *, dry=False):
         return ['start', '--idempotency-key', 'synthetic-request', '--attended',
@@ -112,6 +114,92 @@ class VoiceCLITests(unittest.TestCase):
         code, _result, calls = self.invoke(args, value=dict(status_value(), session_id='b' * 32))
         self.assertEqual(code, 1)
         self.assertEqual(len(calls), 1)
+
+    def test_foreign_owner_status_and_stop_dry_run_explain_unavailable_gateway_stop(self):
+        for line in ('201', '202'):
+            for state, reason in (('external_owner', PRIVATE),
+                                  ('recovery_required', 'voice_owner_unavailable'),
+                                  ('stopped', 'voice_owner_unavailable')):
+                for operation in ('status', 'stop'):
+                    with self.subTest(line=line, state=state, operation=operation):
+                        value = dict(status_value(), state=state, error=reason,
+                                     stop_confirmed=False, note=PRIVATE,
+                                     gateway_stop_available=True, job_name=PRIVATE)
+                        args = (['status'] if operation == 'status' else
+                                ['stop', '--session-id', SESSION, '--dry-run'])
+                        code, result, calls = self.invoke(args, line=line, value=value)
+                        self.assertEqual(code, 1)
+                        self.assertEqual(calls, [('/v1/phones/' + line + '/voice_status', None)])
+                        self.assertEqual(result['status'], 'ok' if operation == 'status' else 'unavailable')
+                        self.assertFalse(result['gateway_stop_available'])
+                        self.assertEqual(result['reason'], 'voice_owner_unavailable')
+                        self.assertIn('gateway cannot stop', result['note'])
+                        self.assertIn('live wake screen', result['note'])
+                        self.assertIn('exact owning Job with its normal grace period', result['note'])
+                        self.assertIn('Confirm cleanup', result['note'])
+                        self.assertEqual(result['voice']['session_id'], SESSION)
+                        self.assertEqual(result['voice']['phone'], '201')
+                        self.assertEqual(result['voice']['line'], '202')
+                        self.assertNotIn(PRIVATE, json.dumps(result))
+                        self.assertNotIn('action_id', result)
+                        if operation == 'stop':
+                            self.assertEqual(result['action'], 'voice_stop')
+                            self.assertEqual(result['selected_line'], line)
+                            self.assertEqual(result['session_id'], SESSION)
+
+    def test_human_output_preserves_foreign_owner_guidance(self):
+        for line in ('201', '202'):
+            for args in (['status'], ['stop', '--session-id', SESSION, '--dry-run']):
+                with self.subTest(line=line, operation=args[0]):
+                    value = dict(status_value(), state='recovery_required',
+                                 error='voice_owner_unavailable', stop_confirmed=False)
+                    code, output, calls = self.invoke(args, line=line, human=True, value=value)
+                    self.assertEqual(code, 1)
+                    self.assertEqual(calls, [('/v1/phones/' + line + '/voice_status', None)])
+                    self.assertIn('Gateway Stop available: False', output)
+                    self.assertIn('gateway cannot stop', output)
+                    self.assertIn('live wake screen', output)
+                    self.assertIn('Confirm cleanup', output)
+                    self.assertNotIn(PRIVATE, output)
+
+    def test_foreign_stop_dry_run_rejects_wrong_exact_session_before_guidance(self):
+        value = dict(status_value(), state='external_owner', stop_confirmed=False)
+        code, result, calls = self.invoke(
+            ['stop', '--session-id', 'b' * 32, '--dry-run'], value=value)
+        self.assertEqual(code, 1)
+        self.assertEqual(result['status'], 'refused')
+        self.assertEqual(result['reason'], 'voice_session_changed')
+        self.assertNotIn('gateway_stop_available', result)
+        self.assertEqual(calls, [('/v1/phones/202/voice_status', None)])
+
+    def test_local_recovery_still_allows_stop_dry_run_and_direct_stop(self):
+        for line in ('201', '202'):
+            with self.subTest(line=line):
+                value = dict(status_value(), state='recovery_required',
+                             error='voice_stop_unconfirmed', stop_confirmed=False)
+                args = ['stop', '--session-id', SESSION]
+                code, result, calls = self.invoke([*args, '--dry-run'], line=line, value=value)
+                self.assertEqual(code, 0)
+                self.assertEqual(result['status'], 'dry_run')
+                self.assertNotIn('gateway_stop_available', result)
+                self.assertEqual(calls, [('/v1/phones/' + line + '/voice_status', None)])
+                code, result, calls = self.invoke(args, line=line, value=value)
+                self.assertEqual(code, 1)  # Unconfirmed cleanup still needs attention.
+                self.assertEqual(result['status'], 'accepted')
+                self.assertNotIn('gateway_stop_available', result)
+                self.assertEqual(calls, [('/v1/phones/' + line + '/voice_stop', {
+                    'idempotency_key': 'voice-stop-' + SESSION, 'session_id': SESSION})])
+
+    def test_untrusted_error_and_extra_fields_cannot_invent_foreign_ownership(self):
+        value = dict(status_value(), error={'reason': 'voice_owner_unavailable', 'secret': PRIVATE},
+                     gateway_stop_available=False, note=PRIVATE, state_hint='external_owner')
+        for args in (['status'], ['stop', '--session-id', SESSION, '--dry-run']):
+            code, result, calls = self.invoke(args, value=value)
+            self.assertEqual(code, 0)
+            self.assertNotIn('gateway_stop_available', result)
+            self.assertNotIn('note', result)
+            self.assertNotIn(PRIVATE, json.dumps(result))
+            self.assertEqual(calls, [('/v1/phones/202/voice_status', None)])
 
     def test_start_dry_run_requires_strict_bounded_validation_response(self):
         code, result, calls = self.invoke(self.start_args(dry=True), value=dry_value())

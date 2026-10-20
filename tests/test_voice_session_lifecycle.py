@@ -5,6 +5,7 @@ import asyncio
 from collections import Counter
 from contextlib import ExitStack
 import importlib.util
+import http.client
 import io
 import json
 from pathlib import Path
@@ -13,6 +14,8 @@ import threading
 from types import SimpleNamespace
 import unittest
 from unittest import mock
+from urllib.parse import urlsplit
+import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +25,11 @@ subject = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = subject
 SPEC.loader.exec_module(subject)
 import phone_voice_display
+from voice_assistant.config import NeverWake
+from voice_assistant.service import AssistantService, ServiceSettings
+
+
+REAL_DISPLAY_SERVER = phone_voice_display.VoiceDisplayServer
 
 
 class FakeSession:
@@ -227,6 +235,65 @@ class SessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["result"]["reason"], "turn_complete")
         self.assertTrue(self.session.stop_confirmed)
 
+    async def test_reply_callback_is_absent_without_explicit_opt_in_and_display(self):
+        for enabled, port in ((None, 18085), (False, 18085), (True, None)):
+            with self.subTest(enabled=enabled, port=port):
+                self.voice.pop("display_reply_text", None)
+                if enabled is not None:
+                    self.voice["display_reply_text"] = enabled
+                self.args.display_port = port
+                self.build_service.reset_mock()
+                result, error = await self.invoke()
+                self.assertIsNone(error)
+                self.assertIsNone(result["error"])
+                self.assertIsNone(self.build_service.call_args.kwargs.get("on_reply"))
+
+    async def test_reply_callback_rejects_wrong_phone_stream_and_replaced_display(self):
+        self.voice["display_reply_text"] = True
+        current_ref = self.display.start_status.return_value
+        self.display.session_ref = current_ref
+        self.service.owns_reply = mock.Mock(
+            side_effect=lambda phone, stream: stream == "synthetic-stream")
+        async def activate(phone_id):
+            callback = self.build_service.call_args.kwargs["on_reply"]
+            callback("other-phone", "synthetic-stream", "wrong phone")
+            callback(phone_id, "expired-stream", "wrong stream")
+            self.display.session_ref = object()
+            callback(phone_id, "synthetic-stream", "replaced display")
+            self.display.session_ref = current_ref
+            callback(phone_id, "synthetic-stream", "Synthetic visible reply")
+            self.build_service.call_args.kwargs["on_event"](
+                SimpleNamespace(state="stopped", reason="call"))
+            callback(phone_id, "synthetic-stream", "late terminal reply")
+            return "synthetic-stream"
+        self.service.activate = activate
+        result, error = await self.invoke()
+        self.assertIsNone(error)
+        self.assertIsNone(result["error"])
+        self.assertEqual(self.display.update_status.call_args_list, [
+            mock.call("Speaking", "Synthetic visible reply"),
+            mock.call("Stopped", "call"),
+        ])
+        self.assertNotIn("Synthetic visible reply", json.dumps(result))
+
+    async def test_reply_display_failure_stops_without_exposing_text_in_result(self):
+        self.voice["display_reply_text"] = True
+        self.display.session_ref = self.display.start_status.return_value
+        self.service.owns_reply = mock.Mock(return_value=True)
+        self.display.update_status.side_effect = RuntimeError("Synthetic private reply")
+        async def activate(phone_id):
+            self.build_service.call_args.kwargs["on_reply"](
+                phone_id, "synthetic-stream", "Synthetic private reply")
+            return "synthetic-stream"
+        self.service.activate = activate
+        result, error = await self.invoke()
+        self.assertIsNone(error)
+        self.assertEqual(result["result"]["reason"], "explicit_stop")
+        self.assertTrue(self.session.stop_confirmed)
+        self.assertNotIn("Synthetic private reply", json.dumps(result))
+        self.watchdog.finish.assert_called_once()
+        self.display.close.assert_called_once()
+
     async def test_stop_during_start_does_not_launch_assist(self):
         original = subject.PhoneVoiceController
         controller = []
@@ -397,6 +464,129 @@ class SessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assert_observer_stopped()
         self.watchdog.finish.assert_called_once()
         self.assertEqual(self.remove_signal.call_count, self.add_signal.call_count)
+
+
+@unittest.skipUnless(importlib.util.find_spec("PIL"), "Pillow is required for real display rendering")
+class ReplyDisplayLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    """Real loopback XML GETs, synthetic Assist and no phone/media network."""
+
+    asyncSetUp = SessionLifecycleTests.asyncSetUp
+    assert_observer_stopped = SessionLifecycleTests.assert_observer_stopped
+
+    @staticmethod
+    def get_page(url):
+        parsed = urlsplit(url)
+        connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=1)
+        try:
+            connection.request("GET", parsed.path)
+            response = connection.getresponse()
+            return response.status, dict(response.getheaders()), response.read()
+        finally:
+            connection.close()
+
+    async def check_reply_lifecycle(self, *, preempt):
+        self.voice["display_reply_text"] = True
+        self.config.update(duration_seconds=3, receive_idle_seconds=3)
+        self.config["bind_ipv4"] = "127.0.0.1"
+        self.phone["ipv4"] = "127.0.0.1"
+        answer = 'Synthetic private answer: A < B & "C".'
+        started, release = asyncio.Event(), asyncio.Event()
+        servers, terminal_pages, services, voice_events = [], [], [], []
+
+        class Assist:
+            async def run(self, audio, *, conversation_id=None, on_event=None):
+                await on_event({"type": "stt-end"})
+                return SimpleNamespace(conversation_id="synthetic-conversation",
+                                       text=answer, tts_url=None)
+
+        class Playback:
+            async def play(self, phone, result):
+                started.set()
+                await release.wait()
+            async def stop(self, phone):
+                pass
+
+        def builder(config, workspace, sink, **kwargs):
+            self.assertTrue(callable(kwargs.get("on_reply")))
+            on_event = kwargs["on_event"]
+            def record(event):
+                voice_events.append(event)
+                on_event(event)
+            service = AssistantService(
+                ServiceSettings(enabled=True, duplicate_window_seconds=0),
+                {self.phone["id"]: True}, lambda _: NeverWake(), Assist(), Playback(),
+                on_event=record, on_reply=kwargs["on_reply"])
+            services.append(service)
+            return service
+        self.build_service.side_effect = builder
+
+        def display_factory(bind_ip, port, phone_id, phone_ip, **kwargs):
+            server = REAL_DISPLAY_SERVER(bind_ip, 0, phone_id, phone_ip, **kwargs)
+            original_close = server.close
+            def close():
+                try:
+                    if server.session_ref is not None:
+                        terminal_pages.append(self.get_page(server.session_ref.page_url + "/text"))
+                finally:
+                    original_close()
+            server.close = close
+            servers.append(server)
+            self.addCleanup(original_close)
+            return server
+        self.stack.enter_context(mock.patch.object(
+            phone_voice_display, "VoiceDisplayServer", side_effect=display_factory))
+        task = asyncio.create_task(subject.run_session(
+            self.args, self.config, {}, self.phone, self.voice))
+        try:
+            await asyncio.wait_for(started.wait(), 2)
+            server = servers[0]
+            status, headers, body = await asyncio.to_thread(
+                self.get_page, server.session_ref.page_url + "/text")
+            self.assertEqual(status, 200)
+            self.assertIn("no-store", headers["Cache-Control"])
+            root = ET.fromstring(body)
+            self.assertEqual(root.tag, "CiscoIPPhoneText")
+            self.assertIn(answer, "".join(root.itertext()))
+            self.assertIn(b"&lt;", body)
+            self.assertIn(b"&amp;", body)
+            self.assertEqual(services[0].status(self.phone["id"]).state, "speaking")
+            # The existing Details soft key, rather than a new push, exposes
+            # the reply while normal playback keeps the session alive.
+            status, _, body = await asyncio.to_thread(
+                self.get_page, server.session_ref.page_url)
+            self.assertEqual(status, 200)
+            self.assertIn(server.session_ref.page_url + "/text",
+                          "".join(ET.fromstring(body).itertext()))
+            self.gateway.execute.assert_called_once()
+            if preempt:
+                await services[0].preempt(self.phone["id"], "call")
+            else:
+                release.set()
+            result = await asyncio.wait_for(task, 2)
+            self.assertIsNone(result["error"])
+            self.assertTrue(self.session.stop_confirmed)
+            self.assertEqual(len(terminal_pages), 1)
+            status, headers, body = terminal_pages[0]
+            self.assertEqual(status, 200)
+            self.assertNotIn(answer.encode(), body)
+            self.assertIn("Stopped", "".join(ET.fromstring(body).itertext()))
+            self.assertNotIn("Refresh", headers)
+            self.assertEqual(server.display.stats(), {
+                "sessions": 0, "frames": 0, "frame_bytes": 0})
+            self.assertNotIn(answer, json.dumps(result))
+            self.assertNotIn(answer, repr(voice_events))
+            self.assert_observer_stopped()
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_details_show_reply_during_playback_and_clear_on_completion(self):
+        await self.check_reply_lifecycle(preempt=False)
+
+    async def test_details_clear_reply_on_preemption_without_extra_push(self):
+        await self.check_reply_lifecycle(preempt=True)
 
 
 class SessionCLIExitTests(unittest.TestCase):

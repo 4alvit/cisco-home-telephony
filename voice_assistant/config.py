@@ -38,8 +38,12 @@ def load_config(path: str | Path) -> dict[str, Any]:
 
 
 def validate_config(data: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(data, dict) or set(data) != {"service", "phones", "ha", "wake"}:
+    required = {"service", "phones", "ha", "wake"}
+    if (not isinstance(data, dict) or not required <= set(data) or
+            not set(data) <= required | {"display_reply_text"}):
         raise ValueError("config requires service, phones, ha and wake objects")
+    if type(data.get("display_reply_text", False)) is not bool:
+        raise ValueError("display_reply_text must be a boolean")
     ServiceSettings(**data["service"])
     if not isinstance(data["phones"], dict) or not data["phones"] or any(
             not isinstance(key, str) or not key or type(value) is not bool
@@ -66,7 +70,7 @@ def validate_config(data: dict[str, Any]) -> dict[str, Any]:
 
 def build_service(config: dict[str, Any], workspace: Path, sink: Any, *,
                   on_event: Any = None, compressed_decoder: Any = None,
-                  connect: Any = None) -> AssistantService:
+                  connect: Any = None, on_reply: Any = None) -> AssistantService:
     """Construct the adapter; caller still must explicitly activate each stream."""
     from .ha import HAClient
     from .playback import WavePlayback
@@ -90,4 +94,5 @@ def build_service(config: dict[str, Any], workspace: Path, sink: Any, *,
         factory = lambda _phone: NeverWake()
     return AssistantService(settings, config["phones"], factory, client,
                             WavePlayback(client.fetch_audio, sink, compressed_decoder=compressed_decoder),
-                            on_event=on_event)
+                            on_event=on_event,
+                            on_reply=on_reply if config.get("display_reply_text", False) else None)

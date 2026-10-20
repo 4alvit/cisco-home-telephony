@@ -55,6 +55,8 @@ conversion to MPP is not required.
   The [voice pipeline check](docs/voice-pipeline-acceptance.md) adds private
   positive wake recordings, production telephone codecs, audio-byte comparisons
   and explicit cleanup checks against a scripted HA peer.
+  The [entrypoint check](docs/voice-entrypoint-acceptance.md) also exercises the
+  normal configuration loaders and command startup with simulated device I/O.
 - **Understand the code and infrastructure:** the [maintainer map](docs/code-and-infrastructure-map.md)
   connects entry points, control and audio paths, persistent state, recovery,
   test coverage, failure-handling repairs and remaining limits.

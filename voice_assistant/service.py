@@ -12,6 +12,23 @@ from typing import Any, AsyncIterator, Callable, Protocol
 
 
 FRAME_BYTES = 640  # 20 ms, signed little-endian int16, mono, 16 kHz
+REPLY_TEXT_LIMIT = 1000
+REPLY_SCAN_LIMIT = 4096
+
+
+def _reply_text(value: Any) -> str:
+    """Bound and sanitize ephemeral display text without coercing provider data."""
+    if type(value) is not str:
+        return ""
+    clean = []
+    for char in value[:REPLY_SCAN_LIMIT]:
+        code = ord(char)
+        if (code in (9, 10, 13) or 0x20 <= code <= 0xD7FF or
+                0xE000 <= code <= 0xFFFD or 0x10000 <= code <= 0x10FFFF):
+            clean.append(char)
+            if len(clean) == REPLY_TEXT_LIMIT:
+                break
+    return "".join(clean)
 
 
 class Detector(Protocol):
@@ -95,13 +112,15 @@ class AssistantService:
     def __init__(self, settings: ServiceSettings, phones: dict[str, bool],
                  detector_factory: Callable[[str], Detector], assist: Assist,
                  playback: Playback, on_event: Callable[[VoiceEvent], None] | None = None,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic, *,
+                 on_reply: Callable[[str, str, str], None] | None = None):
         if not phones or len(phones) > 100 or any(
                 not isinstance(key, str) or not key or len(key) > 128 or type(value) is not bool
                 for key, value in phones.items()):
             raise ValueError("phones must map bounded opaque IDs to boolean permissions")
         self.settings, self.assist, self.playback = settings, assist, playback
         self._clock, self._on_event = clock, on_event
+        self._on_reply = on_reply
         self._sessions = {key: _Session(detector_factory(key), value,
                                        preroll=deque(maxlen=settings.preroll_ms // 20))
                           for key, value in phones.items()}
@@ -124,6 +143,13 @@ class AssistantService:
     def status(self, phone_id: str) -> VoiceEvent:
         item = self._sessions[phone_id]
         return VoiceEvent(phone_id, item.state, item.reason)
+
+    def owns_reply(self, phone_id: str, stream_id: str) -> bool:
+        """Whether a synchronous display update still belongs to this speaking turn."""
+        if type(phone_id) is not str or type(stream_id) is not str:
+            return False
+        item = self._sessions.get(phone_id)
+        return item is not None and item.stream_id == stream_id and item.state == "speaking"
 
     def _emit_armed(self, phone_id: str) -> None:
         """Report optional wake-model readiness only when the status changes."""
@@ -328,6 +354,27 @@ class AssistantService:
                 return
             item.conversation_id = result.conversation_id or item.conversation_id
             self._emit(phone_id, "speaking")
+            if self._on_reply is not None:
+                # Deliver cancellation requested reentrantly by the state hook
+                # before publishing text; this also works on Python 3.10.
+                await asyncio.sleep(0)
+            if not self.owns_reply(phone_id, stream_id):
+                return
+            if self._on_reply is not None:
+                # This synchronous, non-blocking UI hook is deliberately separate
+                # from VoiceEvent: reply text must not enter status or journals.
+                try:
+                    text = _reply_text(getattr(result, "text", None))
+                    if text and self.owns_reply(phone_id, stream_id):
+                        self._on_reply(phone_id, stream_id, text)
+                except Exception:
+                    # Never expose provider text through callback exception output.
+                    pass
+                # A reply hook may itself request cancellation. Do not start
+                # playback until that cancellation has had a chance to arrive.
+                await asyncio.sleep(0)
+            if not self.owns_reply(phone_id, stream_id):
+                return
             await self.playback.play(phone_id, result)
 
         try:

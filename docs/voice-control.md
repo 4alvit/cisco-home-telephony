@@ -204,8 +204,21 @@ The displayed ID is an example, not a valid local session. Run status again to
 observe cleanup. Exiting the client or pressing Ctrl+C in the client does not
 stop the gateway-owned session; send its explicit Stop request.
 
-`voice stop --dry-run` only reads status and checks the supplied session ID;
-it does not request Stop. `--json` returns sanitized structured metadata.
+`voice stop --dry-run` reads status, checks the supplied session ID, and checks
+whether the reported ownership permits Stop through this gateway. It does not
+send a Stop POST. If the state is `external_owner` or the sanitized error is
+`voice_owner_unavailable`, a matching-ID dry run returns `status: "unavailable"`,
+`gateway_stop_available: false`, and a nonzero exit code. It retains the
+sanitized voice status and session ID, with guidance to use the live wake
+screen's **Stop** or the
+[exact wake Job's normal shutdown](voice-wake-k3s.md#start-and-stop-an-attended-attempt).
+Status also shows this guidance for known external ownership.
+
+`recovery_required` alone does not mean a different controller owns the session;
+local recovery sessions retain their gateway Stop and dry-run path. A successful
+dry run validates the current ID and known ownership capability, not whether a
+later Stop can be delivered or whether capture has closed. Inspect the real
+Stop result and `stop_confirmed`. `--json` returns sanitized structured metadata.
 The standalone `phone_voice_control.py` client remains available with
 `status|start|stop --client-config PATH --line LINE`; its Start request ID
 flag is `--request-id`.

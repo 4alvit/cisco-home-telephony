@@ -14,6 +14,56 @@ firmware, gateway or Home Assistant deployment is included. Read
 [`native-app-feasibility.md`](native-app-feasibility.md) for the wider voice
 project and its acoustic and call-control gates.
 
+## Optional assistant reply text
+
+The foreground voice runner can show the final assistant reply in **Details**
+while that turn is **Speaking**. It is off by default. In the private voice
+configuration used by the selected gateway profile or wake Job, add this
+top-level option:
+
+```json
+"display_reply_text": true
+```
+
+Only JSON `true` or `false` is accepted; omission means `false`. The
+[synthetic example](../examples/local-voice-assistant.example.json) leaves it
+off. A display must also be configured: the gateway profile's `display_port`,
+the rendered Job's display port, or `--display-port` for a foreground run.
+Without a display port, the option has no effect and no reply callback is
+installed; it does not start a display by itself.
+The runner, configuration loader and service must come from the same updated
+revision. Existing suspended Jobs and staged private configuration do not
+automatically pick up edits; prepare any replacement through the normal
+reviewed deployment process. No gateway profile or HA service schema changes
+are required.
+
+Open **Details** from the avatar screen during the session. Its existing
+refresh loop can then show the reply; **Image** returns to the avatar. The
+reply follows the selected Assist language. UI labels remain English.
+
+Only the final successful Assist answer is eligible, capped at 1,000 characters
+with invalid XML characters removed and ordinary XML escaping applied.
+The microphone transcript and provider diagnostics are never sent through this
+path. A separate synchronous callback binds the answer to the active phone,
+stream and display session. It does not add text to `VoiceEvent`, gateway
+status, journals, CLI JSON results or logs. This option does not change Home
+Assistant's own conversation or logging behavior.
+
+The display holds this text only in memory during the current turn. Stop,
+preemption, failure and session cleanup replace or discard the server-side
+text. Display callbacks do not start a new phone command, prolong the media
+lease or delay cleanup to make a reply visible. Because the screen refreshes
+every 2–5 seconds, **a short answer may finish before the next fetch**.
+Server cleanup also cannot erase text already drawn on a disconnected phone;
+use **Exit** to dismiss that page. Enable this option only when showing the
+answer on the physical phone is appropriate.
+
+Offline tests fetch the real XML Details route during a held synthetic
+playback, then check text removal on termination. This establishes that the
+current display lifecycle can serve a reply before cleanup. It does not
+establish physical screen timing, readability, acoustic acceptance or a new
+deployment.
+
 ## Display contract
 
 Each physical phone has one active session and one active image. A new start

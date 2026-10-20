@@ -106,24 +106,118 @@ required in addition to the Job settings.
 
 ## Start and stop an attended attempt
 
+Before unsuspending, review the selected node and the current scheduler-accounted
+resource requests. The rendered worker and each sequential init container request
+**20m CPU, 128 MiB memory and 128 MiB ephemeral storage**; the corresponding limits
+remain **1000m CPU, 512 MiB memory and 256 MiB ephemeral storage**. Available request
+headroom must cover the effective Pod request, including any admission defaults
+or Pod overhead. Low current CPU usage alone does not establish scheduling
+headroom. Check node readiness, pressure and scheduling restrictions, the exact
+model PVC's binding/topology and read permissions, and availability of the
+reviewed immutable image on that node or through its intended registry.
+These observations are not an atomic reservation or a guarantee of startup.
+
 Apply the reviewed manifest with an explicit kubeconfig and context:
 
 ```sh
-kubectl --kubeconfig .local/kubeconfig --context YOUR_CONTEXT apply \
+kubectl --kubeconfig .local/kubeconfig --context YOUR_CONTEXT --request-timeout=10s apply \
   -f .local/voice/wake-job.json
 ```
 
 The applied Job remains suspended. Read its exact name from the private
-manifest; do not select a Job using an unbounded label or wildcard. When ready
-at the phone, start that one Job:
+manifest; do not select a Job using an unbounded label or wildcard.
+
+### Read-only startup and status snapshot
+
+Use this finite snapshot before release and again when checking startup. Replace
+the context, namespace and Job placeholders consistently. Each run creates a new
+private directory and makes two bounded reads; it does not start or stop anything.
+The Job snapshot captures its UID. The label only narrows the candidate Pod list:
+the Python check accepts a Pod only when its **controller owner reference**
+matches that exact Job's API version, kind, name and UID.
 
 ```sh
-kubectl --kubeconfig .local/kubeconfig --context YOUR_CONTEXT \
+umask 077
+wake_snapshot=$(mktemp -d .local/voice/wake-inspect.XXXXXX) || exit 1
+kubectl --kubeconfig .local/kubeconfig --context YOUR_CONTEXT --request-timeout=10s \
+  -n YOUR_NAMESPACE get job EXACT_JOB_NAME -o json \
+  > "$wake_snapshot/job.json" || exit 1
+kubectl --kubeconfig .local/kubeconfig --context YOUR_CONTEXT --request-timeout=10s \
+  -n YOUR_NAMESPACE get pods -l batch.kubernetes.io/job-name=EXACT_JOB_NAME -o json \
+  > "$wake_snapshot/pods.json" || exit 1
+python3 - "$wake_snapshot" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+job = json.loads((root / "job.json").read_text())
+meta = job["metadata"]
+uid = meta["uid"]
+if job["apiVersion"] != "batch/v1" or job["kind"] != "Job" or not uid:
+    raise SystemExit("Unexpected Job identity; stop and inspect.")
+pods = json.loads((root / "pods.json").read_text())["items"]
+owned = [
+    pod for pod in pods
+    if pod["metadata"].get("namespace") == meta["namespace"]
+    and any(
+        owner.get("controller") is True
+        and owner.get("apiVersion") == "batch/v1"
+        and owner.get("kind") == "Job"
+        and owner.get("name") == meta["name"]
+        and owner.get("uid") == uid
+        for owner in pod["metadata"].get("ownerReferences", [])
+    )
+]
+print(json.dumps({"job_uid": uid, "suspended": job["spec"].get("suspend", False),
+                  "deleting": bool(meta.get("deletionTimestamp")),
+                  "owned_pods": len(owned)}))
+if len(owned) != 1:
+    raise SystemExit("No single owned Pod: not ready; inspect before any further start.")
+pod = owned[0]
+status = pod.get("status", {})
+print(json.dumps({"pod": pod["metadata"]["name"], "pod_uid": pod["metadata"]["uid"],
+                  "phase": status.get("phase", "Unknown"),
+                  "deleting": bool(pod["metadata"].get("deletionTimestamp"))}))
+for container in status.get("initContainerStatuses", []) + status.get("containerStatuses", []):
+    state = container.get("state", {})
+    detail = next(iter(state.values()), {})
+    print(json.dumps({"container": container["name"], "ready": container.get("ready", False),
+                      "state": next(iter(state), "Unknown"),
+                      "reason": detail.get("reason"),
+                      "restarts": container.get("restartCount", 0)}))
+PY
+```
+
+Zero Pods is expected while the Job remains suspended. After release, zero Pods
+or waiting reasons require inspection; multiple owned Pods require inspection
+even if only one appears active. Compare the captured Job UID with the previous
+snapshot: a different UID means a replacement object and requires fresh review.
+Keep these snapshots private. They are separate observations, not an atomic
+ownership check. Do not use their label selector for mutations.
+
+`Pending`, `Running`, container `ready: true`, and successful init containers
+describe Kubernetes startup only. They do **not** establish microphone readiness,
+wake recognition or media cleanup. A Pending Pod can start later as capacity or
+storage becomes available.
+
+### Release only while attended
+
+When ready at the phone, start that one reviewed Job:
+
+```sh
+kubectl --kubeconfig .local/kubeconfig --context YOUR_CONTEXT --request-timeout=10s \
   -n YOUR_NAMESPACE patch job EXACT_JOB_NAME --type merge \
   -p '{"spec":{"suspend":false}}'
 ```
 
-Wait for **Listening** on the phone. The frontend first needs 1.28 seconds of
+Stay at the phone until its live assistant screen shows **Listening**, or stop
+the exact attempt if it cannot be observed. Do not leave an unsuspended Pending
+Job to activate later without an attendant. Remain present through the turn and
+confirmed cleanup; if you must leave during startup, request Stop and verify
+closure first. A status snapshot or request timeout does not authorize a retry.
+
+The frontend first needs 1.28 seconds of
 actual microphone history. Say the private wake phrase, then a short question.
 The display progresses through Listening, Thinking and Speaking. Use its
 **Stop** softkey on that live screen to finish. **Applications → Voice Assistant**
@@ -138,8 +232,8 @@ period. This is the wake Job's own stop budget; the gateway Deployment separatel
 requires at least 180 seconds so its callbacks can outlive a draining Job:
 
 ```sh
-kubectl --kubeconfig .local/kubeconfig --context YOUR_CONTEXT \
-  -n YOUR_NAMESPACE delete job EXACT_JOB_NAME --grace-period=120
+kubectl --kubeconfig .local/kubeconfig --context YOUR_CONTEXT --request-timeout=10s \
+  -n YOUR_NAMESPACE delete job EXACT_JOB_NAME --grace-period=120 --timeout=150s
 ```
 
 The Job budget includes up to 45 seconds waiting for the child to stop,
@@ -170,17 +264,22 @@ lock file to make a retry pass.
 
 ## Collect the result and remove temporary credentials
 
-The Job and its Pods expire five minutes after completion. Capture the main
-container's output while the exact Job still exists, using a private file:
+The Job and its Pods expire five minutes after completion. Refresh the
+owner-checked snapshot above and use its exact Pod name and UID; do not choose a
+Pod from a label alone. Capture a bounded, non-following log snapshot while that
+Pod still exists, using the new private snapshot directory:
 
 ```sh
 umask 077
-kubectl --kubeconfig .local/kubeconfig --context YOUR_CONTEXT \
-  -n YOUR_NAMESPACE logs -f job/EXACT_JOB_NAME -c wake-pilot \
-  > .local/voice/wake-result.log
+kubectl --kubeconfig .local/kubeconfig --context YOUR_CONTEXT --request-timeout=10s \
+  -n YOUR_NAMESPACE logs pod/EXACT_OWNER_CHECKED_POD_NAME -c wake-pilot \
+  --tail=200 --limit-bytes=65536 > "$wake_snapshot/wake-result.log"
 ```
 
-If startup failed before the main container ran, inspect the same Job's
+An absent or truncated final result leaves cleanup unconfirmed. Repeat an
+explicit snapshot if needed while still attending the phone; do not start an
+unbounded watch or treat a log timeout as proof that the Pod stopped.
+If startup failed before the main container ran, inspect that same owned Pod's
 `prepare-private-runtime` or `stage-pinned-models` container instead. The main
 result separates two outcomes:
 
@@ -199,8 +298,8 @@ After this Job's Pods have terminated and no other pilot uses the same Secret,
 read its exact name from the private manifest and remove that Secret:
 
 ```sh
-kubectl --kubeconfig .local/kubeconfig --context YOUR_CONTEXT \
-  -n YOUR_NAMESPACE delete secret EXACT_SECRET_NAME_FROM_MANIFEST
+kubectl --kubeconfig .local/kubeconfig --context YOUR_CONTEXT --request-timeout=10s \
+  -n YOUR_NAMESPACE delete secret EXACT_SECRET_NAME_FROM_MANIFEST --timeout=30s
 ```
 
 The model PVC and shared gateway reservation directory remain in place.
