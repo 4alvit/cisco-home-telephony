@@ -112,6 +112,7 @@ class PhoneApps:
             'ha_request_outcome_unknown': 'Home Assistant did not confirm the result. Check current status before trying again.',
             'ha_change_not_confirmed': 'Home Assistant did not confirm the change. Check current status before trying again.',
             'voice_control_unavailable': 'Voice control is not configured for this phone.',
+            'voice_phone_busy': 'A voice session owns the phone audio, or its cleanup is unconfirmed. Open Voice Assistant and stop that session before trying this action again.',
             'voice_response_invalid': 'Voice status is unconfirmed. Check status before any new attempt.',
             'voice_request_failed': 'The voice request was not confirmed. Check status; do not start again blindly.',
             'not_configured': 'No alarm has been configured. Set its time and days first.',
@@ -225,7 +226,7 @@ class PhoneApps:
     def voice_page(self, phone_id, line, value):
         root = ET.Element('CiscoIPPhoneText')
         child(root, 'Title', 'Voice Assistant')
-        child(root, 'Prompt', 'Manual session; microphone up to 30s')
+        child(root, 'Prompt', 'Bounded session; microphone up to 30s')
         text = ('State: ' + value['state'].replace('_', ' ') + '\nSession line: ' + value['line']
                 + '\nRemaining: ' + str(value['remaining_seconds']) + ' seconds'
                 + '\nStop requested: ' + ('Yes' if value['stop_requested'] else 'No')
@@ -234,6 +235,8 @@ class PhoneApps:
             text += '\nSession: ' + value['session_id']
         if value['error'] or value['state'] in ('recovery_required', 'external_owner'):
             text += '\nCleanup may be unconfirmed. Check the phone; do not restart blindly.'
+        elif value['active']:
+            text += '\nRunning is not a readiness signal. Use the live assistant screen.'
         child(root, 'Text', text)
         self.softkey(root, 'Refresh', self.url(phone_id, '/voice', line=line), 1)
         if value['state'] in ('idle', 'stopped', 'cancelled', 'failed'):

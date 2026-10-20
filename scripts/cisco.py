@@ -24,6 +24,10 @@ COMMANDS = {
 }
 VOICE_COMMANDS = ['voice status', 'voice start --idempotency-key KEY --attended --exclusive-media --enable-microphone',
                   'voice stop --session-id ID']
+VOICE_PUBLIC_ERRORS = frozenset((
+    'voice_state_unavailable', 'voice_owner_unavailable', 'voice_start_failed',
+    'voice_start_uncertain', 'voice_signal_failed', 'voice_session_failed',
+    'voice_stop_unconfirmed'))
 MAX_FILE = 2 * 1024 * 1024
 SCHEDULE_COMMANDS = ['schedule', 'timer [status]', 'timer start MINUTES [--replace]',
     'timer cancel', 'alarm [status]', 'alarm set HH:MM --days DAYS [--enable] [--replace]',
@@ -491,20 +495,30 @@ def voice_status(value):
     states = {'idle', 'starting', 'running', 'stopping', 'stopped', 'cancelled',
               'failed', 'recovery_required', 'external_owner'}
     require(isinstance(value, dict) and type(value.get('schema_version')) is int
-            and value['schema_version'] == 1 and value.get('state') in states,
+            and value['schema_version'] == 1 and isinstance(value.get('state'), str)
+            and value['state'] in states,
             'invalid_voice_response')
     require(all(type(value.get(key)) is bool
                 for key in ('active', 'stop_requested', 'stop_confirmed')), 'invalid_voice_response')
+    require(value['active'] == (value['state'] in ('starting', 'running', 'stopping')),
+            'invalid_voice_response')
     require(all(isinstance(value.get(key), str) and re.fullmatch(r'2[0-9]{2}', value[key])
                 for key in ('phone', 'line')), 'invalid_voice_response')
     session = value.get('session_id')
-    require(session is None or isinstance(session, str) and re.fullmatch(r'[0-9a-f]{32}', session),
+    require((session is None and value['state'] == 'idle')
+            or (isinstance(session, str) and re.fullmatch(r'[0-9a-f]{32}', session)
+                and value['state'] != 'idle'),
             'invalid_voice_response')
     remaining = value.get('remaining_seconds')
-    require(type(remaining) in (int, float) and math.isfinite(remaining) and 0 <= remaining <= 30,
+    # Bound integers before float conversion inside isfinite: a hostile large
+    # JSON integer must produce the same safe refusal as any malformed status.
+    require(type(remaining) in (int, float) and 0 <= remaining <= 30 and math.isfinite(remaining),
             'invalid_voice_response')
-    return {key: value[key] for key in ('schema_version', 'phone', 'line', 'session_id', 'state',
-            'active', 'remaining_seconds', 'stop_requested', 'stop_confirmed')}
+    result = {key: value[key] for key in ('schema_version', 'phone', 'line', 'session_id', 'state',
+              'active', 'remaining_seconds', 'stop_requested', 'stop_confirmed')}
+    if isinstance(value.get('error'), str) and value['error'] in VOICE_PUBLIC_ERRORS:
+        result['error'] = value['error']
+    return result
 
 
 def voice_command(args, config):
@@ -541,7 +555,7 @@ def voice_command(args, config):
         require(type(value.get('schema_version')) is int and value['schema_version'] == 1
                 and value.get('valid') is True and value.get('microphone_started') is False
                 and type(value.get('network_actions')) is int and value['network_actions'] == 0
-                and type(duration) in (int, float) and math.isfinite(duration) and 0 < duration <= 30
+                and type(duration) in (int, float) and 0 < duration <= 30 and math.isfinite(duration)
                 and isinstance(value.get('phone'), str) and re.fullmatch(r'2[0-9]{2}', value['phone'])
                 and value.get('line') == args.extension, 'invalid_voice_response')
         return {'status': 'dry_run', 'action': 'voice_start', 'action_id': key,
@@ -780,9 +794,12 @@ def main(argv=None):
                 print('Voice: ' + value['state'])
                 print('Session: ' + (value['session_id'] or 'none'))
                 print('Stop confirmed: ' + str(value['stop_confirmed']))
+                if value.get('error'):
+                    print('Reason: ' + value['error'])
                 if 'action_id' in result:
                     print('Action: ' + result['action_id'])
-            return 1 if result.get('voice', {}).get('state') == 'recovery_required' else 0
+            return int(result.get('voice', {}).get('state') in {
+                'failed', 'recovery_required', 'external_owner'})
         phone = None
         if args.command not in ('schedule', 'timer', 'alarm'):
             try:

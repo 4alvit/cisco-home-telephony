@@ -79,6 +79,21 @@ class VoiceCLITests(unittest.TestCase):
             'exclusive_media': True, 'enable_microphone': True, 'dry_run': False})])
         self.assertEqual(result['action_id'], 'synthetic-request')
 
+    def test_known_public_voice_errors_are_shown_without_transcripts(self):
+        for reason in cisco.VOICE_PUBLIC_ERRORS:
+            with self.subTest(reason=reason):
+                code, result, _calls = self.invoke(
+                    ['status'], value=dict(status_value(), state='failed', error=reason))
+                self.assertEqual(code, 1)
+                self.assertEqual(result['voice']['error'], reason)
+                self.assertNotIn(PRIVATE, json.dumps(result))
+        for reason in (PRIVATE, {'secret': PRIVATE}):
+            code, result, _calls = self.invoke(
+                ['status'], value=dict(status_value(), error=reason))
+            self.assertEqual(code, 0)
+            self.assertNotIn('error', result['voice'])
+            self.assertNotIn(PRIVATE, json.dumps(result))
+
     def test_stop_uses_exact_session_and_stable_default_key_without_inventory(self):
         code, result, calls = self.invoke(['stop', '--session-id', SESSION])
         self.assertEqual(code, 0)
@@ -103,7 +118,8 @@ class VoiceCLITests(unittest.TestCase):
         self.assertTrue(calls[0][1]['dry_run'])
         bad = ({'schema_version': True}, {'valid': 1}, {'network_actions': False},
                {'network_actions': 0.0}, {'microphone_started': 0}, {'duration_seconds': 0},
-               {'duration_seconds': 31}, {'duration_seconds': float('nan')}, {'line': '201'})
+               {'duration_seconds': 31}, {'duration_seconds': 10 ** 1000},
+               {'duration_seconds': float('nan')}, {'line': '201'})
         for changes in bad:
             with self.subTest(field=next(iter(changes))):
                 code, _result, calls = self.invoke(self.start_args(dry=True), value=dict(dry_value(), **changes))
@@ -128,16 +144,31 @@ class VoiceCLITests(unittest.TestCase):
 
     def test_status_schema_rejects_coercion_and_never_echoes_private_response(self):
         for changes in ({'schema_version': True}, {'active': 1}, {'line': PRIVATE},
-                        {'session_id': PRIVATE}, {'remaining_seconds': float('inf')}):
+                        {'session_id': PRIVATE}, {'remaining_seconds': float('inf')},
+                        {'remaining_seconds': 10 ** 1000}, {'state': []},
+                        {'active': True}, {'session_id': None}, {'state': 'idle'}):
             with self.subTest(field=next(iter(changes))):
                 code, result, _calls = self.invoke(['status'], value=dict(status_value(), **changes))
                 self.assertEqual(code, 1)
                 self.assertNotIn(PRIVATE, json.dumps(result))
 
+    def test_idle_status_requires_no_session_and_running_status_requires_active(self):
+        idle = dict(status_value(), state='idle', session_id=None, stop_requested=False,
+                    stop_confirmed=False)
+        self.assertEqual(self.invoke(['status'], value=idle)[0], 0)
+        running = dict(status_value(), state='running', active=True, stop_confirmed=False)
+        self.assertEqual(self.invoke(['status'], value=running)[0], 0)
+        self.assertEqual(self.invoke(['status'], value=dict(running, active=False))[0], 1)
+        # Status may be requested through either assigned line; the session
+        # remains owned by the same physical phone and may name its sibling.
+        sibling = dict(status_value(), line='201')
+        self.assertEqual(self.invoke(['status'], value=sibling)[0], 0)
+
     def test_recovery_state_returns_failure_without_retry(self):
-        code, _result, calls = self.invoke(['status'], value=dict(status_value(), state='recovery_required'))
-        self.assertEqual(code, 1)
-        self.assertEqual(len(calls), 1)
+        for state in ('failed', 'recovery_required', 'external_owner'):
+            code, _result, calls = self.invoke(['status'], value=dict(status_value(), state=state))
+            self.assertEqual(code, 1)
+            self.assertEqual(len(calls), 1)
         code, result, calls = self.invoke(self.start_args(), failure=cisco.Refused('network_outcome_unknown'))
         self.assertEqual(code, 1)
         self.assertEqual(result['reason'], 'network_outcome_unknown')

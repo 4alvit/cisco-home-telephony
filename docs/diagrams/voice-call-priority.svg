@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="900" viewBox="0 0 1280 900" role="img" aria-labelledby="title desc">
+  <title id="title">Cisco voice sessions and incoming-call priority</title>
+  <desc id="desc">Both lines share one physical phone and one bounded manual voice owner. The gateway serializes voice Start with direct phone mutations. Active or uncertain ownership blocks direct dial, speaker, remote answer and display commands. Incoming SIP calls, including eligible ring and timer or alarm calls, remain allowed. Either line becoming busy or ringing causes the AMI observer to stop the owned RTP session. Optional automatic answer waits for cleanup; a pre-I/O refusal does not consume its attempt, but an ambiguous I/O result does. Timer and alarm alerts never auto-answer.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0 0 9 4.5 0 9Z" fill="#9aaecb"/>
+    </marker>
+    <marker id="green-arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0 0 9 4.5 0 9Z" fill="#65d9b5"/>
+    </marker>
+  </defs>
+  <rect width="1280" height="900" fill="#0c1424"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="40" y="57" fill="#f1f5ff" font-size="31" font-weight="700">Voice sessions yield to incoming calls</text>
+    <text x="40" y="91" fill="#b6c5db" font-size="18">Current gateway: explicit manual Start · at most 30 seconds · no automatic restart into listening</text>
+
+    <rect x="40" y="129" width="300" height="176" rx="18" fill="#16334f" stroke="#4ba8dc"/>
+    <text x="62" y="161" fill="#9cd8ff" font-size="14" font-weight="700" letter-spacing="1.5">ONE PHYSICAL PHONE</text>
+    <text x="62" y="194" fill="#ffffff" font-size="24" font-weight="700">Cisco 7945G</text>
+    <rect x="62" y="211" width="112" height="35" rx="9" fill="#245378"/>
+    <rect x="184" y="211" width="112" height="35" rx="9" fill="#245378"/>
+    <text x="118" y="234" fill="#e1f2ff" font-size="16" text-anchor="middle">Line A</text>
+    <text x="240" y="234" fill="#e1f2ff" font-size="16" text-anchor="middle">Line B</text>
+    <text x="62" y="278" fill="#c9deee" font-size="16">One audio path, one voice owner</text>
+
+    <path d="M350 219H389" fill="none" stroke="#9aaecb" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="400" y="129" width="400" height="176" rx="18" fill="#302855" stroke="#a18cdd"/>
+    <text x="422" y="161" fill="#d0bfff" font-size="14" font-weight="700" letter-spacing="1.5">SERIALIZED ADMISSION</text>
+    <text x="422" y="194" fill="#ffffff" font-size="24" font-weight="700">Start + direct phone changes</text>
+    <text x="422" y="230" fill="#e1d9f6" font-size="17">Shared gateway mutation lock</text>
+    <text x="422" y="256" fill="#e1d9f6" font-size="17">Fresh media / call checks before I/O</text>
+    <text x="422" y="282" fill="#cbbbec" font-size="15">Either alias resolves to the same handset.</text>
+
+    <path d="M810 219H849" fill="none" stroke="#9aaecb" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="860" y="129" width="380" height="176" rx="18" fill="#173d37" stroke="#65d9b5"/>
+    <text x="882" y="161" fill="#9be9d0" font-size="14" font-weight="700" letter-spacing="1.5">BOUNDED VOICE OWNERSHIP</text>
+    <text x="882" y="194" fill="#ffffff" font-size="24" font-weight="700">Active or cleanup uncertain</text>
+    <text x="882" y="230" fill="#d6f2e8" font-size="17">Ownership survives separate requests.</text>
+    <text x="882" y="256" fill="#d6f2e8" font-size="17">Process exit alone is not Stop proof.</text>
+    <text x="882" y="282" fill="#a9d9c9" font-size="15">No unrelated RTP Stop to force a command.</text>
+
+    <text x="40" y="351" fill="#b6c5db" font-size="15" font-weight="700" letter-spacing="1.6">TWO DIFFERENT PATHS WHILE VOICE OWNS THE PHONE</text>
+    <rect x="40" y="371" width="580" height="179" rx="18" fill="#442832" stroke="#e58c9e"/>
+    <text x="62" y="407" fill="#ffc0cc" font-size="22" font-weight="700">Direct phone changes: refused</text>
+    <text x="62" y="440" fill="#f4dce2" font-size="18">Dial · speaker key · remote answer · display</text>
+    <text x="62" y="472" fill="#f4dce2" font-size="17">voice_phone_busy — do not overwrite the audio owner</text>
+    <text x="62" y="503" fill="#e5bac5" font-size="16">Intercom checks both phones. Both line aliases are covered.</text>
+    <text x="62" y="530" fill="#e5bac5" font-size="16">Uncertain cleanup continues to block conflicting actions.</text>
+
+    <rect x="660" y="371" width="580" height="179" rx="18" fill="#173d37" stroke="#65d9b5"/>
+    <text x="682" y="407" fill="#9be9d0" font-size="22" font-weight="700">Incoming SIP: retains priority</text>
+    <text x="682" y="440" fill="#d6f2e8" font-size="18">Ordinary calls · gateway ring · timer / alarm alert</text>
+    <text x="682" y="472" fill="#d6f2e8" font-size="17">Existing busy, DND and active-alert checks still apply.</text>
+    <text x="682" y="503" fill="#a9d9c9" font-size="16">Voice ownership alone does not suppress these calls.</text>
+    <text x="682" y="530" fill="#a9d9c9" font-size="16">The arriving call triggers the media controller below.</text>
+
+    <path d="M953 557V580H220V603" fill="none" stroke="#65d9b5" stroke-width="3" marker-end="url(#green-arrow)"/>
+    <rect x="40" y="614" width="360" height="153" rx="18" fill="#16334f" stroke="#4ba8dc"/>
+    <text x="62" y="650" fill="#9cd8ff" font-size="21" font-weight="700">1. Observe both lines</text>
+    <text x="62" y="684" fill="#d6e9fa" font-size="17">AMI reports ringing or busy.</text>
+    <text x="62" y="713" fill="#d6e9fa" font-size="17">Stale or failed observation also</text>
+    <text x="62" y="738" fill="#d6e9fa" font-size="17">ends the voice session.</text>
+
+    <path d="M409 692H439" fill="none" stroke="#9aaecb" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="450" y="614" width="330" height="153" rx="18" fill="#302855" stroke="#a18cdd"/>
+    <text x="472" y="650" fill="#d0bfff" font-size="21" font-weight="700">2. Stop owned RTP</text>
+    <text x="472" y="684" fill="#e1d9f6" font-size="17">Stop capture and playback.</text>
+    <text x="472" y="713" fill="#e1d9f6" font-size="17">Keep cleanup evidence.</text>
+    <text x="472" y="738" fill="#e1d9f6" font-size="17">No automatic voice rearm.</text>
+
+    <path d="M789 692H819" fill="none" stroke="#9aaecb" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="830" y="614" width="410" height="153" rx="18" fill="#463a23" stroke="#e6bf6b"/>
+    <text x="852" y="650" fill="#ffe0a0" font-size="21" font-weight="700">3. Optional automatic answer</text>
+    <text x="852" y="682" fill="#f4e8cd" font-size="16">Wait for cleanup; recheck the exact call.</text>
+    <text x="852" y="708" fill="#f4e8cd" font-size="16">Pre-I/O refusal: attempt is still available.</text>
+    <text x="852" y="734" fill="#f4e8cd" font-size="16">Ambiguous I/O: no repeat key press for that call.</text>
+    <text x="852" y="756" fill="#ffe0a0" font-size="14" font-weight="700">Timer and alarm alerts never auto-answer.</text>
+
+    <rect x="40" y="802" width="1200" height="61" rx="14" fill="#19243a"/>
+    <text x="62" y="827" fill="#f1f5ff" font-size="16" font-weight="700">Still available: exact-call hangup · alert Stop · exact-session voice Stop · preferences</text>
+    <text x="62" y="850" fill="#b6c5db" font-size="15">The 30-second software lease is not a demonstrated hardware microphone timeout.</text>
+  </g>
+</svg>

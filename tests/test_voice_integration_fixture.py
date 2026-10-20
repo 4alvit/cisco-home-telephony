@@ -96,6 +96,9 @@ class IntegratedFixtureTests(unittest.TestCase):
                 self.assertIs(row["sibling_owner_identity"], True)
                 self.assertIs(row["duplicate_request_one_launch"], True)
                 self.assertEqual(row["cli_start_exit"], 0)
+                expected_exit = 1 if row["scenario"] == "provider-failure" else 0
+                self.assertEqual(row["cli_terminal_exit"], expected_exit)
+                self.assertEqual(row["cli_terminal_replay_exit"], expected_exit)
         self.assertIs(self.summary["checks"]["sibling_concurrent_start_denied"], True)
         self.assertIs(self.summary["checks"]["stop_accepted_via_sibling"], True)
 
@@ -134,6 +137,17 @@ class IntegratedFixtureTests(unittest.TestCase):
         self.assertIn("error", row["assistant_states"])
         self.assertNotIn("speaking", row["assistant_states"])
         self.assertIs(row["stop_confirmed"], True)
+        failed = {"state": "failed", "error": "voice_session_failed",
+                  "active": False, "stop_confirmed": True}
+        expected = fixture.FixtureCoordinator._expected_cli_exit
+        self.assertTrue(expected("provider-failure", 1, {"voice": failed}))
+        self.assertFalse(expected("complete", 1, {"voice": failed}))
+        self.assertFalse(expected("provider-failure", 2, {"voice": failed}))
+        self.assertFalse(expected("provider-failure", 0, {"voice": failed}))
+        for changes in ({"state": "recovery_required"}, {"error": "voice_start_failed"},
+                        {"active": True}, {"stop_confirmed": False}):
+            with self.subTest(unexpected_failure=changes):
+                self.assertFalse(expected("provider-failure", 1, {"voice": dict(failed, **changes)}))
 
     def test_resources_and_owner_reservations_are_released_after_each_outcome(self):
         for row in self.runs.values():

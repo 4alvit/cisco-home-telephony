@@ -1,5 +1,7 @@
 # Bounded voice session controls
 
+![Shared voice ownership and incoming-call priority](diagrams/voice-call-priority.svg)
+
 `phone_voice_control.py` manages one attended voice session per physical phone.
 It launches the reviewed [foreground runner](voice-cli-install.md), retains
 ownership across separate status and Stop requests, and accepts only private,
@@ -120,6 +122,23 @@ The controller does not infer these confirmations from a previous request,
 opening a menu, or loading a configuration. The runner independently checks
 the phone before starting media. A busy, ringing, unavailable or uncertain
 phone is not an invitation to retry until it happens to start.
+
+The gateway serializes voice Start with its other phone mutations. While a
+voice session owns the phone, direct dial, speaker-key, remote-answer and
+display changes are refused with `voice_phone_busy`; the same rule covers both
+lines and both phones in an intercom request. Unresolved voice ownership also
+blocks these conflicting operations.
+
+Ordinary incoming SIP calls retain priority. The gateway's `ring` and
+timer/alarm `alert` operations remain eligible to originate incoming calls,
+which the voice runner's AMI observer uses to stop its media session. Their
+existing busy-phone, Do Not Disturb and active-alert checks still apply.
+Configured automatic answer waits for voice cleanup before pressing a line
+key. A refusal before phone I/O does not consume that call's answer attempt;
+an ambiguous phone response still prevents automatic repeated key presses.
+Exact-call hangup, alert Stop, voice Stop and preference changes remain
+available. The gateway does not send an unrelated RTP Stop merely to force
+another command through.
 
 Status and Stop use the configured phone mapping, so they remain available
 when a fresh AMI inventory cannot be obtained. They still require authentication

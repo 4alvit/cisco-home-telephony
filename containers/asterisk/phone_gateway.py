@@ -414,12 +414,16 @@ class Gateway:
                 for flag in ('attended', 'exclusive_media', 'enable_microphone', 'dry_run'):
                     require(flag not in body or type(body[flag]) is bool,
                             'invalid_voice_request', 400)
-                value = self.voice.start(
-                    target, key, context=context,
-                    attended=body.get('attended', False),
-                    exclusive_media=body.get('exclusive_media', False),
-                    enable_microphone=body.get('enable_microphone', False),
-                    dry_run=body.get('dry_run', False))
+                # Reserve the voice lease before another gateway operation can
+                # observe an idle AMI phone and change its media or display.
+                # Stop/status deliberately do not wait behind this lock.
+                with self.lock:
+                    value = self.voice.start(
+                        target, key, context=context,
+                        attended=body.get('attended', False),
+                        exclusive_media=body.get('exclusive_media', False),
+                        enable_microphone=body.get('enable_microphone', False),
+                        dry_run=body.get('dry_run', False))
             else:
                 session_id = body.get('session_id')
                 require(isinstance(session_id, str)
@@ -431,6 +435,26 @@ class Gateway:
             return {'status': 'accepted', 'action_id': key, 'voice': value}
         except self._voice_module.ControlError as error:
             raise Refused(error.reason, error.status) from None
+
+    def require_voice_available(self, phone):
+        """Do not overwrite media while a voice owner is active or uncertain.
+
+        Called under the gateway mutation lock. Incoming SIP calls, including
+        ring and scheduled alert origination, preempt the voice runner through
+        its fresh AMI observer. Hangup, Stop and preferences remain available.
+        """
+        if self.voice is None or not any(
+                profile.phone_id == phone['id'] for profile in self._voice_profiles):
+            return
+        try:
+            value = self.voice.status(
+                phone['id'], context=self._phone_voice_context(phone['id']))
+            value = self._voice_module._safe_status(value)
+        except self._voice_module.ControlError as error:
+            raise Refused(error.reason, error.status) from None
+        require(not value['active'] and value['state'] not in {
+            'starting', 'running', 'stopping', 'recovery_required', 'external_owner'},
+            'voice_phone_busy')
 
     def close_voice(self, *, uncertain=False):
         if self.voice is None:
@@ -622,6 +646,7 @@ class Gateway:
         target = targets[0]
         require(target['id'] != phone['id'], 'intercom_requires_two_phones')
         for item in (phone, target):
+            self.require_voice_available(item)
             require(all(endpoints.get(number) not in (None, 'Unavailable', 'Invalid') for number in item['lines']),
                     'phone_unavailable', 503)
             require(not own_channels(item, channels) and
@@ -767,6 +792,11 @@ class Gateway:
     def _mutate(self, phone, action, body):
         line = body.get('line', phone['id'])
         require(line in phone['lines'], 'line_does_not_belong_to_phone', 400)
+        # Ring/alert originate ordinary incoming calls, whose higher priority
+        # must interrupt voice listening. Only direct phone media/key/display
+        # mutations need to wait for the voice owner to finish.
+        if action in ('dial', 'speaker', 'message', 'image', 'answer'):
+            self.require_voice_available(phone)
         if action in ('dnd', 'autoanswer'):
             require(type(body.get('enabled')) is bool, 'enabled_boolean_required', 400)
             # Persist desired state before AMI writes. A partial two-line update
@@ -895,8 +925,17 @@ class Gateway:
                             continue
                         self.auto_attempts.add(identity)  # One attempt, including ambiguous timeout.
                         line = item['Channel'].split('/')[1].split('-')[0]
-                        self.mutate(phone['id'], 'answer', {'line': line, 'channel': item['Channel'],
-                                    'uniqueid': identity, 'idempotency_key': 'autoanswer:' + identity})
+                        try:
+                            self.mutate(phone['id'], 'answer', {'line': line, 'channel': item['Channel'],
+                                        'uniqueid': identity, 'idempotency_key': 'autoanswer:' + identity})
+                        except Refused as error:
+                            if error.reason != 'voice_phone_busy':
+                                raise
+                            # This refusal occurs before any phone I/O. Let an
+                            # incoming call preempt the voice runner, then allow
+                            # one answer after its cleanup is confirmed. Keep
+                            # every ambiguous hardware attempt claimed.
+                            self.auto_attempts.discard(identity)
             except Exception:
                 # No credentials, text, image data or raw remote responses in logs.
                 pass

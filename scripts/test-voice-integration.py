@@ -492,20 +492,43 @@ class FixtureCoordinator:
         require(value["voice"]["phone"] == "201" and value["voice"]["line"] == "202", "wrong_owner_identity")
 
         code, sibling = self.cli("201", "status")
-        identity_ok = (code == 0 and sibling["voice"]["session_id"] == session_id
+        identity_ok = (self._expected_cli_exit(scenario, code, sibling)
+                       and sibling["status"] == "ok"
+                       and sibling["voice"]["session_id"] == session_id
                        and sibling["voice"]["phone"] == "201")
         code, repeat = self.cli("201", "start", "--idempotency-key", request_id, *self.START_FLAGS)
-        repeat_ok = (code == 0 and repeat["voice"]["session_id"] == session_id
+        repeat_ok = (self._expected_cli_exit(scenario, code, repeat)
+                     and repeat["status"] == "accepted" and repeat["action_id"] == request_id
+                     and repeat["voice"]["session_id"] == session_id
                      and len(self.launches) == launch_index + 1)
 
         launch = self.launches[launch_index]
         if scenario == "stop":
             self._stop_during_playback(launch, session_id)
-        terminal = self._wait_for_terminal()
+        terminal_exit, terminal = self._wait_for_terminal(scenario)
+        # Exercise a completed failed replay deterministically. The earlier
+        # replay can race the provider failure and legitimately still be active.
+        replay_exit, replay = self.cli("201", "start", "--idempotency-key", request_id, *self.START_FLAGS)
+        repeat_ok = (repeat_ok and self._expected_cli_exit(scenario, replay_exit, replay)
+                     and replay["status"] == "accepted" and replay["action_id"] == request_id
+                     and replay["voice"]["session_id"] == session_id
+                     and replay["voice"]["state"] == terminal["voice"]["state"]
+                     and len(self.launches) == launch_index + 1)
         launch["handle"].process.wait(timeout=min(2, self.remaining()))
         evidence = json.loads(launch["evidence"].read_text())
         expected_state = self._verify_scenario(scenario, terminal, evidence, identity_ok, repeat_ok)
-        self._record_scenario(scenario, evidence, start_exit, expected_state, identity_ok, repeat_ok)
+        self._record_scenario(scenario, evidence, start_exit, expected_state, identity_ok, repeat_ok,
+                              terminal_exit, replay_exit)
+
+    @staticmethod
+    def _expected_cli_exit(scenario, code, response):
+        """Accept nonzero only for the injected, cleanly stopped provider failure."""
+        voice = response["voice"]
+        if voice["state"] == "failed":
+            return (scenario == "provider-failure" and code == 1
+                    and voice["error"] == "voice_session_failed"
+                    and voice["stop_confirmed"] is True and voice["active"] is False)
+        return code == 0 and voice["state"] in ("starting", "running", "stopping", "stopped")
 
     def _stop_during_playback(self, launch, session_id):
         code, refusal = self.cli("201", "start", "--idempotency-key", "competing-start", *self.START_FLAGS)
@@ -523,12 +546,13 @@ class FixtureCoordinator:
             require(launch["handle"].poll() is None, "runner_exited_before_playback")
             time.sleep(.01)
 
-    def _wait_for_terminal(self):
+    def _wait_for_terminal(self, scenario):
         while True:
             self.remaining()
-            _, terminal = self.cli("201", "status")
+            code, terminal = self.cli("201", "status")
+            require(self._expected_cli_exit(scenario, code, terminal), "unexpected_cli_exit")
             if not terminal["voice"]["active"]:
-                return terminal
+                return code, terminal
             time.sleep(.02)
 
     @staticmethod
@@ -554,7 +578,8 @@ class FixtureCoordinator:
         require(identity_ok and repeat_ok, "sibling_or_idempotency_failure")
         return expected
 
-    def _record_scenario(self, scenario, evidence, start_exit, expected_state, identity_ok, repeat_ok):
+    def _record_scenario(self, scenario, evidence, start_exit, expected_state, identity_ok, repeat_ok,
+                         terminal_exit, replay_exit):
         self.summary["external_network_attempts"] += evidence["external_network_attempts"]
         row = {}
         for key in ("scenario", "input_frames", "output_frames", "assistant_states", "ha_audio_bytes",
@@ -562,6 +587,7 @@ class FixtureCoordinator:
             row[key] = evidence[key]
         row.update(cli_start_exit=start_exit, terminal_state=expected_state, stop_confirmed=True,
                    sibling_owner_identity=identity_ok, duplicate_request_one_launch=repeat_ok,
+                   cli_terminal_exit=terminal_exit, cli_terminal_replay_exit=replay_exit,
                    fault_injected=scenario == "provider-failure")
         self.runs.append(row)
 

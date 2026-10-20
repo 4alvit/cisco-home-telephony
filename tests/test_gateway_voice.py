@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -35,7 +36,7 @@ class GatewayVoiceTests(unittest.TestCase):
         self.module = SimpleNamespace(load_control_config=mock.Mock(return_value=self.registry),
             TokenSourceAuthorizer=self.core.TokenSourceAuthorizer,
             VoiceControl=mock.Mock(return_value=self.voice), ControlError=self.core.ControlError,
-            STOP_GRACE_SECONDS=45)
+            STOP_GRACE_SECONDS=45, _safe_status=self.core._safe_status)
 
     def attach(self):
         with mock.patch.object(gateway, 'app_module', return_value=self.module):
@@ -170,6 +171,203 @@ class GatewayVoiceTests(unittest.TestCase):
             self.assertNotIn('voice', self.gateway.listing()['phones'][0]['capabilities'])
             self.attach()
             self.assertIn('voice', self.gateway.listing()['phones'][0]['capabilities'])
+
+    def test_voice_ownership_blocks_interfering_actions_on_both_lines(self):
+        self.attach()
+        for state, active in (('starting', True), ('running', True),
+                              ('stopping', True), ('recovery_required', False),
+                              ('external_owner', False)):
+            self.voice.status.return_value = dict(voice_status(), state=state, active=active)
+            for action in ('dial', 'speaker', 'message', 'image', 'answer'):
+                for line in ('201', '202'):
+                    with self.subTest(state=state, action=action, line=line), \
+                         mock.patch.object(gateway, 'AMI') as ami, \
+                         mock.patch.object(gateway, 'execute') as execute:
+                        with self.assertRaises(gateway.Refused) as caught:
+                            self.gateway.mutate('201', action, {
+                                'line': line, 'idempotency_key': 'blocked-voice-action'})
+                        self.assertEqual(caught.exception.reason, 'voice_phone_busy')
+                        ami.assert_not_called()
+                        execute.assert_not_called()
+
+    def test_voice_unknown_state_fails_closed_without_phone_io(self):
+        self.attach()
+        for value in ({}, dict(voice_status(), state='unknown'),
+                      dict(voice_status(), active='false')):
+            self.voice.status.return_value = value
+            with self.subTest(value=value), mock.patch.object(gateway, 'execute') as execute:
+                with self.assertRaises(gateway.Refused):
+                    self.gateway.mutate('201', 'speaker', {
+                        'mode': 'toggle', 'idempotency_key': 'invalid-voice-state'})
+                execute.assert_not_called()
+
+    def test_active_voice_allows_incoming_ring_and_timer_alarm_origination(self):
+        self.attach()
+        self.voice.status.return_value = dict(voice_status(), state='running', active=True)
+        for action, extra in (('ring', {'destination': '640'}),
+                              ('alert', {'kind': 'timer'}),
+                              ('alert', {'kind': 'alarm'})):
+            with self.subTest(action=action, extra=extra), \
+                 mock.patch.object(gateway, 'AMI', FakeAMI), \
+                 mock.patch.object(FakeAMI, 'channels', []), \
+                 mock.patch.object(FakeAMI, 'endpoints', {
+                     '201': 'Not in use', '202': 'Not in use'}), \
+                 mock.patch.object(FakeAMI, 'calls', []), \
+                 mock.patch.object(gateway, 'execute') as execute:
+                result = self.gateway.mutate('201', action, {
+                    'line': '202', 'idempotency_key': 'voice-incoming-' + extra.get('kind', action),
+                    **extra})
+                self.assertEqual(result['status'], 'accepted')
+                origination = [args for name, args in FakeAMI.calls if name == 'Originate']
+                self.assertEqual(len(origination), 1)
+                self.assertEqual(origination[0]['Channel'],
+                                 'PJSIP/202' if action == 'ring' else 'Local/202@cisco-alert/n')
+                execute.assert_not_called()
+                self.voice.status.assert_not_called()
+                self.gateway.db.execute("UPDATE alerts SET state='ended'")
+                self.gateway.db.commit()
+
+    def test_active_voice_does_not_block_exact_call_hangup_or_preferences(self):
+        self.attach()
+        self.voice.status.return_value = dict(voice_status(), state='running', active=True)
+        channel = {'Channel': 'PJSIP/202-abc', 'Uniqueid': 'synthetic.123',
+                   'ChannelStateDesc': 'Up'}
+        FakeAMI.calls = []
+        with mock.patch.object(gateway, 'AMI', FakeAMI), \
+             mock.patch.object(FakeAMI, 'channels', [channel]):
+            self.gateway.mutate('201', 'hangup', {
+                'line': '202', 'channel': channel['Channel'], 'uniqueid': channel['Uniqueid'],
+                'idempotency_key': 'hangup-during-voice'})
+            self.gateway.mutate('201', 'dnd', {
+                'enabled': True, 'idempotency_key': 'dnd-during-voice'})
+        self.assertIn(('Hangup', {'Channel': channel['Channel'], 'Cause': '16'}), FakeAMI.calls)
+        self.assertTrue(self.gateway.preference('201')['dnd'])
+        self.voice.status.assert_not_called()
+
+    def test_autoanswer_waits_for_voice_cleanup_without_consuming_attempt(self):
+        self.attach()
+        self.gateway.db.execute("UPDATE preferences SET autoanswer=1 WHERE phone='201'")
+        self.gateway.db.commit()
+        self.gateway.dnd_pending.clear()
+        self.gateway.last_pbx_start = ('synthetic-date', 'synthetic-time')
+        channel = {'Channel': 'PJSIP/202-abc', 'Uniqueid': 'synthetic.123',
+                   'ChannelStateDesc': 'Ringing'}
+        ticks = []
+
+        def wait(_duration):
+            ticks.append(True)
+            self.voice.status.return_value = (
+                dict(voice_status(), state='stopping', active=True, stop_confirmed=False)
+                if len(ticks) == 1 else voice_status())
+            return len(ticks) > 3
+
+        ami = mock.Mock()
+        ami.__enter__ = mock.Mock(return_value=ami)
+        ami.__exit__ = mock.Mock(return_value=False)
+        ami.action.return_value = [{'CoreStartupDate': 'synthetic-date',
+                                    'CoreStartupTime': 'synthetic-time'}]
+        ami.snapshot.return_value = ({'201': 'Not in use', '202': 'Ringing'}, [channel])
+        with mock.patch.object(self.gateway, 'stopped') as stopped, \
+             mock.patch.object(gateway, 'AMI', return_value=ami), \
+             mock.patch.object(gateway, 'execute') as execute:
+            stopped.wait.side_effect = wait
+            self.gateway.background()
+        execute.assert_called_once_with(self.gateway.phones['201'], 'Key:Line2')
+        self.assertIn(channel['Uniqueid'], self.gateway.auto_attempts)
+
+    def test_autoanswer_does_not_retry_ambiguous_phone_outcome(self):
+        self.attach()
+        self.gateway.db.execute("UPDATE preferences SET autoanswer=1 WHERE phone='201'")
+        self.gateway.db.commit()
+        self.gateway.dnd_pending.clear()
+        self.gateway.last_pbx_start = ('synthetic-date', 'synthetic-time')
+        channel = {'Channel': 'PJSIP/202-abc', 'Uniqueid': 'synthetic.123',
+                   'ChannelStateDesc': 'Ringing'}
+        ami = mock.Mock()
+        ami.__enter__ = mock.Mock(return_value=ami)
+        ami.__exit__ = mock.Mock(return_value=False)
+        ami.action.return_value = [{'CoreStartupDate': 'synthetic-date',
+                                    'CoreStartupTime': 'synthetic-time'}]
+        ami.snapshot.return_value = ({'201': 'Not in use', '202': 'Ringing'}, [channel])
+        with mock.patch.object(self.gateway, 'stopped') as stopped, \
+             mock.patch.object(gateway, 'AMI', return_value=ami), \
+             mock.patch.object(gateway, 'execute', side_effect=OSError('synthetic timeout')) as execute:
+            stopped.wait.side_effect = [False, False, False, True]
+            self.gateway.background()
+        execute.assert_called_once_with(self.gateway.phones['201'], 'Key:Line2')
+        self.assertIn(channel['Uniqueid'], self.gateway.auto_attempts)
+
+    def test_intercom_checks_destination_voice_owner_before_originate(self):
+        self.attach()
+        destination = dict(config()['phones'][0], id='203', lines=['203', '204'])
+        self.gateway.phones['203'] = destination
+        self.gateway.config['dial_allowlist'].append('204')
+        self.gateway._voice_profiles = (*self.gateway._voice_profiles,
+                                       SimpleNamespace(phone_id='203'))
+        self.voice.status.side_effect = lambda target, **_kwargs: (
+            dict(voice_status(), phone='203', line='204', state='running', active=True)
+            if target == '203' else voice_status())
+        FakeAMI.calls = []
+        with mock.patch.object(gateway, 'AMI', FakeAMI), \
+             mock.patch.object(FakeAMI, 'channels', []), \
+             mock.patch.object(FakeAMI, 'endpoints', {
+                 line: 'Not in use' for line in ('201', '202', '203', '204')}):
+            with self.assertRaises(gateway.Refused) as caught:
+                self.gateway.mutate('201', 'intercom', {
+                    'line': '202', 'number': '204', 'idempotency_key': 'intercom-voice-target'})
+        self.assertEqual(caught.exception.reason, 'voice_phone_busy')
+        self.assertEqual(FakeAMI.calls, [])
+
+    def test_start_and_dial_share_lock_but_status_and_stop_do_not(self):
+        self.attach()
+        entered, release, dial_started, dial_done = (threading.Event() for _ in range(4))
+        errors = []
+
+        def start(*_args, **_kwargs):
+            entered.set()
+            if not release.wait(3):
+                raise AssertionError('start release timed out')
+            self.voice.status.return_value = dict(voice_status(), state='running', active=True)
+            return self.voice.status.return_value
+
+        def dial():
+            dial_started.set()
+            try:
+                self.gateway.mutate('201', 'dial', {
+                    'line': '202', 'number': '600', 'idempotency_key': 'concurrent-voice-dial'})
+            except gateway.Refused as error:
+                errors.append(error.reason)
+            finally:
+                dial_done.set()
+
+        self.voice.start.side_effect = start
+        handler = self.handler('start', method='POST', body=json.dumps({
+            'idempotency_key': 'concurrent-voice-start', 'attended': True,
+            'exclusive_media': True, 'enable_microphone': True}).encode())
+        starter = threading.Thread(target=handler.do_POST)
+        caller = threading.Thread(target=dial)
+        try:
+            starter.start()
+            self.assertTrue(entered.wait(2))
+            caller.start()
+            self.assertTrue(dial_started.wait(2))
+            self.assertFalse(dial_done.wait(.05))
+            for operation in ('status', 'stop'):
+                body = (b'' if operation == 'status' else json.dumps({
+                    'idempotency_key': 'concurrent-voice-stop',
+                    'session_id': 'a' * 32}).encode())
+                request = self.handler(operation, method='GET' if operation == 'status' else 'POST',
+                                       body=body)
+                request.do_GET()
+                self.assertEqual(request.reply.call_args.args[0], 200)
+        finally:
+            release.set()
+            starter.join(3)
+            if caller.ident is not None:
+                caller.join(3)
+        self.assertFalse(starter.is_alive())
+        self.assertFalse(caller.is_alive())
+        self.assertEqual(errors, ['voice_phone_busy'])
 
     def test_shutdown_wait_is_bounded_and_does_not_claim_cleanup(self):
         self.attach()
