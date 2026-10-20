@@ -208,9 +208,11 @@ class AssistantService:
         if self._owner is not None or self._clock() < self._quiet_until:
             raise RuntimeError("another turn is active or cooling down")
         stream_id = await self._begin_stream(phone_id, wake_detection=False)
-        if self._owner is not None:
+        # Stream cleanup can suspend while another phone completes a turn and
+        # starts its duplicate window. Recheck both gates after that await.
+        if self._owner is not None or self._clock() < self._quiet_until:
             await self.stop(phone_id, reason="duplicate_activation")
-            raise RuntimeError("another turn is active")
+            raise RuntimeError("another turn is active or cooling down")
         self._start_turn(phone_id, stream_id)
         return stream_id
 
