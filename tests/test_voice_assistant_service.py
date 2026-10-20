@@ -282,6 +282,54 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(service.status("alpha").state, "stopped")
         self.assertFalse(any(event.state == "armed" for event in self.events))
 
+    async def test_other_phone_completion_blocks_activation_suspended_before_cooldown(self):
+        class DelayedStop(Playback):
+            def __init__(self):
+                super().__init__()
+                self.started, self.release = asyncio.Event(), asyncio.Event()
+                self.delay_alpha = True
+
+            async def stop(self, phone):
+                self.stops.append(phone)
+                if phone == "alpha" and self.delay_alpha:
+                    self.delay_alpha = False
+                    self.started.set()
+                    await self.release.wait()
+
+        playback, assist, events = DelayedStop(), Assist(), []
+        now = [100.0]
+        service = AssistantService(
+            ServiceSettings(enabled=True, duplicate_window_seconds=2),
+            {"alpha": True, "beta": True}, lambda _: NeverWake(),
+            assist, playback, events.append, clock=lambda: now[0],
+        )
+        self.addAsyncCleanup(service.close)
+        arming = asyncio.create_task(service.activate("alpha"))
+        try:
+            await asyncio.wait_for(playback.started.wait(), 1)
+            beta = await service.activate("beta")
+            service.feed_pcm("beta", beta, FRAME)
+            service.end_utterance("beta", beta)
+            await service.wait_idle("beta")
+        finally:
+            playback.release.set()
+
+        with self.assertRaisesRegex(RuntimeError, "cooling down"):
+            await arming
+        self.assertEqual(service.status("alpha").state, "stopped")
+        self.assertEqual(service.status("alpha").reason, "duplicate_activation")
+        self.assertEqual(len(assist.calls), 1)
+        self.assertEqual([event.phone_id for event in events if event.state == "listening"],
+                         ["beta"])
+
+        # The rejection retains the other phone's original duplicate deadline.
+        now[0] = 101.999
+        with self.assertRaisesRegex(RuntimeError, "cooling down"):
+            await service.activate("alpha")
+        now[0] = 102.0
+        await service.activate("alpha")
+        self.assertEqual(service.status("alpha").state, "listening")
+
     async def test_simultaneous_wakes_have_one_owner_and_fresh_audio(self):
         service = self.make()
         a, b = await service.listen("alpha"), await service.listen("beta")
