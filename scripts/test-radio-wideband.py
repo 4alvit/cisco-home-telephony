@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify radio bandwidth and G.711 fallback in a disposable, network-none PBX.
+"""Verify incoming/outgoing radio bandwidth and G.711 fallback in an isolated PBX.
 
 Only synthetic local tones, credentials and loopback SIP/RTP are used. Never
 accepts an existing container or accesses a real phone or radio station.
@@ -169,13 +169,64 @@ def isolated_container(docker):
                 signal.setitimer(signal.ITIMER_REAL, remaining, previous_timer[1])
 
 
+def incoming_fixture_pjsip(content):
+    """Retain generated codec policy; identify only the isolated loopback peer."""
+    content = helper.fixture_pjsip(content)
+    pattern = r"(?ms)^\[201\]\ntype=endpoint\n.*?(?=^\[|\Z)"
+    matches = list(re.finditer(pattern, content))
+    need(len(matches) == 1, "generated fixture endpoint missing")
+    match = matches[0]
+    before = match[0]
+    need(len(re.findall(r"(?m)^auth=auth-201$", before)) == 1
+         and len(re.findall(r"(?m)^context=home$", before)) == 1
+         and len(re.findall(r"(?m)^identify_by=username$", before)) == 1,
+         "unexpected generated fixture identification")
+    after = re.sub(r"(?m)^auth=auth-201\n", "", before)
+    after = after.replace("context=home\n", "context=radio-smoke\n", 1)
+    after = after.replace("identify_by=username\n", "identify_by=ip\n", 1)
+    return (content[:match.start()] + after + content[match.end():]
+            + "\n[radio-fixture-loopback]\ntype=identify\nendpoint=201\nmatch=127.0.0.2/32\n")
+
+
+def selected_answer(body, payload, codec):
+    """A sorted broad answer does not prove a single negotiated voice codec."""
+    rows = body.splitlines()
+    media = [line.split() for line in rows if line.startswith("m=")]
+    need(len(media) == 1 and len(media[0]) >= 4 and media[0][0] == "m=audio"
+         and media[0][1].isdigit() and 1 <= int(media[0][1]) <= 65535
+         and media[0][2] == "RTP/AVP", "invalid incoming SDP audio answer")
+    need(all(value.isdigit() for value in media[0][3:]), "invalid SDP payload")
+    accepted = [int(value) for value in media[0][3:]]
+    need(len(accepted) == len(set(accepted)), "duplicate SDP payload")
+    mappings = {}
+    for line in rows:
+        match = re.fullmatch(r"a=rtpmap:(\d+) ([^ ]+)", line)
+        if match:
+            number = int(match[1])
+            need(number not in mappings, "duplicate SDP codec mapping")
+            mappings[number] = match[2].lower()
+    need(mappings.get(payload) == codec.lower() + "/8000",
+         "selected incoming codec mapping missing")
+    voice = [value for value in accepted
+             if not mappings.get(value, "").startswith("telephone-event/")]
+    need(voice == [payload], "incoming answer must select exactly one voice codec")
+    need(all(value == payload or (value == 101 and mappings.get(value) == "telephone-event/8000")
+             for value in accepted), "incoming answer contains an unoffered payload")
+    return accepted
+
+
 class Phone:
-    """Immediately answer one loopback call with a selected codec."""
+    """One isolated outgoing-answer or incoming-offer SIP/RTP peer."""
 
     reply = helper.Phone.reply
 
-    def __init__(self, codec, payload):
+    def __init__(self, codec, payload, *, incoming=False, mixed_offer=False):
         self.codec, self.payload = codec, payload
+        self.incoming, self.mixed_offer = incoming, mixed_offer
+        self.call_id = secrets.token_hex(16) + "@radio-fixture"
+        self.local_from = "<sip:201@127.0.0.2>;tag=" + secrets.token_hex(8)
+        self.remote_to = None
+        self.answer_payloads = None
         self.sip = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.audio = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sip.bind(("127.0.0.2", 5090))
@@ -184,6 +235,66 @@ class Phone:
         self.packets, self.error, self.bye, self.offered = [], None, False, ""
         self.thread = threading.Thread(target=self.listen, daemon=True)
         self.thread.start()
+
+    def send_request(self, method, uri, to, body=""):
+        rows = [f"{method} {uri} SIP/2.0",
+                "Via: SIP/2.0/UDP 127.0.0.2:5090;rport;branch=z9hG4bK" + secrets.token_hex(12),
+                "Max-Forwards: 70", "From: " + self.local_from, "To: " + to,
+                "Call-ID: " + self.call_id, "CSeq: 1 " + method,
+                "Contact: <sip:201@127.0.0.2:5090>",
+                "Allow: INVITE, ACK, CANCEL, BYE, OPTIONS"]
+        if body:
+            rows.append("Content-Type: application/sdp")
+        rows += ["Content-Length: " + str(len(body.encode("ascii"))), "", body]
+        self.sip.sendto("\r\n".join(rows).encode("ascii"), ("127.0.0.1", 5060))
+
+    def dial(self):
+        need(self.incoming, "only incoming fixture peer can dial")
+        mappings = ([(0, "PCMU/8000"), (8, "PCMA/8000"), (18, "G729/8000"),
+                     (102, "L16/16000"), (9, "G722/8000"), (116, "iLBC/8000"),
+                     (101, "telephone-event/8000")] if self.mixed_offer
+                    else [(0, "PCMU/8000")])
+        self.offered = ("v=0\r\no=fixture 1 1 IN IP4 127.0.0.2\r\ns=radio-fixture\r\n"
+                        "c=IN IP4 127.0.0.2\r\nt=0 0\r\nm=audio 6000 RTP/AVP "
+                        + " ".join(str(number) for number, _ in mappings) + "\r\n"
+                        + "".join(f"a=rtpmap:{number} {name}\r\n" for number, name in mappings)
+                        + ("a=fmtp:18 annexb=no\r\na=fmtp:116 mode=20\r\na=fmtp:101 0-15\r\n"
+                           if self.mixed_offer else "")
+                        + "a=sendrecv\r\na=ptime:20\r\n")
+        self.send_request("INVITE", "sip:799@127.0.0.1", "<sip:799@127.0.0.1>", self.offered)
+
+    def incoming_message(self, message, address):
+        h = helper.headers(message)
+        method = message.split(" ", 1)[0]
+        if method == "OPTIONS":
+            self.reply(message, address, "200 OK")
+            return
+        need(h.get("call-id") == self.call_id, "incoming SIP dialog changed")
+        if method == "SIP/2.0":
+            need(h.get("cseq") == "1 INVITE", "unexpected incoming SIP transaction")
+            status = int(message.split(" ", 2)[1])
+            if 100 <= status < 200:
+                return
+            need(status == 200 and h.get("from") == self.local_from
+                 and ";tag=" in h.get("to", ""), "incoming INVITE was not accepted")
+            contact = re.fullmatch(r"<(sip:[^<> ]+)>", h.get("contact", ""))
+            need(contact is not None
+                 and re.fullmatch(r"sip:(?:[^@;: ]+@)?127\.0\.0\.1(?::5060)?(?:;transport=udp)?",
+                                  contact[1], re.I),
+                 "incoming response has an unexpected remote target")
+            need(self.remote_to is None or self.remote_to == h["to"], "incoming dialog tag changed")
+            self.remote_to = h["to"]
+            # Complete the transaction even when its codec answer fails the oracle.
+            self.send_request("ACK", contact[1], self.remote_to)
+            self.answer_payloads = selected_answer(
+                message.partition("\r\n\r\n")[2], self.payload, self.codec)
+        elif method == "BYE":
+            need(self.remote_to is not None and h.get("from") == self.remote_to
+                 and h.get("to") == self.local_from, "incoming BYE dialog changed")
+            self.reply(message, address, "200 OK")
+            self.bye = True
+        else:
+            raise RuntimeError("unexpected incoming SIP method")
 
     def listen(self):
         try:
@@ -200,6 +311,10 @@ class Phone:
                         self.packets.append(raw[12:])
                         continue
                     message = raw.decode("ascii")
+                    if self.incoming:
+                        need(address == ("127.0.0.1", 5060), "unexpected incoming SIP peer")
+                        self.incoming_message(message, address)
+                        continue
                     method = message.split(" ", 1)[0]
                     if method == "INVITE":
                         self.offered = message.partition("\r\n\r\n")[2]
@@ -240,11 +355,14 @@ def test_inside():
                     "-c:a", "libmp3lame", "-b:a", "192k", "-y",
                     "/tmp/radio-fixture.mp3"], check=True, timeout=15)
     result = {"network": "none", "synthetic_only": True, "physical_phones_called": False, "cases": {}}
-    for codec, payload, decoder, rate in (("G722", 9, "g722", 16000),
-                                         ("PCMU", 0, "mulaw", 8000)):
+    cases = (("G722", "G722", 9, "g722", 16000, False),
+             ("PCMU", "PCMU", 0, "mulaw", 8000, False),
+             ("incoming_mixed_G722", "G722", 9, "g722", 16000, True),
+             ("incoming_PCMU", "PCMU", 0, "mulaw", 8000, True))
+    for case, codec, payload, decoder, rate, incoming in cases:
         receipt_path = Path("/tmp/radio-fixture.json")
         receipt_path.unlink(missing_ok=True)
-        peer = Phone(codec, payload)
+        peer = Phone(codec, payload, incoming=incoming, mixed_offer=incoming and codec == "G722")
         try:
             def ready():
                 need(peer.error is None, str(peer.error))
@@ -252,9 +370,12 @@ def test_inside():
                     ["asterisk", "-rx", "pjsip show endpoint 201"], text=True, timeout=5)
                 return "Not in use" in status
             await_condition(ready, 8, "synthetic SIP endpoint ready")
-            subprocess.run(["asterisk", "-rx",
-                            "channel originate PJSIP/201 extension 799@radio-smoke"],
-                           check=True, capture_output=True, timeout=5)
+            if incoming:
+                peer.dial()
+            else:
+                subprocess.run(["asterisk", "-rx",
+                                "channel originate PJSIP/201 extension 799@radio-smoke"],
+                               check=True, capture_output=True, timeout=5)
             completed_receipt = {}
 
             def finished():
@@ -300,11 +421,15 @@ def test_inside():
             need(low > 500, "radio missing 1 kHz reference tone")
             entry = {"rtp_payload": payload, "decoded_rate": rate,
                      "packets": len(peer.packets), "tone_1khz": round(low)}
+            if incoming:
+                need(peer.answer_payloads is not None, "incoming SDP answer missing")
+                entry["answer_payloads"] = peer.answer_payloads
+                entry["offer_payloads"] = [0, 8, 18, 102, 9, 116, 101] if peer.mixed_offer else [0]
             if codec == "G722":
                 high = amplitude(samples, rate, 5000)
                 need(high > 500 and high / low > .25, "5 kHz tone lost in radio path")
                 entry["tone_5khz"] = round(high)
-            result["cases"][codec] = entry
+            result["cases"][case] = entry
         finally:
             peer.close()
     result["status"] = "PASS"
@@ -336,7 +461,7 @@ def main():
         provision.generate(site, inventory, root)
         folder = root / "asterisk"
         pjsip = folder / "pjsip.conf"
-        pjsip.write_text(helper.fixture_pjsip(pjsip.read_text()))
+        pjsip.write_text(incoming_fixture_pjsip(pjsip.read_text()))
         with (folder / "extensions.conf").open("a") as stream:
             stream.write("\n[radio-smoke]\nexten => 799,1,Answer()\n"
                          " same => n,AGI(/etc/asterisk/radio_fixture_agi.py,echo)\n"
@@ -363,7 +488,7 @@ def main():
             await_condition(loaded, 25, "radio fixture dialplan loaded")
             completed = subprocess.run(docker + ["exec", container, "python3",
                                                  "/etc/asterisk/test-radio-wideband.py", "--inside"],
-                                       capture_output=True, text=True, timeout=55)
+                                       capture_output=True, text=True, timeout=90)
             need(completed.returncode == 0, completed.stdout[-3000:] + completed.stderr[-3000:])
             result = json.loads(completed.stdout)
             need(result.get("status") == "PASS", "radio fixture did not pass")

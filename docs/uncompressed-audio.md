@@ -70,9 +70,12 @@ does not override this interface-specific restriction.
 
 ## What remains to test
 
-The retained installation captures do not include real-phone SDP proving L16
-negotiation. A prior phone status snapshot showed G.711 mu-law reception;
-that reports the codec used for that call, not the phone's full capabilities.
+A real-phone SDP offer captured on 2026-10-20 advertised
+`a=rtpmap:102 L16/16000`. This confirms that the phone advertised L16 at
+16 kHz; it does not prove that L16 was selected or that two-way L16 audio
+worked. Payload 102 belongs to that offer and is not a fixed codec number.
+A prior phone status snapshot showed G.711 mu-law reception, which reports
+the codec used for that call rather than the phone's full capabilities.
 
 A firsthand experiment using `SIP45.9-4-2SR4-3S` reported LINEAR 8/16 kHz in
 DSP logs and a negotiated call with `slin16` as the only common codec.

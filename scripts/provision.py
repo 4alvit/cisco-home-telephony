@@ -580,7 +580,8 @@ def generate(site, inventory, out, *, pbx_only=False):
             ext, label = line["extension"], p.get("room", line["label"])
             pw=passwords[ext]
             # Asterisk 22 uses *_call_offer_pref; codec_prefs_* is reserved.
-            # Keep both G.711 variants for peers without G.722.
+            # Answer with one common codec so a G.722-capable caller cannot
+            # select G.711 from a multi-codec answer. G.711-only peers still work.
             # https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/Module_Configuration/res_pjsip/#incoming_call_offer_pref
             pjsip.append(f'''[{ext}]
 type=endpoint
@@ -588,7 +589,7 @@ transport=transport-{transport}
 context=home
 disallow=all
 allow=g722,ulaw,alaw
-incoming_call_offer_pref=local
+incoming_call_offer_pref=local_first
 outgoing_call_offer_pref=local_merge
 auth=auth-{ext}
 aors={ext}

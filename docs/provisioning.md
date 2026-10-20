@@ -151,8 +151,11 @@ anonymous endpoint or trunk. The source ACL is restricted to `phone_cidrs`
 RTP bound to its LAN IP (`media_address`, `bind_rtp_to_media_address`). This avoids
 selecting a WireGuard/overlay address on a multi-interface node.
 
-The baseline G.711 ulaw/alaw codecs need no transcoding for a typical internal
-call. Add G.722, BLF, shared lines, transfer and voicemail only after basic calling
-is verified; this delivery does not claim those features have been tested.
+Generated local endpoints prefer G.722 and retain G.711 ulaw/alaw fallback.
+The incoming-call policy selects one common codec; outgoing offers still
+permit G.711. Check the actual negotiated media using the
+[audio-quality guide](audio-quality.md). Verify basic calls before checking
+BLF, shared lines, transfer and voicemail; generated configuration alone
+does not establish that a feature works on a phone.
 
 PJSIP reference: [official Asterisk examples](https://docs.asterisk.org/Configuration/Channel-Drivers/SIP/Configuring-res_pjsip/res_pjsip-Configuration-Examples/).
