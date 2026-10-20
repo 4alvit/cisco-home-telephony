@@ -185,8 +185,22 @@ and checks call cleanup and decoder reaping.
 The fixture copies **the current checkout's radio worker** into that
 container. A `PASS` result therefore verifies that source against the
 chosen Asterisk image; it does not prove that an existing published image
-already contains the changed worker. The command is documented here as an
-acceptance procedure, not as a reported passing result.
+already contains the changed worker.
+
+**Verified on 2026-10-20:** the isolated fixture passed using the installed
+Asterisk 22.11.0 / FFmpeg 5.1.9 image with the candidate worker injected.
+Loopback G.722 (RTP payload 9) delivered 151 packets decoded at 16 kHz;
+measured tone amplitudes were 3,181 at 1 kHz and 3,184 at 5 kHz. PCMU
+(payload 0) delivered 151 packets decoded at 8 kHz, with a 1 kHz amplitude
+of 3,147. Worker/PBX process reaping and outer container, task, network
+namespace and staging cleanup passed. No physical phones or remote radio
+sources were used. This verifies the digital path, not a new image build,
+production deployment or audible improvement on a phone.
+
+For read-only test containers, keep writable mounts narrow: the first
+attempt failed before any calls because a `/var/lib/asterisk` tmpfs hid
+packaged XML assets. The successful retry mounted only the database
+directory and stored synthetic audio under `/tmp`.
 
 Use the reviewed [image/deployment process](k3s-deployment.md). Record the old
 image and private configuration for rollback. Rebuild with the changed
