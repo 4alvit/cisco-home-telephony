@@ -187,6 +187,44 @@ refused until the target is unambiguous. Request data and the bearer token
 travel on standard input, not in the command line, environment or pod files.
 There is no automatic fallback to direct transport.
 
+### Keep the Kubernetes connection usable
+
+The configured `kubectl.context` is resolved from the kubeconfig used by the
+calling shell. `kubectl` inherits `KUBECONFIG`; when that variable is unset it
+normally reads `~/.kube/config`, following the
+[Kubernetes loading rules](https://kubernetes.io/docs/concepts/configuration/organize-cluster-access-kubeconfig/).
+Naming a context in `cli.json` does not pin its
+API server, create a VPN connection or maintain an SSH tunnel.
+
+Inspect the selected API endpoint without printing kubeconfig credentials:
+
+```bash
+kubectl --context home-k3s config view --minify \
+  -o jsonpath='{.clusters[0].cluster.server}{"\n"}'
+kubectl --context home-k3s --namespace home-assistant get pods \
+  --selector app=homeassistant --request-timeout=10s
+```
+
+Use the context, namespace and selector from your own configuration. The first
+command reads local configuration; the second checks the actual connection and
+pod-list permission. A configured VPN route, a restored default context, or a
+successful SSH login alone does not establish that Kubernetes requests work.
+After pod lookup succeeds, the existing `pods/exec` permission and in-pod route
+to the gateway must work too.
+
+A temporary rollout kubeconfig may point at a loopback API port maintained by
+a separate forwarding process. Once that process stops, the kubeconfig still
+exists but its connection fails. Do not reuse it as a permanent CLI connection.
+Use a persistent, reachable API endpoint with valid TLS and the existing
+authorized credentials, or deliberately restore the supervised temporary path
+before using it. Keep the normal kubeconfig separate from temporary rollout
+files, and check which `KUBECONFIG` your shell selects after a rollout.
+
+This concerns the Kubernetes API connection only. The gateway and optional HA
+URLs in `cli.json` must still be their permitted private IPv4 origins, reachable
+from the selected pod. The CLI does not add an SSH transport or establish
+forwarding processes.
+
 ## 4. Save the existing gateway token privately
 
 Save the deployed token as
@@ -367,6 +405,11 @@ before replacing an existing schedule.
   harmless diagnostic. Do not dump pod environment variables or credentials.
 - **`kubectl_outcome_unknown`:** a command failed to start or exceeded its
   timeout. If it was a mutation, read status before deciding to try again.
+  Check the [selected API endpoint](#keep-the-kubernetes-connection-usable),
+  especially if the shell inherited a temporary rollout `KUBECONFIG`.
+  For a voice Start or Stop with an uncertain acknowledgement, follow
+  [voice recovery](voice-control.md#if-the-cli-loses-a-start-or-stop-acknowledgement);
+  a transport timeout does not prove that the microphone is off.
 
 ### The gateway cannot be reached or returns stale state
 

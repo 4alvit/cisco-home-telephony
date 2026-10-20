@@ -222,7 +222,7 @@ Every response exposes a bounded status object with `schema_version`, `phone`,
 is the original session's Start alias, or the queried alias when idle. A status
 request through the sibling line does not change an existing session's alias.
 The profile's configured transport line still selects the runner's media
-configuration. Responses exclude credentials, private paths,
+configuration. Gateway voice-status payloads exclude credentials, private paths,
 process arguments, transcripts, audio and raw child output. Error values are
 fixed codes, not exception text.
 
@@ -234,6 +234,66 @@ does not prove physical microphone closure when recovery is required.
 Assistant errors, input timeouts, transport failures and lease expiry remain
 `failed` even when their media cleanup is confirmed. Deliberate Stop and shutdown
 can report `stopped`; that state alone does not claim a completed conversation.
+
+## If the CLI loses a Start or Stop acknowledgement
+
+A timeout or broken connection can occur after the gateway receives a request.
+The client then cannot establish whether that request ran. An uncertain real
+Start or Stop is reported as `status: "not_confirmed"`, with its `action_id`
+and a reminder to inspect status before retrying. For example:
+
+```json
+{
+  "status": "not_confirmed",
+  "reason": "network_outcome_unknown",
+  "action_id": "voice-pilot-example-001",
+  "outcome": "unknown",
+  "recovery_command": "cisco --config .local/cisco-cli.json --timeout 20 --json 201 voice status",
+  "note": "The request may have been applied. Do not retry blindly. Restore the intended transport and KUBECONFIG, then run the read-only recovery command with the same private configuration."
+}
+```
+
+`action_id` identifies the request; it is not the `session_id` required for
+Stop. Keep the action ID, selected line and any previously returned session ID.
+A lost acknowledgement does not prove that Start was refused, that Stop worked,
+or that the microphone is off. Local validation failures, failed pod discovery
+before dispatch, and dry-run failures do not represent an attempted physical
+Start and remain `refused`.
+
+The local `recovery_command` preserves the selected `--config`, `--timeout`,
+line and JSON-output choice, with shell quoting. It includes the configuration
+path, so keep this recovery output private. Run it from the same working
+directory if the configuration path is relative.
+
+Recover in this order:
+
+1. Restore the intended client connection. For Kubernetes transport, check the
+   [selected kubeconfig and API endpoint](cli-installation.md#keep-the-kubernetes-connection-usable).
+   A closed temporary forwarding port must not be mistaken for a phone failure.
+2. Read the selected phone's current voice state:
+
+   ```sh
+   cisco --config .local/cisco-cli.json --json 201 voice status
+   ```
+
+   This request does not start media. A second transport error leaves the
+   outcome unresolved; it is not an idle status.
+3. If your session is still present, use its exact `session_id` for an intended
+   Stop and read status again. If ownership is unclear or another operator
+   owns the session, coordinate with that owner before acting.
+4. For a tracked session, confirm the matching ID, `active: false` and
+   `stop_confirmed: true`. If status is `idle` with `session_id: null`, there is
+   no currently tracked session; this does not prove that audio or a conversation
+   occurred, or resolve an outstanding ambiguous dispatch. Confirm no earlier
+   worker is still pending, coordinating with the operator when necessary.
+   Follow the physical recovery procedure below if closure remains uncertain.
+   Do not delete journals or restart the gateway merely to clear status.
+
+Do not replay Start with a new key to test connectivity. Request-key protection
+uses bounded retained history; it does not make blind retries a recovery
+procedure. The CLI does not retry the mutation automatically. Use a new key only
+for a deliberately new attended attempt after the previous ownership and media
+state are resolved.
 
 ## Deadlines and uncertain cleanup
 

@@ -4,6 +4,8 @@ import copy
 import io
 import json
 from pathlib import Path
+import shlex
+import subprocess
 import sys
 import unittest
 from unittest import mock
@@ -196,6 +198,122 @@ class VoiceTransportReasonTests(unittest.TestCase):
                     'body': {'session_id': SESSION}, 'timeout': 3})
             self.assertEqual(result['reason'], reason if reason != PRIVATE else 'gateway_http_error')
             self.assertNotIn(PRIVATE, json.dumps(result))
+
+
+class VoiceOutcomeTests(unittest.TestCase):
+    """Exercise the real dispatch boundary without contacting a phone."""
+
+    def invoke(self, args, *, transport='direct', worker=None, process=None, config_error=None):
+        config = {'transport': transport, 'gateway_url': 'http://192.168.50.10:18084',
+                  'token': 'a' * 48, 'kubectl': {'context': 'example', 'namespace': 'example',
+                  'selector': 'app=example', 'container': 'example'}}
+        output = io.StringIO()
+        with mock.patch.object(cisco, 'load_config', return_value=config,
+                               side_effect=config_error), \
+             mock.patch.object(cisco, 'perform', side_effect=worker) as http, \
+             mock.patch.object(cisco.subprocess, 'run', side_effect=process) as child, \
+             contextlib.redirect_stdout(output):
+            code = cisco.main(['--json', '--config', 'private config/example.json',
+                               '--timeout', '3', '202', 'voice', *args])
+        return code, json.loads(output.getvalue()), http, child
+
+    def mutations(self):
+        return [
+            (['start', '--idempotency-key', 'synthetic-request', '--attended',
+              '--exclusive-media', '--enable-microphone'], 'synthetic-request'),
+            (['stop', '--session-id', SESSION], 'voice-stop-' + SESSION),
+        ]
+
+    def pod_result(self):
+        value = {'items': [{'metadata': {'name': 'example-0'}, 'status': {
+            'phase': 'Running', 'conditions': [{'type': 'Ready', 'status': 'True'}],
+            'containerStatuses': [{'name': 'example', 'ready': True}]}}]}
+        return subprocess.CompletedProcess([], 0, json.dumps(value).encode(), b'')
+
+    def assert_uncertain(self, result, key):
+        self.assertEqual(result['status'], 'not_confirmed')
+        self.assertEqual(result['action_id'], key)
+        self.assertEqual(result['outcome'], 'unknown')
+        self.assertIn('Do not retry', result['note'])
+        self.assertEqual(shlex.split(result['recovery_command']),
+                         ['cisco', '--config', 'private config/example.json',
+                          '--timeout', '3', '--json', '202', 'voice', 'status'])
+        self.assertNotIn(PRIVATE, json.dumps(result))
+        self.assertNotIn('a' * 48, json.dumps(result))
+
+    def test_direct_lost_reply_preserves_start_and_stop_keys_without_retry(self):
+        for args, key in self.mutations():
+            with self.subTest(action=args[0]):
+                code, result, http, child = self.invoke(
+                    args, worker=[{'ok': False, 'reason': 'network_outcome_unknown'}])
+                self.assertEqual(code, 1)
+                self.assert_uncertain(result, key)
+                self.assertEqual(http.call_count, 1)
+                self.assertEqual(child.call_count, 0)
+                self.assertEqual(http.call_args.args[0]['body']['idempotency_key'], key)
+
+    def test_untrusted_ack_and_local_response_errors_remain_uncertain(self):
+        replies = [
+            {'ok': True, 'data': {'status': 'accepted', 'action_id': 'wrong-request',
+                                 'voice': status_value()}},
+            {'ok': True, 'data': {'status': 'accepted', 'action_id': 'synthetic-request',
+                                 'voice': {'transcript': PRIVATE}}},
+            OSError(PRIVATE),
+        ]
+        args, key = self.mutations()[0]
+        for reply in replies:
+            with self.subTest(reply_type=type(reply).__name__):
+                code, result, http, _child = self.invoke(args, worker=[reply])
+                self.assertEqual(code, 1)
+                self.assert_uncertain(result, key)
+                self.assertEqual(http.call_count, 1)
+
+    def test_kubectl_exec_timeout_keeps_key_but_discovery_timeout_is_refused(self):
+        for args, key in self.mutations():
+            with self.subTest(action=args[0], stage='exec'):
+                code, result, http, child = self.invoke(args, transport='kubectl', process=[
+                    self.pod_result(), subprocess.TimeoutExpired('synthetic', 13)])
+                self.assertEqual(code, 1)
+                self.assert_uncertain(result, key)
+                self.assertEqual(http.call_count, 0)
+                self.assertEqual(child.call_count, 2)
+                call = child.call_args
+                self.assertIn('exec', call.args[0])
+                self.assertNotIn('a' * 48, ' '.join(call.args[0]))
+                self.assertEqual(json.loads(call.kwargs['input'])['body']['idempotency_key'], key)
+            with self.subTest(action=args[0], stage='discovery'):
+                code, result, _http, child = self.invoke(args, transport='kubectl',
+                    process=[subprocess.TimeoutExpired('synthetic', 13)])
+                self.assertEqual(code, 1)
+                self.assertEqual(result['status'], 'refused')
+                self.assertNotIn('action_id', result)
+                self.assertNotIn('recovery_command', result)
+                self.assertEqual(child.call_count, 1)
+                self.assertNotIn('exec', child.call_args.args[0])
+
+    def test_read_only_and_dry_run_errors_are_not_reported_as_physical_dispatch(self):
+        start, _key = self.mutations()[0]
+        for args in (['status'], [*start, '--dry-run'],
+                     ['stop', '--session-id', SESSION, '--dry-run']):
+            with self.subTest(args=args):
+                code, result, http, _child = self.invoke(
+                    args, worker=[{'ok': False, 'reason': 'network_outcome_unknown'}])
+                self.assertEqual(code, 1)
+                self.assertEqual(result['status'], 'refused')
+                self.assertNotIn('action_id', result)
+                self.assertNotIn('outcome', result)
+                self.assertEqual(http.call_count, 1)
+
+    def test_validation_and_config_errors_do_not_dispatch(self):
+        start, _key = self.mutations()[0]
+        for args, error in ((start[:-1], None),
+                            (start, cisco.Refused('invalid_private_config'))):
+            code, result, http, child = self.invoke(args, config_error=error)
+            self.assertEqual(code, 1)
+            self.assertEqual(result['status'], 'refused')
+            self.assertNotIn('action_id', result)
+            self.assertEqual(http.call_count, 0)
+            self.assertEqual(child.call_count, 0)
 
 
 if __name__ == '__main__':

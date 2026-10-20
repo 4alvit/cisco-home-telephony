@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shlex
 import stat
 import subprocess
 import sys
@@ -132,6 +133,7 @@ def load_ha_config(config, path):
 class Gateway:
     def __init__(self, config, timeout=20):
         self.config, self.timeout, self.pod = config, timeout, None
+        self.on_dispatch = None
 
     def run(self, args, *, input_data=None):
         try:
@@ -175,6 +177,8 @@ class Gateway:
                    'timeout': self.timeout, 'path': path, 'body': body,
                    'api': self.config.get('api', 'gateway')}
         if self.config['transport'] == 'direct':
+            if self.on_dispatch is not None:
+                self.on_dispatch()
             result = perform(payload)
         else:
             if self.pod is None:
@@ -182,9 +186,14 @@ class Gateway:
             # The fixed repository worker is code; all credentials and user data
             # travel only on stdin, never in argv, shell strings or environment.
             source = Path(__file__).resolve().with_name('cisco_http.py').read_text()
-            result = self.run(self.kube_args() + ['exec', '-i', self.pod, '-c',
-                              self.config['kubectl']['container'], '--', 'python3', '-c', source],
-                              input_data=json.dumps(payload).encode())
+            args = self.kube_args() + ['exec', '-i', self.pod, '-c',
+                   self.config['kubectl']['container'], '--', 'python3', '-c', source]
+            input_data = json.dumps(payload).encode()
+            # Discovery and local preparation cannot have submitted a request.
+            # Once exec starts, a lost response cannot prove it did not run.
+            if self.on_dispatch is not None:
+                self.on_dispatch()
+            result = self.run(args, input_data=input_data)
         require(isinstance(result, dict) and type(result.get('ok')) is bool, 'invalid_transport_response')
         if not result['ok']:
             # Worker errors are fixed strings, never raw remote exceptions.
@@ -521,7 +530,7 @@ def voice_status(value):
     return result
 
 
-def voice_command(args, config):
+def voice_command(args, config, *, on_dispatch=None):
     client = Gateway(config, args.timeout)
     operation = args.voice_action
     path = '/v1/phones/' + args.extension + '/voice_'
@@ -545,6 +554,8 @@ def voice_command(args, config):
             body.update(attended=True, exclusive_media=True, enable_microphone=True, dry_run=args.dry_run)
         else:
             body['session_id'] = args.session_id
+        if not args.dry_run and on_dispatch is not None:
+            client.on_dispatch = lambda: on_dispatch(key)
         response = client.request(path + operation, body)
         require(isinstance(response, dict) and response.get('status') == 'accepted'
                 and response.get('action_id') == key, 'unconfirmed_gateway_response')
@@ -777,6 +788,11 @@ def main(argv=None):
         return 0
     action_key = None
     exit_code = 0
+
+    def remember_voice_dispatch(key):
+        nonlocal action_key
+        action_key = key
+
     try:
         if args.extension == 'directory':
             require(args.command is None, 'global_directory_takes_no_subcommand')
@@ -786,7 +802,7 @@ def main(argv=None):
         require(1 <= args.timeout <= 60, 'timeout_requires_1_to_60_seconds')
         config = load_config(args.config)
         if args.command == 'voice':
-            result = voice_command(args, config)
+            result = voice_command(args, config, on_dispatch=remember_voice_dispatch)
             if args.json or 'voice' not in result:
                 print(json.dumps(result, sort_keys=True))
             else:
@@ -910,6 +926,16 @@ def main(argv=None):
             result['http_status'] = exc.http_status
         if action_key is not None:
             result.update(action_id=action_key, note='Do not retry blindly; inspect status first.')
+            if args.command == 'voice':
+                result.update(
+                    outcome='unknown',
+                    recovery_command=shlex.join(
+                        ['cisco', '--config', args.config, '--timeout', str(args.timeout)]
+                        + (['--json'] if args.json else [])
+                        + [args.extension, 'voice', 'status']),
+                    note='The request may have been applied. Do not retry blindly. '
+                         'Restore the intended transport and KUBECONFIG, then run '
+                         'the read-only recovery command with the same private configuration.')
         elif args.command is None:
             result['offline_commands'] = ['status', 'help', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS]
         print(json.dumps(result), file=sys.stdout if args.json else sys.stderr)
