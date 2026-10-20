@@ -158,8 +158,12 @@ not another broad scan. This is a planning estimate, not a delivery promise:
    recovered host branch, including sample packing and ownership. Correlate
    with the separate L16 interoperability result without treating either as
    proof of the other.
-4. Resolve drawing edge conventions with synthetic buffer arithmetic. Native
-   frame timing and call coexistence remain later hardware acceptance gates.
+4. Use the [synthetic framebuffer model](framebuffer-model.md) to compare safe
+   count-based rectangles with the observed inclusive, grouped-access
+   hypothesis. Its tests check byte spans, color conversion and explicitly
+   declared padding; the native caller's padding contract remains unresolved.
+   Native frame timing and call coexistence remain later hardware acceptance
+   gates.
 
 A dedicated reverse-engineering chat would materially help maintain these
 cross-references and isolate this research from normal application delivery.

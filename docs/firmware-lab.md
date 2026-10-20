@@ -8,6 +8,11 @@ Cisco 7945G. This is the bounded implementation follow-up to
 bounded segmented-image recognizer and corroborated startup, display and DSP
 interfaces. The installation/signing gate below remains unresolved.
 
+The [synthetic framebuffer model](framebuffer-model.md) separately exercises
+display bounds, stride, color conversion and padding without vendor inputs or
+device access. Passing those tests establishes the host model's arithmetic,
+not a callable native display interface.
+
 ## Decision
 
 **No-go for installing our own native application or MIDlet on the current
