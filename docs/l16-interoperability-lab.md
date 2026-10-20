@@ -6,6 +6,10 @@ two-way media delivery. It uses synthetic samples and a disposable Asterisk
 not configure or call a physical phone. The existing G.722 deployment remains
 independent of this experiment.
 
+Use the [operator guide](l16-serverguard-operator.md) for commands that retain
+console output and exit status, exact report checks, and the additional
+call-lifetime tests required before a physical-phone pilot.
+
 The Cisco offer documented in [Uncompressed audio](uncompressed-audio.md)
 contains payload 102 for `L16/16000`. That is an advertised capability, not
 proof of working two-way media. Asterisk's default payload allocation is not

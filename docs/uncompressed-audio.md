@@ -95,3 +95,6 @@ reproducible PBX test, synthetic fault diagnostics and a default command that
 only prints the plan. A recorded real-Asterisk pass can establish the PBX's
 L16 path, but cannot establish compatibility with the physical phone. The
 tool does not enable L16 on phones; physical acceptance remains separate.
+The [operator guide](l16-serverguard-operator.md) describes the evidence to
+retain and the full server-side call-lifetime qualification required before
+that pilot.
