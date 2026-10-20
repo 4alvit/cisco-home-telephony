@@ -58,6 +58,27 @@ owner lock, journal, session identity, and runner report handling. The child
 process executes the production voice-session entry point with the hardware
 and provider interfaces replaced before execution.
 
+## Reading the implementation
+
+Start with `run_fixture()`. It validates the arguments, then uses one
+`FixtureCoordinator` to carry the resources owned by that run through five
+named stages:
+
+1. `setup_gateway()` prepares private configuration, attaches the real voice
+   owner, and starts the loopback listener.
+2. `check_start_guards()` checks authorization, explicit start flags, and dry run.
+3. `run_scenario()` starts the selected turn, checks sibling ownership, performs
+   Stop when requested, and verifies the observed outcome.
+4. `verify_owner_cleanup()` checks snapshots, the lock, the journal, and file
+   permissions after the scenarios.
+5. `cleanup()` runs from `finally`, tears down owned resources, and records
+   individual cleanup failures without skipping later steps.
+
+The child-process boundary is in `fixture_worker()`. Its `Synthetic*` adapters
+name the substituted phone and HA interfaces; the calls to the production
+runner and service builder remain explicit. `network_guard()` and
+`cli_bootstrap()` define the restricted route to the loopback HTTP listener.
+
 ## Real code and explicit substitutes
 
 The following code runs as repository code:
