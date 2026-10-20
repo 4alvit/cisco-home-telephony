@@ -297,6 +297,11 @@ Shutdown uses internal `reserve_shutdown` contexts for every inventory handset.
 They check the actual shared file lock as well as the current journal, including
 the interval before an external owner writes its first journal. Each quiescent
 phone stays fenced until the final authentication listener closes.
+Acquiring these fences can create a private `0700` state directory and empty
+`0600` lock files without changing a journal. A lock file's existence alone does
+not mean a session is active. Embeddings of `Gateway` must call
+`release_voice_shutdown()` in `finally` after closing all callback listeners;
+do not delete lock files to release ownership.
 
 The default monitor supervises deadlines without starting media by itself.
 An embedding that sets `monitor=False` must call `tick()` regularly.

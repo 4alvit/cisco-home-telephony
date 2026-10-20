@@ -110,8 +110,10 @@ The smoke script runs `/opt/voice/smoke.py` with networking disabled, a read-onl
 filesystem, a temporary filesystem, dropped capabilities and a non-root user.
 It uses the existing local image ID without pulling another image. Checks cover
 locked versions and imports, a Pillow round trip, synthetic FFmpeg decoding,
-AtomicWriter input staging, control configuration, gateway attach/status and
-session CLI validation. The gateway check uses synthetic state without starting
+AtomicWriter input staging, control configuration, read-only gateway attach/status,
+shutdown fence acquisition/release and session CLI validation. The shutdown check
+verifies that a separate file descriptor is blocked until the fence is released
+and that an existing synthetic state file remains unchanged. The gateway uses synthetic state without starting
 listeners or the background reconciliation loop. A passing report includes `image_smoke: "passed"`,
 `network_actions: 0` and `microphone_started: false`. It does not use phone or HA
 credentials. A passed smoke test is evidence of runtime dependencies and local

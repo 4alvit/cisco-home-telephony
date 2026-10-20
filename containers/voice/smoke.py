@@ -5,6 +5,8 @@ No live session flags, microphone APIs, audio devices or phone calls are used.
 All generated media and configuration exist only in the container's /tmp.
 """
 import asyncio
+import fcntl
+import hashlib
 import importlib
 import importlib.metadata
 import io
@@ -69,7 +71,9 @@ def check_ffmpeg():
             'ffmpeg_synthetic_decode_failed')
 
 
-def check_cli():
+def check_cli(*, python_executable='/usr/local/bin/python3',
+              ffmpeg_executable='/usr/bin/ffmpeg',
+              cli_script='/workspace/scripts/voice_session.py'):
     with tempfile.TemporaryDirectory(prefix='voice-smoke-') as directory:
         root = Path(directory).resolve()
         local = root / '.local'
@@ -81,6 +85,15 @@ def check_cli():
         state_sentinel = state / 'persistent-owner-journal.txt'
         state_sentinel.write_text('synthetic state must remain unchanged\n')
         state_sentinel.chmod(0o600)
+        sentinel_stat = state_sentinel.stat()
+
+        def require_sentinel():
+            info = state_sentinel.stat()
+            require(state_sentinel.read_text() == 'synthetic state must remain unchanged\n'
+                    and (info.st_dev, info.st_ino, info.st_mode, info.st_uid)
+                    == (sentinel_stat.st_dev, sentinel_stat.st_ino,
+                        sentinel_stat.st_mode, sentinel_stat.st_uid),
+                    'persistent_state_changed')
         gateway = {
             'persistent_enabled': True, 'bind_ipv4': '192.168.50.10', 'api_port': 18084,
             'api_token': 'a' * 48, 'api_clients': ['192.168.50.11'],
@@ -105,7 +118,7 @@ def check_cli():
         }
         control = {
             'version': 1, 'enabled': False, 'state_directory': '.local/state/voice-control',
-            'python_executable': '/usr/local/bin/python3', 'ffmpeg_executable': '/usr/bin/ffmpeg',
+            'python_executable': python_executable, 'ffmpeg_executable': ffmpeg_executable,
             'profiles': [{'transport_config': '.local/config/transport.json',
                           'voice_config': '.local/config/voice.json', 'display_port': None}],
         }
@@ -155,12 +168,45 @@ def check_cli():
             response = adapter.voice_request('201', 'status', {}, {
                 'source': '192.168.50.11', 'authorization': ('Bearer ' + 'a' * 48,)})
             require(response['voice']['state'] == 'idle', 'gateway_voice_status_failed')
+            # Attachment and status are read-only. Shutdown deliberately creates
+            # empty lock files to fence late external owners until listeners close.
+            require(list(state.iterdir()) == [state_sentinel], 'status_created_state')
+            require_sentinel()
+            require(adapter.close_voice(), 'gateway_voice_shutdown_incomplete')
+            locks = state / 'voice-control'
+            lock = locks / (hashlib.sha256(gateway['phones'][0]['device'].encode()).hexdigest()
+                            + '.lock')
+            require(set(state.iterdir()) == {state_sentinel, locks}
+                    and list(locks.iterdir()) == [lock], 'unexpected_shutdown_state')
+            for path, mode in ((locks, 0o700), (lock, 0o600)):
+                info = path.lstat()
+                require(not path.is_symlink() and info.st_uid == os.geteuid()
+                        and stat.S_IMODE(info.st_mode) == mode,
+                        'shutdown_state_permissions_failed')
+            require(stat.S_ISREG(lock.stat().st_mode) and lock.read_bytes() == b'',
+                    'shutdown_lock_not_empty')
+            lock_inode = lock.stat().st_ino
+            with lock.open('r+b') as probe:
+                try:
+                    fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    pass
+                else:
+                    raise RuntimeError('shutdown_fence_not_retained')
+                # No listeners were opened in this smoke; simulate their closure.
+                adapter.release_voice_shutdown()
+                fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(probe, fcntl.LOCK_UN)
+            require(lock.stat().st_ino == lock_inode, 'shutdown_lock_was_replaced')
+            require_sentinel()
         finally:
-            adapter.close_voice()
-            adapter.db.close()
-        require(list(state.iterdir()) == [state_sentinel]
-                and state_sentinel.read_text() == 'synthetic state must remain unchanged\n',
-                'persistent_state_changed')
+            try:
+                adapter.close_voice()
+            finally:
+                try:
+                    adapter.release_voice_shutdown()
+                finally:
+                    adapter.db.close()
         # Construction exercises the real private-path/token loader. It does
         # not activate a stream or connect to HA; the audit hook enforces that.
         from voice_assistant.config import build_service
@@ -172,7 +218,7 @@ def check_cli():
                 pass
         service = build_service(voice, root, SyntheticSink())
         asyncio.run(service.close())
-        command = [sys.executable, '/workspace/scripts/voice_session.py']
+        command = [sys.executable, cli_script]
         subprocess.run(command + ['--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                        timeout=10, check=True)
         result = subprocess.run(
@@ -193,6 +239,7 @@ def main():
                       'synthetic_ffmpeg_decode': True, 'cli_dry_run': True,
                       'atomicwriter_staging': True, 'control_validation': True,
                       'gateway_voice_attachment': True,
+                      'gateway_shutdown_fencing': True,
                       'network_actions': 0, 'microphone_started': False}, sort_keys=True))
 
 
