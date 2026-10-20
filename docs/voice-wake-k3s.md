@@ -126,8 +126,12 @@ kubectl --kubeconfig .local/kubeconfig --context YOUR_CONTEXT \
 Wait for **Listening** on the phone. The frontend first needs 1.28 seconds of
 actual microphone history. Say the private wake phrase, then a short question.
 The display progresses through Listening, Thinking and Speaking. Use its
-**Stop** softkey to finish. The normal SIP call observer also ends capture when
-the phone becomes busy, unavailable or uncertain.
+**Stop** softkey on that live screen to finish. **Applications → Voice Assistant**
+opens the separate gateway controls; its Stop cannot signal this standalone
+Job. For known external ownership, that page displays guidance instead.
+If the live screen is unavailable, have the operator terminate the exact Job
+as described below. The normal SIP call observer also ends capture when the
+phone becomes busy, unavailable or uncertain.
 
 For a remote stop, terminate this exact Job with its normal 120-second grace
 period. This is the wake Job's own stop budget; the gateway Deployment separately
@@ -152,8 +156,11 @@ This standalone process shares the gateway's reservation journal, so a gateway
 Start refuses concurrent ownership of the same physical phone, even through
 its other line. The existing gateway cannot signal another process's child.
 Its status may report `recovery_required` / `voice_owner_unavailable` while the
-Job owns the device. Use the phone Stop or the exact Job's termination, not the
-ordinary `cisco LINE voice stop` command, for this pilot.
+Job owns the device. These fields do not prove current microphone activity.
+Use the live assistant screen's Stop or the exact Job's termination for this
+pilot; neither the ordinary `cisco LINE voice stop` command nor the
+[Applications gateway controls](voice-control.md#gateway-and-interface-integration)
+owns the Job's process.
 
 The Job has a 120-second outer deadline for startup and cleanup. This does not
 extend the owner's 30-second media session. Keep the last structured result

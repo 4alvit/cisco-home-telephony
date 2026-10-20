@@ -112,7 +112,7 @@ class PhoneApps:
             'ha_request_outcome_unknown': 'Home Assistant did not confirm the result. Check current status before trying again.',
             'ha_change_not_confirmed': 'Home Assistant did not confirm the change. Check current status before trying again.',
             'voice_control_unavailable': 'Voice control is not configured for this phone.',
-            'voice_phone_busy': 'A voice session owns the phone audio, or its cleanup is unconfirmed. Open Voice Assistant and stop that session before trying this action again.',
+            'voice_phone_busy': 'A voice session owns the phone audio, or its cleanup is unconfirmed. Open Voice Assistant for status and Stop guidance before trying this action again.',
             'voice_response_invalid': 'Voice status is unconfirmed. Check status before any new attempt.',
             'voice_request_failed': 'The voice request was not confirmed. Check status; do not start again blindly.',
             'not_configured': 'No alarm has been configured. Set its time and days first.',
@@ -227,21 +227,30 @@ class PhoneApps:
         root = ET.Element('CiscoIPPhoneText')
         child(root, 'Title', 'Voice Assistant')
         child(root, 'Prompt', 'Bounded session; microphone up to 30s')
+        # A reserved journal from another process is not a locally stoppable
+        # session. Local recovery_required sessions still retain their Stop path.
+        external_owner = (value['state'] == 'external_owner'
+                          or value['error'] == 'voice_owner_unavailable')
         text = ('State: ' + value['state'].replace('_', ' ') + '\nSession line: ' + value['line']
                 + '\nRemaining: ' + str(value['remaining_seconds']) + ' seconds'
                 + '\nStop requested: ' + ('Yes' if value['stop_requested'] else 'No')
                 + '\nStop confirmed: ' + ('Yes' if value['stop_confirmed'] else 'No'))
         if value['session_id']:
             text += '\nSession: ' + value['session_id']
-        if value['error'] or value['state'] in ('recovery_required', 'external_owner'):
+        if external_owner:
+            text += ("\nThis menu cannot reach the session's controller. For a wake Job, use Stop"
+                     " on its live Listening, Thinking or Speaking screen. If that screen is"
+                     " unavailable, ask the operator to stop that exact Job."
+                     " Do not restart until cleanup is confirmed.")
+        elif value['error'] or value['state'] == 'recovery_required':
             text += '\nCleanup may be unconfirmed. Check the phone; do not restart blindly.'
         elif value['active']:
             text += '\nRunning is not a readiness signal. Use the live assistant screen.'
         child(root, 'Text', text)
         self.softkey(root, 'Refresh', self.url(phone_id, '/voice', line=line), 1)
-        if value['state'] in ('idle', 'stopped', 'cancelled', 'failed'):
+        if not external_owner and value['state'] in ('idle', 'stopped', 'cancelled', 'failed'):
             self.softkey(root, 'Start', self.url(phone_id, '/voice-start', line=line), 2)
-        elif value['session_id'] and not value['stop_confirmed']:
+        elif not external_owner and value['session_id'] and not value['stop_confirmed']:
             self.softkey(root, 'Stop', self.url(phone_id, '/voice-stop', line=line,
                                               session=value['session_id']), 2)
         self.navigation(root, phone_id, line)

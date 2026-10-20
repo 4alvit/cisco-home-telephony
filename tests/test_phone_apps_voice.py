@@ -16,20 +16,24 @@ def status(**updates):
 
 
 class VoiceGateway(FakeGateway):
-    def __init__(self):
+    def __init__(self, phone_id='201', lines=('201', '202')):
         super().__init__()
+        phone = self.phones.pop('201')
+        phone.update(id=phone_id, lines=list(lines))
+        self.phones[phone_id] = phone
+        self.phone_id = phone_id
         self.voice = object()
-        self._voice_profiles = (SimpleNamespace(phone_id="201"),)
+        self._voice_profiles = (SimpleNamespace(phone_id=phone_id),)
         self.voice_calls = []
         self.context = object()
-        self.value = status()
+        self.value = status(phone=phone_id, line=lines[-1])
         self.response_filter = lambda result: result
 
     def listing(self):
         raise AssertionError('Voice status/Stop must not fetch AMI inventory')
 
     def _phone_voice_context(self, phone_id):
-        assert phone_id == '201'
+        assert phone_id == self.phone_id
         return self.context
 
     def voice_request(self, line, operation, body, context):
@@ -177,6 +181,82 @@ class VoiceMenuTests(unittest.TestCase):
         root = self.get()
         self.assertNotIn('Start', [key.find('Name').text for key in root.findall('SoftKeyItem')])
         self.assertIn('Cleanup may be unconfirmed', root.find('Text').text)
+
+    def use_two_line_phone(self):
+        self.gateway = VoiceGateway(phone_id='212', lines=('212', '213'))
+        self.app = apps.PhoneApps(self.gateway, clock=lambda: self.now)
+
+    def test_external_owner_has_guidance_without_gateway_start_or_stop_on_either_alias(self):
+        self.use_two_line_phone()
+        for state, error in (('recovery_required', 'voice_owner_unavailable'),
+                             ('external_owner', None),
+                             ('external_owner', 'voice_owner_unavailable')):
+            for line in ('212', '213'):
+                with self.subTest(state=state, error=error, line=line):
+                    self.gateway.voice_calls.clear()
+                    self.gateway.value = status(phone='212', line='213', state=state,
+                                                active=False, error=error)
+                    root = self.get(query='line=' + line, phone='212')
+                    self.assertEqual(
+                        [key.find('Name').text for key in root.findall('SoftKeyItem')],
+                        ['Refresh', 'Home', 'Exit'])
+                    text = root.find('Text').text
+                    self.assertIn('Session line: 213', text)
+                    self.assertIn('Stop confirmed: No', text)
+                    self.assertIn("cannot reach the session's controller", text)
+                    self.assertIn('live Listening, Thinking or Speaking screen', text)
+                    self.assertIn('stop that exact Job', text)
+                    self.assertIn('Do not restart until cleanup is confirmed', text)
+                    self.click(self.key(root, 'Refresh'), phone='212')
+                    self.assertEqual(self.gateway.voice_calls,
+                                     [(line, 'status', {}), (line, 'status', {})])
+
+    def test_local_stop_remains_session_bound_on_either_alias_including_recovery(self):
+        self.use_two_line_phone()
+        cases = [('starting', None), ('running', None), ('stopping', None),
+                 ('recovery_required', 'voice_start_uncertain'),
+                 ('recovery_required', 'voice_stop_unconfirmed')]
+        for state, error in cases:
+            for line in ('212', '213'):
+                with self.subTest(state=state, error=error, line=line):
+                    self.gateway.voice_calls.clear()
+                    self.gateway.value = status(
+                        phone='212', line='213', state=state, error=error,
+                        active=state in ('starting', 'running', 'stopping'))
+                    root = self.get(query='line=' + line, phone='212')
+                    self.assertNotIn('Start', [key.find('Name').text
+                                              for key in root.findall('SoftKeyItem')])
+                    self.assertNotIn("cannot reach the session's controller", root.find('Text').text)
+                    result = self.click(self.key(root, 'Stop'), phone='212')
+                    self.assertEqual(self.gateway.voice_calls, [
+                        (line, 'status', {}),
+                        (line, 'stop', {'session_id': 'a' * 32,
+                                        'idempotency_key': 'apps-voice-stop-' + 'a' * 32}),
+                    ])
+                    self.assertIn('Stop confirmed: No', result.find('Text').text)
+
+    def test_local_terminal_states_keep_start_on_either_alias(self):
+        self.use_two_line_phone()
+        for state in ('idle', 'stopped', 'cancelled', 'failed'):
+            for line in ('212', '213'):
+                with self.subTest(state=state, line=line):
+                    self.gateway.voice_calls.clear()
+                    self.gateway.value = status(
+                        phone='212', line='213', state=state, active=False,
+                        session_id=None if state == 'idle' else 'a' * 32)
+                    root = self.get(query='line=' + line, phone='212')
+                    self.assertNotIn('Stop', [key.find('Name').text
+                                             for key in root.findall('SoftKeyItem')])
+                    confirmation = self.click(self.key(root, 'Start'), phone='212')
+                    self.assertEqual(confirmation.find('Title').text, 'Confirm action')
+                    self.assertEqual(self.gateway.voice_calls, [(line, 'status', {})])
+
+    def test_busy_message_points_to_guidance_without_promising_gateway_stop(self):
+        data, _ = apps.PhoneApps.error('voice_phone_busy')
+        text = ET.fromstring(data).find('Text').text
+        self.assertIn('cleanup is unconfirmed', text)
+        self.assertIn('status and Stop guidance', text)
+        self.assertNotIn('Open Voice Assistant and stop', text)
 
     def test_malformed_query_or_metadata_is_rejected_without_leaking(self):
         for query in ('line=204', 'line=202&session=' + 'A' * 32, 'line=202&session=' + 'a' * 32 + '&extra=x'):

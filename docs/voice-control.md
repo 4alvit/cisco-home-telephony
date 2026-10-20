@@ -410,6 +410,16 @@ the exact session ID shown to the user. Selecting the sibling line never creates
 a second physical owner. Use explicit Refresh to update the displayed result;
 the menu does not poll or repeat microphone commands automatically.
 
+**Applications → Voice Assistant** uses the gateway's Stop endpoint. The
+**Stop** softkey on the live **Listening / Thinking / Speaking** screen belongs
+to that screen's voice session. Use it for a
+[standalone wake Job](voice-wake-k3s.md#start-and-stop-an-attended-attempt).
+When status reports `voice_owner_unavailable` or `external_owner`, the
+Applications page shows ownership guidance instead of a gateway Stop that
+cannot reach that session. This does not prove that its microphone is active
+or stopped. Local recovery states still retain gateway Stop where available;
+`recovery_required` alone does not establish a different owner.
+
 The companion `cisco_phone_control` component exposes an administrator-only
 `voice` response service through its existing authenticated gateway client.
 It accepts `entry_id`, `phone`, `line`, and `operation`:
