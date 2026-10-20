@@ -90,6 +90,8 @@ packetization, hold/resume and clean hangup. Retain the G.722 configuration
 for rollback. First test a valid L16 offer without guessing additional phone
 XML settings.
 
-An isolated Asterisk fixture can establish the PBX's L16 path, but cannot
-establish compatibility with the physical phone. Neither that L16 fixture
-nor the physical pilot has been completed as part of this research.
+The [isolated L16 laboratory](l16-interoperability-lab.md) provides a
+reproducible PBX test, synthetic fault diagnostics and a default command that
+only prints the plan. A recorded real-Asterisk pass can establish the PBX's
+L16 path, but cannot establish compatibility with the physical phone. The
+tool does not enable L16 on phones; physical acceptance remains separate.
