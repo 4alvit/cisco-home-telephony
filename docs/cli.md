@@ -20,11 +20,18 @@ The two dialing commands above originate from 212 and 213 respectively. They wor
 
 The CLI uses the existing [phone gateway](phone-gateway.md). Ordinary gateway actions resolve the selected extension against fresh `GET /v1/phones` data. For example, 213 belongs to the phone whose primary ID is 212; requests go to that phone's API route while explicitly retaining `line: "213"`. Schedule actions let the HA service resolve the exact line from its validated gateway inventory. Voice controls use the gateway's configured mapping directly so status and Stop remain available during an AMI outage. None of these paths guesses the primary line from odd/even numbering. The Mac softphone, 209, can be a configured call destination but is not a Cisco gateway control target.
 
+Status, directory and ordinary action dry runs do not request a new call or
+the selected mutation. Their inventory GET can nevertheless trigger the
+gateway's existing recovery work: it may hang up an operation-owned leg of an
+expired, stopping or incomplete alert/intercom. This is not a side-effect-free
+snapshot. See the [code and infrastructure map](code-and-infrastructure-map.md)
+for the action and recovery boundaries.
+
 ## Room directory
 
 `cisco directory` and `cisco 212 directory` both show the complete deployed
 directory, sorted by extension; the latter selects the hosting phone's entry. Even
-`cisco 209 directory` is a read-only directory lookup. Use `cisco --json directory` for structured
+`cisco 209 directory` performs a directory lookup without a new call request. Use `cisco --json directory` for structured
 output. Assigned room names come from the central private inventory, and
 ordinary line status includes the hosting phone's room. A room is an intended
 placement, not a location detected from registration or the network.
@@ -73,8 +80,8 @@ Both transports require an explicit RFC1918 IPv4 gateway literal and disable HTT
 ## Commands and scope
 
 ```bash
-cisco 213                       # Live status, commands and examples; read-only
-cisco directory                 # Complete room directory; read-only
+cisco 213                       # Live status, commands and examples
+cisco directory                 # Complete room directory; no new call request
 cisco 213 directory             # The same complete directory, not a line filter
 cisco 213 help                  # Local help; no config or network needed
 cisco 213 destinations          # Read the current dial/ring allowlists

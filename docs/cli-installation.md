@@ -237,6 +237,11 @@ room label when configured, live call state, preferences and available commands.
 request against live inventory but send no phone-control mutation. They do
 not prove that the later call will succeed or that audio works.
 
+Inventory reads can trigger the gateway's existing cleanup of operation-owned
+alert/intercom legs that are expired, stopping or incomplete. Thus status and
+ordinary action dry runs are not side-effect-free snapshots, although they do
+not request the proposed call. See the [CLI scope notes](cli.md).
+
 If `home_assistant` is configured, status also reads the timer/alarm state. A
 failed scheduler read produces a partial result instead of hiding the problem.
 Confirm the gateway-only connection before adding HA scheduling so failures

@@ -47,6 +47,9 @@ conversion to MPP is not required.
   [latency analysis](docs/local-voice-performance.md) measures each response stage.
 - **Test the integrated voice path:** the [offline acceptance harness](docs/voice-integration-test.md)
   exercises synthetic sessions without contacting a real phone or Home Assistant.
+- **Understand the code and infrastructure:** the [maintainer map](docs/code-and-infrastructure-map.md)
+  connects entry points, control and audio paths, persistent state, recovery,
+  test coverage and known failure-handling gaps.
 - **Evaluate a voice assistant or video:** the [7945G software feasibility study](docs/native-app-feasibility.md)
   compares stock XML/RTP, signed Java applications and firmware work, with
   effort estimates and explicit limits on native video.
