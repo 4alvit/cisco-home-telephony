@@ -9,11 +9,12 @@ codec cannot restore frequencies already removed by an 8 kHz decoder.
 
 **Codec negotiation and listening acceptance are separate.** Checks on
 2026-10-20 verified the digital radio path and G.722 negotiation on a
-corrected Cisco pilot call. Independent review of the latest single-phone
-pilot also verified outgoing RTP toward the phone with a 16 kHz backend.
-Audible quality remains unverified. This single-phone result does not
-establish application or physical acceptance across a fleet. Keep private
-runtime evidence outside the public repository.
+corrected Cisco pilot call, with transport observations on another connected
+Cisco. Independent reviews confirmed bidirectional RTP activity with a
+16 kHz backend. The first pilot passed controlled Stop; the second required
+late recovery after a controller timeout. Neither decoded audio at the phone
+nor audible quality has been verified. Keep private runtime evidence outside
+the public repository.
 
 ## What was limiting the sound
 
@@ -216,7 +217,7 @@ Worker/PBX process reaping and the fixture's owned-container cleanup
 passed. No physical phones or remote radio sources were used by this
 fixture. These results establish the isolated digital path.
 
-**Latest single-phone pilot, independently reviewed:** Asterisk reported
+**First pilot, independently reviewed:** Asterisk reported
 native G.722 with `slin16` read/write formats. Transmit counters rose from
 104 to 407 and receive counters from 238 to 542, with zero reported loss.
 Network metadata recorded 774 observations on the negotiated PBX-to-phone
@@ -228,6 +229,23 @@ no remaining PBX channels. This verifies sustained bidirectional transport
 activity at the capture point. It does not establish decoded audio content
 or audible quality at the phone, and this single-phone result does not
 establish physical acceptance across the fleet.
+
+**Second connected Cisco, independently reviewed:** native G.722 and
+`slin16` were confirmed, with bidirectional RTP observed during recovery.
+The automatic acceptance controller failed when its SSH master timed out.
+The same call was still active during recovery samples at 88–89 seconds,
+outside the 20-second test window, and was then explicitly ended. Recovery
+reported RX loss 1 and TX loss 0. Cleanup left no active
+PBX channels, but this was **not a bounded Stop pass**. These transport
+observations do not establish decoded phone audio or subjective quality.
+
+**Operational rollout:** PBX codec policies are deployed. For the follow-up
+phone, profile-download status and renewed registration were observed;
+a complete TFTP packet transcript was not retained. Profiles for offline
+phones are only staged. The temporary TFTP service has been removed; those phones
+need a future bounded TFTP window and confirmation that the profiles were
+downloaded and applied. The Mac was offline and remains unqualified for
+wideband media. Profile application alone is not acoustic acceptance.
 
 For read-only test containers, keep writable mounts narrow: the first
 attempt failed before any calls because a `/var/lib/asterisk` tmpfs hid

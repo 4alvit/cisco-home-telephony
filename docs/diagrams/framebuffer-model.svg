@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="880" viewBox="0 0 1200 880" role="img" aria-labelledby="title description">
+  <title id="title">Synthetic framebuffer model: geometry and boundary contracts</title>
+  <desc id="description">A 320 by 240 logical display uses a 640 by 480 internal RGB565 surface. One source pixel becomes four internal pixels. A count-based 32 by 8 rectangle and observed inclusive extents 32 by 8 touch different areas. Tests establish host arithmetic only.</desc>
+  <rect width="1200" height="880" rx="24" fill="#0b1224"/>
+  <g font-family="Arial, sans-serif">
+    <text x="48" y="60" font-size="30" font-weight="700" fill="#f5f8ff">Framebuffer arithmetic, without a phone</text>
+    <text x="48" y="92" font-size="18" fill="#aebfdc">Synthetic host model · No firmware input · No device operations</text>
+
+    <rect x="48" y="124" width="340" height="228" rx="16" fill="#153747"/>
+    <text x="72" y="159" font-size="16" font-weight="700" fill="#75e5dd">LOGICAL COORDINATE GRID</text>
+    <text x="72" y="207" font-size="36" font-weight="700" fill="#ffffff">320 × 240</text>
+    <text x="72" y="241" font-size="18" fill="#c4e6ee">One numeric ARGB8888 word</text>
+    <rect x="72" y="266" width="42" height="42" rx="5" fill="#f2b855"/>
+    <text x="129" y="291" font-size="16" fill="#d2e9f0">Alpha ignored</text>
+    <text x="72" y="332" font-size="15" fill="#a5cbd5">32 bits in → RGB565 color</text>
+
+    <path d="M408 225 H448 V211 L470 238 L448 265 V251 H408 Z" fill="#75e5dd"/>
+
+    <rect x="490" y="124" width="662" height="228" rx="16" fill="#28254f"/>
+    <text x="514" y="159" font-size="16" font-weight="700" fill="#b8a7ff">INTERNAL SURFACE</text>
+    <text x="514" y="207" font-size="36" font-weight="700" fill="#ffffff">640 × 480</text>
+    <text x="514" y="242" font-size="18" fill="#d7d0f8">RGB565 · 1,280 bytes per row</text>
+    <text x="514" y="274" font-size="18" fill="#d7d0f8">614,400 pixel bytes</text>
+    <text x="514" y="315" font-size="17" fill="#b8a7ff">Internal allocation ≠ higher panel resolution</text>
+    <rect x="997" y="178" width="42" height="42" rx="4" fill="#f2b855"/>
+    <rect x="1045" y="178" width="42" height="42" rx="4" fill="#f2b855"/>
+    <rect x="997" y="226" width="42" height="42" rx="4" fill="#f2b855"/>
+    <rect x="1045" y="226" width="42" height="42" rx="4" fill="#f2b855"/>
+    <text x="1004" y="294" font-size="16" fill="#e2dcff">2 × 2 copies</text>
+
+    <rect x="48" y="382" width="538" height="260" rx="16" fill="#14382e"/>
+    <text x="72" y="418" font-size="20" font-weight="700" fill="#82e8b3">Safe reference: width / height counts</text>
+    <text x="72" y="452" font-size="18" fill="#d1eadc">Origin (0, 0) · width 32 · height 8</text>
+    <rect x="72" y="476" width="288" height="72" rx="4" fill="#47ac82"/>
+    <text x="140" y="520" font-size="25" font-weight="700" fill="#071e18">32 × 8</text>
+    <text x="72" y="585" font-size="18" fill="#c6ead5">256 source pixels · no padding reads</text>
+    <text x="72" y="615" font-size="16" fill="#82e8b3">Reject out-of-grid requests; do not clip</text>
+
+    <rect x="614" y="382" width="538" height="260" rx="16" fill="#463221"/>
+    <text x="638" y="418" font-size="20" font-weight="700" fill="#ffd083">Observed hypothesis: inclusive extents</text>
+    <text x="638" y="452" font-size="18" fill="#f2e0c6">Origin (0, 0) · x extent 32 · y extent 8</text>
+    <rect x="638" y="476" width="324" height="81" rx="4" fill="#f2b855"/>
+    <rect x="638" y="476" width="288" height="72" rx="4" fill="#c18b38"/>
+    <text x="706" y="520" font-size="25" font-weight="700" fill="#271c0a">36 × 9</text>
+    <text x="638" y="585" font-size="18" fill="#f2e0c6">324 source pixels · 68 padding pixels</text>
+    <text x="638" y="615" font-size="16" fill="#ffd083">Padding must be explicitly declared</text>
+
+    <rect x="48" y="672" width="1104" height="158" rx="16" fill="#162239"/>
+    <text x="72" y="708" font-size="20" font-weight="700" fill="#f5f8ff">What passing tests establish</text>
+    <text x="72" y="742" font-size="18" fill="#c6d5ec">Color bits · group boundaries · half-open byte spans · source stride · untouched sentinels</text>
+    <rect x="72" y="766" width="1056" height="42" rx="7" fill="#312b45"/>
+    <text x="90" y="793" font-size="17" fill="#e5c5e9">Native ABI, caller padding, installation, display timing and call coexistence remain unverified.</text>
+  </g>
+</svg>

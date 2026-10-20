@@ -46,7 +46,7 @@ jobs:
       - name: Python and shell checks
         run: |
           .venv/bin/python -m unittest discover -s tests -v
-          .venv/bin/python -m compileall -q scripts voice_assistant containers/asterisk tools/firmware_lab tools/sip_video
+          .venv/bin/python -m compileall -q scripts voice_assistant containers/asterisk tools/firmware_lab tools/sip_video tools/l16_lab
           for script in scripts/*.sh; do bash -n "$script"; done
       - name: Build and smoke-test the isolated voice runtime
         run: bash scripts/build-voice-image.sh cisco-home-ci
@@ -77,6 +77,14 @@ jobs:
         run: bash scripts/build-images.sh cisco-home-ci
       - name: Isolated smoke with synthetic generated configuration
         run: bash scripts/smoke-containers.sh cisco-home-ci
+      - name: Verify isolated L16 media and native call expiry
+        run: |
+          umask 077
+          .venv/bin/python -m tools.l16_lab asterisk \
+            --image cisco-home-ci/asterisk:22.11.0 \
+            --docker-socket /var/run/docker.sock \
+            --execute --output .local/l16/ci-1
+          cat .local/l16/ci-1/report.json
       - name: Export verified amd64 images
         if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target != 'voice' && github.ref == 'refs/heads/main'
         run: |

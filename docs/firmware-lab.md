@@ -4,6 +4,15 @@ Assessment date: **19 October 2026**. Target: **SIP45.9-4-2SR4-3S** on the
 Cisco 7945G. This is the bounded implementation follow-up to
 [the native application feasibility study](native-app-feasibility.md).
 
+**20 October follow-up:** the [native static map](native-static-map.md) adds a
+bounded segmented-image recognizer and corroborated startup, display and DSP
+interfaces. The installation/signing gate below remains unresolved.
+
+The [synthetic framebuffer model](framebuffer-model.md) separately exercises
+display bounds, stride, color conversion and padding without vendor inputs or
+device access. Passing those tests establishes the host model's arithmetic,
+not a callable native display interface.
+
 ## Decision
 
 **No-go for installing our own native application or MIDlet on the current
