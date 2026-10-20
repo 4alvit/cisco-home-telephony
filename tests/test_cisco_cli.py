@@ -177,6 +177,74 @@ class CLITests(unittest.TestCase):
             code, _, calls = self.invoke(['213', 'dial', '600'], data)
             self.assertEqual(code, 1); self.assertEqual(len(calls), 1)
 
+    def test_inventory_timestamp_numeric_boundaries(self):
+        now = 1800000000
+        cases = (
+            ('fresh_integer', now, True), ('fresh_float', now + 0.5, True),
+            ('oldest_boundary', now - 90, True), ('future_boundary', now + 5, True),
+            ('too_old', now - 90.001, False), ('too_future', now + 5.001, False),
+            ('true_boolean', True, False), ('false_boolean', False, False),
+            ('nan', float('nan'), False), ('positive_infinity', float('inf'), False),
+            ('negative_infinity', float('-inf'), False),
+            ('huge_positive', 10 ** 400, False), ('huge_negative', -(10 ** 400), False),
+        )
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(cisco.time, 'time', return_value=now) as clock, \
+                patch('socket.socket', side_effect=AssertionError('network forbidden')) as sockets, \
+                patch('socket.create_connection', side_effect=AssertionError('network forbidden')) as connections, \
+                patch('subprocess.Popen', side_effect=AssertionError('subprocess forbidden')) as processes, \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            try:
+                for name, observed, accepted in cases:
+                    with self.subTest(case=name):
+                        # Booleans must fail by type, even when numerically fresh.
+                        clock.return_value = 1.0 if type(observed) is bool else now
+                        data = inventory()
+                        data['observed_at'] = observed
+                        if accepted:
+                            self.assertIs(cisco.validate_inventory(data, '213'), data['phones'][0])
+                        else:
+                            with self.assertRaises(cisco.Refused) as caught:
+                                cisco.validate_inventory(data, '213')
+                            self.assertEqual(caught.exception.reason, 'gateway_inventory_stale')
+            finally:
+                self.assertEqual((sockets.call_count, connections.call_count, processes.call_count), (0, 0, 0))
+                self.assertFalse(bool(output.getvalue() or errors.getvalue()), 'validator printed output')
+
+    def test_huge_inventory_timestamp_is_structured_refusal_before_mutation(self):
+        now = 1800000000
+        for sign in (1, -1):
+            for command in (['status'], ['dial', '600']):
+                for json_mode in (True, False):
+                    with self.subTest(sign=sign, command=command[0], json_mode=json_mode):
+                        data = inventory()
+                        data['observed_at'] = sign * 10 ** 400
+                        # A bounded real JSON integer, not a Python-only value.
+                        raw = json.dumps(data)
+                        self.assertLess(len(raw.encode()), 2048)
+                        data = json.loads(raw)
+                        output, errors = io.StringIO(), io.StringIO()
+                        with patch.object(cisco, 'Gateway') as gateway, \
+                                patch.object(cisco, 'load_config', return_value={}), \
+                                patch.object(cisco.time, 'time', return_value=now), \
+                                patch('socket.socket', side_effect=AssertionError('network forbidden')) as sockets, \
+                                patch('socket.create_connection', side_effect=AssertionError('network forbidden')) as connections, \
+                                patch('subprocess.Popen', side_effect=AssertionError('subprocess forbidden')) as processes, \
+                                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                            gateway.return_value.request.return_value = data
+                            try:
+                                code = cisco.main((['--json'] if json_mode else []) + ['213', *command])
+                            finally:
+                                gateway.return_value.request.assert_called_once_with('/v1/phones')
+                                self.assertEqual((sockets.call_count, connections.call_count,
+                                                  processes.call_count), (0, 0, 0))
+                        self.assertEqual(code, 1)
+                        response = output.getvalue() if json_mode else errors.getvalue()
+                        self.assertEqual(errors.getvalue() if json_mode else output.getvalue(), '')
+                        self.assertNotIn('Traceback', response)
+                        self.assertEqual(json.loads(response),
+                                         {'status': 'refused', 'reason': 'gateway_inventory_stale'})
+
     def test_dry_run_redacts_screen_content(self):
         code, result, calls = self.invoke(['--dry-run', '213', 'message', 'private message'])
         self.assertEqual(code, 0); self.assertEqual(len(calls), 1)
