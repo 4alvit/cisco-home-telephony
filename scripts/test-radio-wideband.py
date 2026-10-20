@@ -238,7 +238,7 @@ def test_inside():
     subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i",
                     "aevalsrc=0.2*sin(2*PI*1000*t)+0.2*sin(2*PI*5000*t):s=44100:d=5",
                     "-c:a", "libmp3lame", "-b:a", "192k", "-y",
-                    "/var/lib/asterisk/radio-fixture.mp3"], check=True, timeout=15)
+                    "/tmp/radio-fixture.mp3"], check=True, timeout=15)
     result = {"network": "none", "synthetic_only": True, "physical_phones_called": False, "cases": {}}
     for codec, payload, decoder, rate in (("G722", 9, "g722", 16000),
                                          ("PCMU", 0, "mulaw", 8000)):

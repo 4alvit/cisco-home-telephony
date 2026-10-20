@@ -16,7 +16,7 @@ class Source:
 
 class FixtureCall(radio.Call):
     def __init__(self, station, seconds, token, **kwargs):
-        data = Path("/var/lib/asterisk/radio-fixture.mp3").read_bytes()
+        data = Path("/tmp/radio-fixture.mp3").read_bytes()
         # Fixture-only upper bound: smoke tests can observe normal completion
         # without waiting for the production minimum station time limit.
         super().__init__(station, min(seconds, 3), token, **kwargs,

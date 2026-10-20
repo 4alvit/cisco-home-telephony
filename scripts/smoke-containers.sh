@@ -93,6 +93,9 @@ for attempt in {1..30}; do
   sleep 1
 done
 if [[ "$ready" != 1 ]]; then docker logs "$container"; echo 'Asterisk did not start' >&2; exit 1; fi
+# Keep generated test audio in writable runtime storage; leave packaged
+# Asterisk data (including required XML documentation) visible and read-only.
+docker exec "$container" cp /var/lib/asterisk/radio-fixture.mp3 /tmp/radio-fixture.mp3
 # Allow module initialization to complete, then require the actual generated config.
 for attempt in {1..30}; do
   if docker exec "$container" asterisk -rx 'pjsip show endpoints' | grep -E 'Endpoint:.*201' > /dev/null; then break; fi
