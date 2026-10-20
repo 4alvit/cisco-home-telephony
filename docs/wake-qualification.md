@@ -42,9 +42,56 @@ manifests, model weights, transcripts, or audio into public examples or commits.
 
 Use uncompressed, little-endian PCM16 WAV at exactly 16 kHz and one channel.
 The evaluator rejects a different format instead of silently resampling it.
-For a codec comparison, prepare and label the original and the decoded codec
-round trip separately, retaining both source hashes and the preparation method.
-An upsampled telephone recording still has telephone bandwidth.
+For a codec comparison, retain the original labeled corpus and create a
+separate decoded round trip with the preparation command below. An upsampled
+telephone recording still has telephone bandwidth.
+
+### Prepare a reproducible PCMU comparison
+
+[`prepare_telephony_wake.py`](../scripts/prepare_telephony_wake.py) converts a
+validated private 16 kHz corpus with deterministic offline preparation:
+pair-average to 8 kHz, then reuse the production G.711 mu-law encode/decode and
+inbound 20 ms frame converter back to 16 kHz. It preserves clip IDs, labels,
+event times, and the exact original sample count. Any final partial frame is
+padded only inside the conversion, then trimmed to its original length.
+
+```sh
+python3 scripts/prepare_telephony_wake.py \
+  --manifest .local/wake-evaluation/owner-corpus/manifest.json \
+  --output .local/wake-evaluation/owner-corpus-pcmu \
+  --late-tolerance-seconds 1
+
+.local/voice-venv/bin/python scripts/wake_evaluate.py evaluate \
+  --manifest .local/wake-evaluation/owner-corpus-pcmu/manifest.json \
+  --bundle .local/voice/bundle.json \
+  --output .local/wake-evaluation/owner-corpus-pcmu-results \
+  --late-tolerance-seconds 1
+```
+
+Use the same bundle, threshold and late tolerance for the original-corpus run.
+The preparation command validates all inputs before creating the output
+directory. It writes owner-only WAV files, an evaluator-compatible
+`manifest.json`, `summary.safe.json`, and `provenance.private.json`. Provenance
+contains the original manifest and WAV hashes, converted WAV/PCM hashes,
+encoded-stream hashes, tail padding counts, and hashes of the exact conversion
+implementations. Existing output directories are not overwritten.
+
+This is a **digital codec fixture**, not an acoustic recording. The preparation
+uses a two-tap averaging filter, not a full telephone band-pass or microphone
+model. This 16-to-8 kHz preparation does not reproduce the outgoing
+`RtpPCMSink` resampler, which uses different interpolation. Actual microphone
+RTP arrives from the phone at 8 kHz; the reusable production stages here are
+G.711 and the inbound 8-to-16 kHz converter. It does not simulate room
+reverberation, speakerphone processing, gain control, packet loss, or background
+sound. Passing this comparison therefore
+does not establish room-distance accuracy. The script never opens a socket,
+microphone, phone session, or model runtime.
+
+Annotations retain their source type: a transformed owner recording remains
+`recorded`, and a transformed generated clip remains `synthetic`. Treat the
+original and its transformed copy as a paired comparison, not two independent
+speakers or recordings. Do not pool the copies to inflate exposure hours or
+accuracy confidence.
 
 ## Run the evaluator
 

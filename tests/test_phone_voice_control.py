@@ -404,6 +404,41 @@ class ControlLifecycleTests(ControlFixture):
         self.assertLess(replayed["remaining_seconds"], started["remaining_seconds"])
         self.assertEqual(len(self.runners), 1)
 
+    def test_dry_run_reused_key_validates_without_replaying_or_touching_session(self):
+        instance = self.make_control()
+        started = self.start(instance)
+        journal = next((self.local / "control").glob("*.json"))
+        for completed in (False, True):
+            if completed:
+                self.runners[0].finish()
+                instance.tick()
+            before = journal.read_bytes()
+            before_status = self.status(instance)
+            validation = self.start(instance, "202", dry_run=True)
+            self.assertTrue(validation["valid"])
+            self.assertEqual(validation["line"], "202")
+            self.assertEqual(validation["network_actions"], 0)
+            self.assertFalse(validation["microphone_started"])
+            self.assertNotIn("session_id", validation)
+            self.assertEqual(journal.read_bytes(), before)
+            self.assertEqual(self.status(instance), before_status)
+            self.assertEqual(len(self.runners), 1)
+        replacement = self.make_control()
+        validation = self.start(replacement, "202", dry_run=True)
+        self.assertTrue(validation["valid"])
+        self.assertEqual(self.status(replacement)["session_id"], started["session_id"])
+        self.assertEqual(len(self.runners), 1)
+
+    def test_dry_run_reused_key_rechecks_changed_profile(self):
+        instance = self.make_control()
+        self.start(instance)
+        self.transport["bind_port"] += 2
+        self.write_inputs()
+        with self.assertRaises(control.ControlError) as caught:
+            self.start(instance, dry_run=True)
+        self.assertEqual(caught.exception.reason, "voice_profile_changed")
+        self.assertEqual(len(self.runners), 1)
+
     def test_other_request_cannot_replace_active_session(self):
         instance = self.make_control()
         started = self.start(instance)

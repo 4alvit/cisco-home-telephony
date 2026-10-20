@@ -101,6 +101,13 @@ Use the [voice CLI installation guide](voice-cli-install.md) for a local
 [suspended k3s Job guide](voice-k3s.md). The ordinary `cisco` call-control CLI
 continues to work independently.
 
+Before opening the microphone, run the [read-only pipeline preflight](voice-pipeline-preflight.md)
+to check the exact configured speech services. For wake mode, the
+[offline codec preparation tool](wake-qualification.md)
+preserves a private corpus's labels while applying G.711 and the production
+inbound converter. These checks complement the physical acceptance below;
+neither activates a phone.
+
 Keep two private configuration files. The transport file selects a provisioned
 line, its hosting phone, the local bind address/ports and a short lease. The
 assistant file selects the exact HA pipeline and explicit per-phone permission.

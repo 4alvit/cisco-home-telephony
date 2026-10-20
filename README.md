@@ -42,6 +42,8 @@ conversion to MPP is not required.
   updating a client alone does not enable capture.
 - **Deploy the voice gateway:** [installation, upgrade and rollback](docs/voice-gateway-deployment.md)
   preserve the existing gateway configuration and persistent state.
+- **Check the selected voice services:** [read-only pipeline preflight](docs/voice-pipeline-preflight.md)
+  verifies the configured STT/TTS and optional exact voice pins before a session.
 - **Measure voice quality:** [wake detection evaluation](docs/wake-qualification.md)
   separates labeled accuracy from unlabeled activations;
   [latency analysis](docs/local-voice-performance.md) measures each response stage.

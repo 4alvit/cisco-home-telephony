@@ -45,7 +45,7 @@ files = (
     'containers/asterisk/phone_apps_ha.py',
     'voice_assistant/__init__.py', 'voice_assistant/config.py',
     'voice_assistant/audio.py', 'voice_assistant/service.py',
-    'voice_assistant/ha.py', 'voice_assistant/playback.py',
+    'voice_assistant/ha.py', 'voice_assistant/pipeline.py', 'voice_assistant/playback.py',
     'containers/voice/Dockerfile', 'containers/voice/requirements.lock',
     'containers/voice/smoke.py', 'containers/voice/stage_private.py',
 )

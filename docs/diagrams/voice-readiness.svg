@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="790" viewBox="0 0 1200 790" role="img" aria-labelledby="title desc">
+  <title id="title">Voice readiness: configuration, codec and physical checks</title>
+  <desc id="desc">Inspect the exact Home Assistant pipeline without audio, evaluate a labeled private corpus through G.711, then verify one bounded physical phone session. Each check has a different evidence boundary.</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2="1">
+      <stop stop-color="#0b1630"/><stop offset="1" stop-color="#172747"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 10 5 0 10z" fill="#b9cde7"/>
+    </marker>
+    <style>
+      text{font-family:Arial,Helvetica,sans-serif}
+      .heading{fill:#f5f8ff;font-size:30px;font-weight:700}
+      .subtitle{fill:#c4d4ec;font-size:17px}
+      .title{fill:#f5f8ff;font-size:23px;font-weight:700}
+      .body{fill:#dae5f5;font-size:17px}
+      .small{fill:#b9cde7;font-size:15px}
+      .tag{font-size:14px;font-weight:700;letter-spacing:1px}
+      .code{font-family:Menlo,Consolas,monospace;font-size:15px;fill:#edf3ff}
+    </style>
+  </defs>
+  <rect width="1200" height="790" rx="24" fill="url(#background)"/>
+  <text x="48" y="65" class="heading">Know what passed before opening the microphone</text>
+  <text x="48" y="99" class="subtitle">Cisco 7945G · stock SIP firmware · local voice adapter · Home Assistant</text>
+  <rect x="48" y="141" width="346" height="406" rx="18" fill="#133b4b" stroke="#39d1c0" stroke-width="2"/>
+  <text x="72" y="176" class="tag" fill="#68e6d6">1 / READ-ONLY METADATA</text>
+  <text x="72" y="214" class="title">Inspect the selected pipeline</text>
+  <text x="72" y="253" class="body">Exact pipeline ID, no fallback</text>
+  <text x="72" y="283" class="body">Check STT and TTS availability</text>
+  <text x="72" y="313" class="body">Pin engines and voice if required</text>
+  <rect x="68" y="341" width="306" height="72" rx="10" fill="#092b39"/>
+  <text x="84" y="371" class="code">python -m</text>
+  <text x="84" y="395" class="code">voice_assistant.pipeline</text>
+  <text x="72" y="449" class="small">No speech, calls or device actions.</text>
+  <text x="72" y="478" class="small">A voice alias is not proof of its</text>
+  <text x="72" y="500" class="small">backend speaker or offline operation.</text>
+  <rect x="427" y="141" width="346" height="406" rx="18" fill="#2b2553" stroke="#ab92ff" stroke-width="2"/>
+  <text x="451" y="176" class="tag" fill="#c9b8ff">2 / OFFLINE CODEC FIXTURE</text>
+  <text x="451" y="214" class="title">Evaluate a labeled corpus</text>
+  <text x="451" y="253" class="body">Private PCM → 8 kHz → PCMU</text>
+  <text x="451" y="283" class="body">Production decode → 16 kHz</text>
+  <text x="451" y="313" class="body">Preserve labels and duration</text>
+  <rect x="447" y="341" width="306" height="72" rx="10" fill="#1d193e"/>
+  <text x="463" y="371" class="code">prepare_telephony_wake.py</text>
+  <text x="463" y="395" class="code">then wake_evaluate.py</text>
+  <text x="451" y="449" class="small">Hashes make the fixture reproducible.</text>
+  <text x="451" y="478" class="small">Digital conversion does not simulate</text>
+  <text x="451" y="500" class="small">the room, microphone or packet loss.</text>
+  <rect x="806" y="141" width="346" height="406" rx="18" fill="#453422" stroke="#ffbc62" stroke-width="2"/>
+  <text x="830" y="176" class="tag" fill="#ffd197">3 / ATTENDED PHYSICAL CHECK</text>
+  <text x="830" y="214" class="title">Verify one real phone</text>
+  <text x="830" y="253" class="body">Check both lines are idle</text>
+  <text x="830" y="283" class="body">Explicit, bounded Start</text>
+  <text x="830" y="313" class="body">Speak, hear the reply, verify Stop</text>
+  <rect x="826" y="341" width="306" height="72" rx="10" fill="#302315"/>
+  <text x="842" y="371" class="code">Manual: cisco LINE voice</text>
+  <text x="842" y="395" class="code">Wake: foreground runner</text>
+  <text x="830" y="449" class="small">Maximum session: 30 seconds.</text>
+  <text x="830" y="478" class="small">Microphone, speaker and room quality</text>
+  <text x="830" y="500" class="small">need their own observed result.</text>
+  <path d="M394 328h25" stroke="#b9cde7" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M773 328h25" stroke="#b9cde7" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="48" y="581" width="1104" height="153" rx="18" fill="#101f39" stroke="#40597c"/>
+  <text x="72" y="619" class="title">Keep the evidence boundaries visible</text>
+  <text x="72" y="653" class="body">Metadata ready ≠ speech quality passed ≠ complete physical conversation accepted.</text>
+  <text x="72" y="683" class="body">Keep credentials, recordings, model files, real addresses and raw reports in ignored .local/ files.</text>
+  <text x="72" y="709" class="small">Stop does not silently rearm. Neither this workflow nor the adapter adds native SIP video to the phone.</text>
+  <text x="48" y="766" class="small">Operator workflow · examples only · no household identifiers</text>
+</svg>

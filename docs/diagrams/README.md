@@ -29,6 +29,8 @@
 
 - [voice-rollout.svg](voice-rollout.svg): the implemented bounded stock-RTP voice
   path, the initial physical gate, and explicit native/video limits.
+- [voice-readiness.svg](voice-readiness.svg): separate evidence from read-only
+  pipeline inspection, offline codec evaluation and an attended physical session.
 
 Each file is a standalone SVG containing editable text and vector objects.
 There are no MAC addresses, passwords or delivery details. Diagram sources and

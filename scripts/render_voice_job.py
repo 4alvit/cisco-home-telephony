@@ -28,6 +28,7 @@ SOURCE_FILES = (
     'voice_assistant/audio.py',
     'voice_assistant/service.py',
     'voice_assistant/ha.py',
+    'voice_assistant/pipeline.py',
     'voice_assistant/playback.py',
 )
 WHEEL_NAME = 'websockets-15.0.1-py3-none-any.whl'

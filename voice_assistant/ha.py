@@ -325,6 +325,45 @@ class HAClient:
                 except Exception:
                     pass
 
+    async def inspect_pipeline(self):
+        """Read the explicitly selected pipeline and its two speech entities.
+
+        This does not start a pipeline, send audio, synthesize speech or execute
+        an intent. The temporary filtered entity subscription ends when this
+        connection closes, including on timeout or cancellation. The result's
+        ``require`` method can enforce exact private provider/voice expectations.
+        """
+        from .pipeline import inspect_exchange
+
+        if not self.pipeline_id or self.pipeline_id.startswith("conversation."):
+            raise AssistError("explicit-pipeline-required")
+        ws = None
+        try:
+            async with _timeout(self.timeout):
+                async with _timeout(self.connection_timeout):
+                    ws = await self._connect(self.websocket_url)
+                    auth = await self._receive(ws)
+                    if auth.get("type") != "auth_required":
+                        raise AssistError("invalid-auth-handshake")
+                    await self._send_json(ws, {"type": "auth", "access_token": self._token})
+                    auth = await self._receive(ws)
+                    if auth.get("type") != "auth_ok":
+                        raise AssistError("authentication-rejected")
+                return await inspect_exchange(self, ws)
+        except (TimeoutError, asyncio.TimeoutError):
+            raise AssistTimeout() from None
+        except (AssistError, asyncio.CancelledError):
+            raise
+        except Exception:
+            raise AssistError("pipeline-inspection-failed") from None
+        finally:
+            if ws is not None:
+                try:
+                    async with _timeout(self.close_timeout):
+                        await ws.close()
+                except Exception:
+                    pass
+
     @staticmethod
     async def _send_json(ws: WebSocket, message: dict[str, Any]) -> None:
         await ws.send(json.dumps(message, separators=(",", ":")))

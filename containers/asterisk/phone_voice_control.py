@@ -471,6 +471,15 @@ class VoiceControl:
         with self._lock:
             _require(not self._closed, 'voice_control_closed', 503)
             _require(self.config.enabled, 'voice_control_disabled', 403)
+            # Validation never reserves/replays an operation. In particular a
+            # key previously used by a real attempt must still return the
+            # no-actions schema expected by every dry-run client.
+            if dry_run:
+                latest = _inputs(p.transport_config, p.voice_config, self.config.workspace)
+                self._check_profile(p, latest[0], latest[2])
+                return {'schema_version': 1, 'phone': p.phone_id, 'line': target,
+                        'valid': True, 'network_actions': 0, 'microphone_started': False,
+                        'duration_seconds': p.duration}
             previous = self._requests.get(request_id)
             if previous:
                 _require(previous.profile.phone_id == p.phone_id, 'voice_request_id_conflict')
@@ -479,12 +488,6 @@ class VoiceControl:
             prior = self._journal(p)
             if prior and prior.get('request_id') == request_id and prior.get('reserved') is False:
                 return _safe_status(prior)
-            if dry_run:
-                latest = _inputs(p.transport_config, p.voice_config, self.config.workspace)
-                self._check_profile(p, latest[0], latest[2])
-                return {'schema_version': 1, 'phone': p.phone_id, 'line': target,
-                        'valid': True, 'network_actions': 0, 'microphone_started': False,
-                        'duration_seconds': p.duration}
             current = self._current.get(p.phone_id)
             _require(not current or current.lease_fd < 0, 'voice_phone_busy')
             try:

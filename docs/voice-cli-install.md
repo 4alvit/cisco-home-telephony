@@ -115,6 +115,22 @@ Manual mode needs neither. No `openwakeword` package, legacy TFLite runtime or
 automatic model download is required. Use the requirement files as the source
 of truth when updating the checkout.
 
+## Check the selected Home Assistant pipeline
+
+Once the private configuration exists, run this metadata-only check before
+opening a physical voice session:
+
+```sh
+.local/voice-venv/bin/python -m voice_assistant.pipeline \
+  --workspace . --config .local/voice.json
+```
+
+It checks the explicitly selected pipeline and the reported availability of
+its speech providers. It sends no audio and runs no intent. Exact provider and
+voice expectations, JSON output, exit codes and the limits of this check are
+documented in [pipeline preflight](voice-pipeline-preflight.md). Its output
+contains private deployment identifiers and should remain outside public logs.
+
 ## Install the command as your normal user
 
 The installer creates only a small `cisco-voice` wrapper. It downloads nothing,
