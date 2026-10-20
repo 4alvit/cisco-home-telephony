@@ -1,4 +1,6 @@
 """Safety and wire tests for the owned, synthetic Asterisk laboratory."""
+from contextlib import contextmanager, redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -11,6 +13,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+from tools.firmware_lab import storage
+from tools.l16_lab import __main__ as cli
 from tools.l16_lab import asterisk as lab
 from tools.l16_lab import protocol
 
@@ -40,6 +44,98 @@ class PlanAndConfigurationTest(unittest.TestCase):
         self.assertIn("allow=slin16,g722", files["pjsip.conf"])
         self.assertIn("match=127.0.0.2/32", files["pjsip.conf"])
         self.assertIn("enabled=no", files["manager.conf"])
+
+    def test_real_staging_is_readable_to_container_user_under_private_or_standard_umask(self):
+        class StagingInspected(Exception):
+            pass
+
+        @contextmanager
+        def inert_container(_target):
+            yield SimpleNamespace(create=Mock(return_value="a" * 64))
+
+        for mask in (0o077, 0o022):
+            with self.subTest(umask=oct(mask)):
+                target = Mock()
+                target.verify_local.return_value = target
+                snapshots = []
+
+                def inspect_copy(args, **_kwargs):
+                    self.assertEqual(args[0], "cp")
+                    self.assertEqual(args[2], "a" * 64 + ":/")
+                    root = Path(args[1].removesuffix("/."))
+                    self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+                    directories, files = [], []
+                    for path in root.rglob("*"):
+                        mode = stat.S_IMODE(path.stat().st_mode)
+                        if path.is_dir():
+                            directories.append(path.relative_to(root).as_posix())
+                            self.assertEqual(mode, 0o755)
+                            self.assertEqual(mode & stat.S_IXOTH, stat.S_IXOTH)
+                        else:
+                            files.append(path.relative_to(root).as_posix())
+                            self.assertEqual(mode, 0o644)
+                            self.assertEqual(mode & stat.S_IROTH, stat.S_IROTH)
+                            self.assertTrue(path.read_bytes())
+                    snapshots.append((directories, files))
+                    raise StagingInspected
+
+                target.command.side_effect = inspect_copy
+                previous = os.umask(mask)
+                try:
+                    with patch.object(lab, "DockerTarget", return_value=target), \
+                            patch.object(lab, "isolated_container", inert_container):
+                        with self.assertRaises(StagingInspected):
+                            lab.run_isolated("synthetic:local", docker_context="synthetic-lab")
+                finally:
+                    inherited_after = os.umask(previous)
+                self.assertEqual(inherited_after, mask)
+                self.assertEqual(target.command.call_count, 1)
+                directories, files = snapshots[0]
+                self.assertEqual(set(directories), {"etc", "etc/asterisk", "opt", "opt/l16-lab",
+                                                    "opt/l16-lab/tools", "opt/l16-lab/tools/l16_lab"})
+                expected = {"etc/asterisk/" + name for name in lab.fixture_configs()}
+                expected.update({"opt/l16-lab/tools/l16_lab/asterisk.py",
+                                 "opt/l16-lab/tools/l16_lab/protocol.py"})
+                self.assertEqual(set(files), expected)
+
+    def test_cli_reports_stay_private_under_private_or_standard_umask(self):
+        report = {"status": "PASS", "synthetic_only": True}
+        for mask in (0o077, 0o022):
+            with self.subTest(umask=oct(mask)), tempfile.TemporaryDirectory() as temporary:
+                repository = Path(temporary).resolve()
+                destination = repository / ".local" / "l16" / "private-result"
+                output = io.StringIO()
+
+                def create_output(path):
+                    return storage.create_private_output(path, repository=repository)
+
+                previous = os.umask(mask)
+                try:
+                    with patch.object(cli, "create_private_output", side_effect=create_output), \
+                            patch.object(lab, "run_isolated", return_value=report) as run, \
+                            patch.object(lab, "DockerTarget") as docker, redirect_stdout(output):
+                        result = cli.main([
+                            "asterisk", "--image", "synthetic:local",
+                            "--docker-context", "synthetic-lab", "--execute",
+                            "--output", str(destination),
+                        ])
+                finally:
+                    inherited_after = os.umask(previous)
+
+                self.assertEqual(inherited_after, mask)
+                self.assertEqual(result, 0)
+                self.assertEqual(json.loads(output.getvalue()), {
+                    "status": "PASS", "mode": "asterisk",
+                    "report": str(destination / "report.json"),
+                })
+                run.assert_called_once_with("synthetic:local", docker_context="synthetic-lab",
+                                            docker_socket=None)
+                docker.assert_not_called()
+                for directory in (repository / ".local", destination.parent, destination):
+                    self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
+                saved = destination / "report.json"
+                self.assertEqual(stat.S_IMODE(saved.stat().st_mode), 0o600)
+                self.assertEqual(json.loads(saved.read_text()), report)
 
     def test_missing_or_ambiguous_engine_is_rejected(self):
         for kwargs in ({}, {"docker_context": "x", "docker_socket": "/tmp/socket"},

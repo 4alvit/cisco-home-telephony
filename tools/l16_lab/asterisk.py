@@ -287,10 +287,20 @@ def run_isolated(image, *, docker_context=None, docker_socket=None):
         package = root / "opt/l16-lab/tools/l16_lab"
         etc.mkdir(parents=True)
         package.mkdir(parents=True)
+        # Docker copies these synthetic assets as root while Asterisk runs as
+        # UID 10001. Make only the copied tree readable/traversable regardless
+        # of inherited umask; keep the host temporary root private.
+        for directory in (root / "etc", etc, root / "opt", root / "opt/l16-lab",
+                          root / "opt/l16-lab/tools", package):
+            directory.chmod(0o755)
         for name, text in fixture_configs().items():
-            (etc / name).write_text(text)
+            destination = etc / name
+            destination.write_text(text)
+            destination.chmod(0o644)
         for name in ("asterisk.py", "protocol.py"):
-            shutil.copyfile(Path(__file__).with_name(name), package / name)
+            destination = package / name
+            shutil.copyfile(Path(__file__).with_name(name), destination)
+            destination.chmod(0o644)
         identity = owner.create(image)
         target.command(["cp", str(root) + "/.", identity + ":/"], timeout=15)
         target.command(["start", identity], timeout=15)
