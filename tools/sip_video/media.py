@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import errno
 import hashlib
 import math
 import os
@@ -392,7 +393,11 @@ def decode_stills(data: bytes, frame_count: int, *, process_hook=None) -> list[b
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise MediaError("decoder exceeded time limit")
-            for key, _ in selector.select(min(remaining, 0.1)):
+            try:
+                ready = selector.select(min(remaining, 0.1))
+            except InterruptedError:
+                continue
+            for key, _ in ready:
                 if key.fileobj is process.stdin:
                     try:
                         count = os.write(key.fd, data[offset:offset + 65536])
@@ -400,12 +405,25 @@ def decode_stills(data: bytes, frame_count: int, *, process_hook=None) -> list[b
                         selector.unregister(process.stdin)
                         process.stdin.close()
                         continue
+                    except OSError as exc:
+                        # Readiness is advisory. A retry must not consume
+                        # input or reset the absolute decoder deadline.
+                        if exc.errno in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EINTR):
+                            continue
+                        raise
                     offset += count
                     if offset == len(data):
                         selector.unregister(process.stdin)
                         process.stdin.close()
                 else:
-                    chunk = os.read(key.fd, min(65536, MAX_OUTPUT - len(output) + 1))
+                    try:
+                        chunk = os.read(key.fd, min(65536, MAX_OUTPUT - len(output) + 1))
+                    except OSError as exc:
+                        # EAGAIN is not EOF; keep the pipe registered and
+                        # retain all output already collected.
+                        if exc.errno in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EINTR):
+                            continue
+                        raise
                     if not chunk:
                         selector.unregister(process.stdout)
                         process.stdout.close()

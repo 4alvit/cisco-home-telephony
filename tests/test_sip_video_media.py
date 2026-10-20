@@ -1,6 +1,8 @@
 """Finite synthetic RTP and decoder-boundary checks; never contact a phone."""
 
 import base64
+import errno
+import os
 from pathlib import Path
 import shutil
 import socket
@@ -324,6 +326,157 @@ class DecoderTest(unittest.TestCase):
             self.assertIsNotNone(processes[0].poll())
             self.assertTrue(processes[0].stdin.closed)
             self.assertTrue(processes[0].stdout.closed)
+
+    def assert_decoder_reaped(self, processes):
+        self.assertEqual(len(processes), 2)
+        self.assertIsNone(processes[-1])
+        process = processes[0]
+        self.assertIsNotNone(process.poll())
+        self.assertTrue(process.stdin.closed)
+        self.assertTrue(process.stdout.closed)
+        with self.assertRaises(ChildProcessError):
+            os.waitpid(process.pid, os.WNOHANG)
+
+    def test_decoder_partial_write_then_would_block_retries_exact_remaining_bytes(self):
+        data, processes, attempts, accepted = self.stream(), [], [], bytearray()
+        injected = []
+        real_write = os.write
+
+        def write(fd, chunk):
+            if processes and processes[0].stdin is not None and not processes[0].stdin.closed and fd == processes[0].stdin.fileno():
+                attempts.append(bytes(chunk))
+                self.assertEqual(bytes(chunk), data[len(accepted):])
+                if accepted and not injected:
+                    injected.append(bytes(chunk))
+                    raise BlockingIOError(errno.EAGAIN, "injected pipe write race")
+                # Natural would-block races may happen too. Limit the first
+                # successful write, then inject exactly once after progress.
+                count = real_write(fd, chunk[:7] if not accepted else chunk)
+                accepted.extend(chunk[:count])
+                return count
+            return real_write(fd, chunk)
+
+        body = "import sys; data=sys.stdin.buffer.read(); sys.stdout.buffer.write(data); sys.stdout.flush()"
+        with patch.object(media, "decoder_command", return_value=[sys.executable, "-c", body]), \
+                patch.object(media.os, "write", side_effect=write), \
+                patch.object(media, "split_pngs", return_value=[b"synthetic frame"]) as split:
+            result = media.decode_stills(data, 1, process_hook=processes.append)
+        self.assertEqual(result, [b"synthetic frame"])
+        self.assertGreaterEqual(len(attempts), 3)
+        self.assertEqual(len(injected), 1)
+        self.assertLess(len(injected[0]), len(data))
+        self.assertEqual(bytes(accepted), data)
+        split.assert_called_once_with(data, 1)
+        self.assert_decoder_reaped(processes)
+
+    def test_decoder_partial_read_then_would_block_retains_output_until_real_eof(self):
+        data, processes, attempts, received = self.stream(), [], [], bytearray()
+        injected, eof = [], []
+        real_read = os.read
+
+        def read(fd, count):
+            if processes and not processes[0].stdout.closed and fd == processes[0].stdout.fileno():
+                attempts.append(count)
+                if received and not injected:
+                    injected.append(True)
+                    raise BlockingIOError(errno.EWOULDBLOCK, "injected pipe read race")
+                chunk = real_read(fd, min(count, 5) if not received else count)
+                received.extend(chunk)
+                if not chunk:
+                    eof.append(True)
+                return chunk
+            return real_read(fd, count)
+
+        body = "import sys; data=sys.stdin.buffer.read(); sys.stdout.buffer.write(data); sys.stdout.flush()"
+        with patch.object(media, "decoder_command", return_value=[sys.executable, "-c", body]), \
+                patch.object(media.os, "read", side_effect=read), \
+                patch.object(media, "split_pngs", return_value=[b"synthetic frame"]) as split:
+            result = media.decode_stills(data, 1, process_hook=processes.append)
+        self.assertEqual(result, [b"synthetic frame"])
+        self.assertGreaterEqual(len(attempts), 4)  # partial, would-block, remainder, EOF
+        self.assertEqual(injected, [True])
+        self.assertEqual(eof, [True])
+        self.assertEqual(bytes(received), data)
+        split.assert_called_once_with(data, 1)
+        self.assert_decoder_reaped(processes)
+
+    def test_decoder_repeated_would_block_obeys_absolute_deadline_and_kills_child(self):
+        # The child stays alive without a sleep. Each injected readiness race
+        # advances a controlled clock; retries must never restart the deadline.
+        body = "import sys,signal; sys.stdout.buffer.write(b'pending'); sys.stdout.flush(); signal.pause()"
+        for direction in ("write", "read"):
+            with self.subTest(direction=direction):
+                processes, retries, clock = [], [], [100.0]
+                real_operation = getattr(os, direction)
+
+                def would_block(fd, value):
+                    stream_name = "stdin" if direction == "write" else "stdout"
+                    stream = getattr(processes[0], stream_name) if processes else None
+                    if stream is not None and not stream.closed and fd == stream.fileno():
+                        retries.append(fd)
+                        if len(retries) > 4:
+                            raise AssertionError("decoder restarted its absolute deadline")
+                        clock[0] += .25
+                        raise BlockingIOError(errno.EAGAIN, "injected repeated readiness race")
+                    return real_operation(fd, value)
+
+                with patch.object(media, "decoder_command", return_value=[sys.executable, "-c", body]), \
+                        patch.object(media.os, direction, side_effect=would_block), \
+                        patch.object(media.time, "monotonic", side_effect=lambda: clock[0]), \
+                        patch.object(media, "DECODE_SECONDS", .5), \
+                        patch.object(media, "split_pngs") as split:
+                    with self.assertRaisesRegex(media.MediaError, "decoder exceeded time limit"):
+                        media.decode_stills(self.stream(), 1, process_hook=processes.append)
+                self.assertEqual(len(retries), 2)
+                self.assertEqual(clock[0], 100.5)
+                split.assert_not_called()
+                self.assert_decoder_reaped(processes)
+                self.assertLess(processes[0].returncode, 0)  # killed, not voluntary exit
+
+    def test_decoder_unrelated_io_errors_propagate_and_still_cleanup(self):
+        body = "import sys,signal; sys.stdout.buffer.write(b'pending'); sys.stdout.flush(); signal.pause()"
+        for direction in ("write", "read"):
+            with self.subTest(direction=direction):
+                processes = []
+                failure = OSError(errno.EIO, "injected fatal pipe error")
+                real_operation = getattr(os, direction)
+
+                def fail(fd, value):
+                    stream_name = "stdin" if direction == "write" else "stdout"
+                    stream = getattr(processes[0], stream_name) if processes else None
+                    if stream is not None and not stream.closed and fd == stream.fileno():
+                        raise failure
+                    return real_operation(fd, value)
+
+                with patch.object(media, "decoder_command", return_value=[sys.executable, "-c", body]), \
+                        patch.object(media.os, direction, side_effect=fail), \
+                        patch.object(media, "split_pngs") as split:
+                    with self.assertRaises(OSError) as caught:
+                        media.decode_stills(self.stream(), 1, process_hook=processes.append)
+                self.assertIs(caught.exception, failure)
+                split.assert_not_called()
+                self.assert_decoder_reaped(processes)
+                self.assertLess(processes[0].returncode, 0)
+
+    def test_decoder_broken_stdin_pipe_still_drains_stdout_to_eof(self):
+        processes, broken = [], []
+        real_write = os.write
+
+        def write(fd, chunk):
+            if processes and not processes[0].stdin.closed and fd == processes[0].stdin.fileno():
+                broken.append(fd)
+                raise BrokenPipeError(errno.EPIPE, "injected decoder closed input")
+            return real_write(fd, chunk)
+
+        body = "import sys; sys.stdout.buffer.write(b'decoder output'); sys.stdout.flush()"
+        with patch.object(media, "decoder_command", return_value=[sys.executable, "-c", body]), \
+                patch.object(media.os, "write", side_effect=write), \
+                patch.object(media, "split_pngs", return_value=[b"synthetic frame"]) as split:
+            result = media.decode_stills(self.stream(), 1, process_hook=processes.append)
+        self.assertEqual(result, [b"synthetic frame"])
+        self.assertEqual(len(broken), 1)
+        split.assert_called_once_with(b"decoder output", 1)
+        self.assert_decoder_reaped(processes)
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is not installed")
     def test_real_h264_decodes_to_expected_color_and_dimensions(self):
