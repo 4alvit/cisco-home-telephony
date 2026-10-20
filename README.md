@@ -200,8 +200,9 @@ Python, shell, Asterisk/TFTP builds and container startup on standard
 The workflow uses no paid larger runners, paid external services or increased
 cache quotas. Normal push/PR runs build and test without uploading artifacts.
 For deployment, manually run the workflow on `main` with `export_images: true`
-(default: `false`). After successful smoke tests it exports verified AMD64 images,
-limited to 400 MiB in total and one day of retention. Delete that deployment
+(default: `false`). Select `export_target=pbx` (default) or `export_target=voice`
+to export only the required image family after successful smoke tests. Each run
+is limited to 400 MiB and one day of retention. Delete that deployment
 artifact after verified download and import. Artifact storage has a separate
 quota; free runner minutes do not include unlimited storage.
 See [GitHub Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions).

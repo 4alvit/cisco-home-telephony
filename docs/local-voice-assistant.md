@@ -215,6 +215,13 @@ numerical parity. It does not measure wake recall, false wakes, far-field speech
 or transfer through G.711. Independent room-distance acceptance of the model
 and then telephony-specific evaluation remain necessary.
 
+In a subsequent attended phone trial, the detector activated during a run with
+320 valid frames and a peak classifier score of 0.8497. No audio was recorded,
+and there is no independent confirmation that the intended phrase was spoken.
+This records a live detector activation; it does not verify that the intended
+keyword caused it. False-accept/reject rates and room-distance performance were
+not measured. See the [rollout evidence](voice-rollout.md) for trial details.
+
 ## HA protocol and headless replay
 
 `HAClient.run(audio, conversation_id=None, on_event=None)` opens one WebSocket
@@ -262,9 +269,9 @@ completed in 23.98 and 15.80 seconds from activation through reply decoding into
 an unpaced memory sink, both within the 30-second deadline. Each returned the
 requested phrase as a 1.2-second reply. This baseline uses a short prompt,
 2,048-token context, history of one and no language-model home-control tools;
-built-in local intents run first. It retains cloud STT pending local-STT
-integration. A 500-frame input queue provides a bounded ten-second startup
-buffer because the original two-second queue overflowed before HA accepted
+built-in local intents run first. This earlier baseline retains cloud STT; the
+fully local successor is described below. A 500-frame input queue provides a
+bounded ten-second startup buffer because the original two-second queue overflowed before HA accepted
 audio on the first attempt. These two results do not establish a general
 latency guarantee. All prior integration entries and pipelines, including the
 preferred pipeline, were preserved; the candidate config remains disabled.
@@ -272,10 +279,12 @@ preferred pipeline, were preserved; the candidate config remains disabled.
 A subsequent bounded receive-only phone session transmitted the saved reply
 as 60 RTP frames, with the microphone disabled. Receive Stop was confirmed and
 the watchdog finished with zero errors. The operator subsequently confirmed
-hearing this reply. This separately verifies pipeline output and audible phone output; it does not establish a complete acoustic
-microphone-to-answer turn or an audible-response latency measurement.
+hearing this reply. This separately verifies pipeline output and audible phone
+output; it does not establish a complete acoustic microphone-to-answer turn
+or an audible-response latency measurement. Confirmation of hearing the rendered
+reply is not independent ground truth for wake-phrase recognition.
 
-## Saved local-STT audit and candidate
+## Local-STT audit and qualification
 
 The reviewed October 11–16 saved snapshots contain an enabled local Wyoming
 Whisper STT entity, but show it as **unavailable** and its config entry as
@@ -304,15 +313,40 @@ Only the clean trial passed the transcript and reply checks. Both telephone
 codec variants introduced a recognition error that the conversation agent
 repeated in its reply. Raising the recognizer beam size from one to three or
 five did not fix either fixture. Thus the base model passes this small latency
-sample but **does not pass the telephone recognition gate**. A stronger local
-model requires separate quality and latency qualification before replacing the
-working base service. No general latency or acoustic acceptance claim follows
-from these three trials.
+sample but **does not pass the telephone recognition gate**. No general latency
+or acoustic acceptance claim follows from these three trials.
+
+A pinned multilingual small model using CPU/int8, two threads and beam size one
+was then qualified at a separate Wyoming endpoint, with no phrase-specific
+recognition hints. A new HA integration and Assist pipeline connect it to the
+same compact local conversation agent and Baya speech. The working base service,
+existing integration configuration, pipelines and preferred selection were
+preserved. Exact runtime provider checks confirmed all three local stages in
+each measured run.
+
+On HA 2026.10.0, all six synthetic full-cycle trials passed: clean audio, PCMU
+and PCMA each ran twice with correct transcripts and replies. Activation through
+final cleanup took **17.07–21.27 seconds**, with a median of **19.19 seconds**,
+including each 1.416-second reply delivered to a silent PCM sink at its sample
+rate. A seventh trial used different input wording and a different reply; it
+also passed, taking **27.10 seconds** including the 2.592-second reply. Its audio
+fetch took 3.91 seconds. Read-only configuration preflight is excluded from
+these timings, as are physical phone transport and the acoustic path.
+
+These seven results qualify the synthetic local cycle for the 30-second target;
+they do not guarantee cold-cache or sustained-load latency. The broader direct
+STT check returned all three target recordings exactly, plus seven of ten other
+recordings exactly; the remaining three had two number-format differences and
+one verb-form difference. Their downstream home-control intents were not tested.
+Private evidence includes reply WAVs, stage timings, model and runtime provenance,
+disabled candidate configuration, manual runtime profiles and rollback requests.
+Physical microphone-to-answer acceptance remains separate from these results.
+See [local STT qualification](local-stt.md) for backend details.
 
 The payload below is an unapplied example for isolating local STT/TTS with HA's
 built-in conversation engine. It creates a separate pipeline only after each
 provider is verified. It is a **WebSocket payload**, not `configuration.yaml`,
-and is not either candidate already measured above. For a new installation,
+and is not one of the candidates already measured above. For a new installation,
 verify the STT entity and benchmark clean and G.711 synthetic speech before
 selecting the resulting pipeline for phone use:
 
@@ -357,5 +391,6 @@ attended phone acceptance.
 
 The remaining acceptance gates are physical microphone indication/mute/Stop,
 both-line call preemption, disconnect behavior, acoustic false-wake/recall
-measurements, speech intelligibility, measured local-STT health/latency and
-multi-device arbitration. This adapter's tests do not replace those gates.
+measurements, speech intelligibility, sustained local-STT health and latency
+under load, and multi-device arbitration. This adapter's tests do not replace
+those gates.

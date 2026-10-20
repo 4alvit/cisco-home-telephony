@@ -21,6 +21,10 @@ bounded, foreground pilot, not an unattended always-listening service.
   playback. The selected HA pipeline determines whether STT/LLM/TTS is local.
 - An English status display with a generated avatar, one replaceable frame,
   source-restricted HTTP routes, expiring session URLs and a Stop softkey.
+- Optional session Start, status and exact-session Stop through the existing
+  gateway, `cisco LINE voice`, phone Applications and the companion HA action.
+  See [voice control setup](voice-control.md); these require the matching
+  runtime and private registry, not just an updated client.
 - An offline firmware inspector and video-to-still converter. Neither changes
   phone firmware nor supplies a missing native SIP video decoder.
 
@@ -56,11 +60,13 @@ after 8 kHz downsampling, G.711 encoding/decoding and the production 16 kHz
 input conversion; peak scores were 0.9975–0.9986 against the unchanged 0.5
 threshold. A subsequent 30-second physical capture delivered 1,479 frames
 but produced no wake detection; the operator later confirmed missing that
-window. In an attended retry, the phone detected the private phrase after
+window. In an attended retry, the wake detector activated after
 320 valid frames (65 scored windows), with a peak score of **0.8497**. Remote
 Stop was acknowledged and the supervisor finished without errors. No audio
-was recorded. This establishes a successful single-room wake trial, not a
-measured false-accept/reject rate or acceptance across all phones.
+was recorded. The operator could not confirm the on-screen outcome amid TV
+and music, so this establishes a live detector activation without independent
+ground-truth verification of that utterance. It does not establish acoustic
+keyword accuracy, a false-accept/reject rate or acceptance across all phones.
 
 The display now distinguishes initial model preparation from readiness. The
 frozen frontend needs 1.28 seconds of incoming history before it can classify;
@@ -75,6 +81,18 @@ the operator confirmed hearing the reply, and receive Stop and supervisor
 completion were confirmed. That playback test did
 not activate the microphone. These are separate wake, pipeline and output
 checks; a complete spoken-command-to-answer room test remains unverified.
+
+The later fully local candidate uses a separately qualified multilingual
+small-int8 Whisper service, the compact local conversation agent and Baya.
+Six synthetic full-cycle tests, covering clean PCM, PCMU and PCMA twice each,
+returned correct transcripts and replies in **17.07–21.27 seconds** (median
+**19.19 seconds**). A seventh test with different wording passed in
+**27.10 seconds**. These timings include actual reply PCM delivered to a
+silent sink at playback speed, but exclude phone transport and acoustic
+latency. They do not guarantee cold-start or loaded-system performance.
+The earlier base-model candidate was fast but misrecognized both codec
+fixtures; its failed quality gate is retained in the
+[recognition record](local-stt.md). Existing default HA pipelines were preserved.
 
 ## Install and prepare
 

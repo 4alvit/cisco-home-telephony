@@ -112,11 +112,13 @@ listeners or the background reconciliation loop. A passing report includes `imag
 `network_actions: 0` and `microphone_started: false`. It does not use phone or HA
 credentials. A passed smoke test is evidence of runtime dependencies and local
 processing, not live HA connectivity, phone compatibility or microphone Stop.
-An earlier manual-session runtime was built, smoke-tested and exported in CI.
-The gateway-capable revision described below has not yet been image-built or
-container-smoke-tested; Docker is unavailable locally. Its source checks do not
-substitute for that image check. The operator owns the build, smoke result,
-image transfer and digest verification for the exact revision being deployed.
+The gateway-capable revision passed the full
+[CI build and smoke run](https://github.com/4alvit/cisco-home-telephony/actions/runs/39357347912)
+at source commit `5475af4`. Its voice-only export passed the storage guard and
+artifact checksum/provenance checks. This establishes that exact image's build
+and synthetic behavior, not deployment or live phone acceptance. The operator
+must still verify transfer, the imported manifest digest and the actual private
+runtime configuration on the selected node.
 
 Before rendering for a live pilot, set `VOICE_IMAGE` to the verified immutable
 `repository@sha256:...` reference and ensure that exact image is available on

@@ -142,3 +142,36 @@ For the adapter contract and local pipeline candidate, see
 [the local voice assistant guide](local-voice-assistant.md). The test must
 distinguish **prepared**, **deployed**, **direct STT verified**, **HA available**
 and **phone acceptance**; none implies the next.
+
+## Stronger-model qualification
+
+A subsequent quality trial preserves the working base-int8 backend and its
+profile while testing a separate multilingual small-int8 endpoint. The model
+is pinned to [Rhasspy small-int8 revision
+`a94e151d8147ce851767640f24b3e854cf60def7`](https://huggingface.co/rhasspy/faster-whisper-small-int8/tree/a94e151d8147ce851767640f24b3e854cf60def7),
+with explicit tokenizer and preprocessing files, verified hashes, and a
+separate directory on the same worker's model volume. The image, CPU int8
+settings, two inference threads, beam size one and absence of prompt hints
+remain constant.
+
+The transient target-node benchmark transcribed the exact clean, PCMU and
+PCMA recordings correctly in **6.259**, **5.692** and **4.398 seconds**,
+respectively. Ten additional regression recordings all completed; seven
+matched exactly. Two differences were number formatting, and one changed the
+same cancellation verb from imperative to infinitive. The latter remains a
+word-level mismatch; downstream intent handling was not tested. The worker
+exited cleanly without an OOM event.
+
+The separate small-model service subsequently passed all three recordings over
+Wyoming from the Home Assistant pod to the Service hostname: **7.352 seconds**
+for clean audio, **7.054 seconds** for PCMU and **8.672 seconds** for PCMA. The
+first request includes any lazy model initialization. All three transcripts
+matched, and the server advertised the exact pinned multilingual model. The
+base backend remained running throughout. The candidate requests 10m CPU and
+1 GiB memory, with a two-core/3 GiB ceiling; its low CPU reservation does not
+guarantee these timings under contention.
+
+Direct inference time does not equal Home Assistant's STT stage or a full
+conversation. A separate endpoint permits a full Assist rerun without
+replacing the base service. A correct response in less than 30 seconds remains
+an end-to-end acceptance condition, not an inference from these model timings.
