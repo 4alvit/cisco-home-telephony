@@ -222,8 +222,8 @@ exclusions for the actual entity IDs.
 
 The administrator
 [`schedule()` service](https://github.com/ha-homelab/asterisk-telephony/blob/main/custom_components/cisco_phone_control/scheduling_api.py)
-uses request fingerprints and a persisted claim before action, with rollback
-if the initial save fails. Direct timer/alarm entity methods are separate code
+uses request fingerprints and a persisted claim before action. It publishes
+candidate state only after an acknowledged save. Direct timer/alarm entity methods are separate code
 paths and must be reviewed separately. Scheduled notifications intentionally
 skip stale occurrences and do not retry ambiguous outcomes; they are not a
 guaranteed-delivery alarm system.
@@ -252,32 +252,40 @@ telephony integrations. Cluster workload manifests are owned elsewhere.
 The overlay's checked-in target version and the companion's HA test matrix
 also differ; neither establishes the currently deployed version.
 
-## Known failure-handling gaps
+## Failure-handling repairs and remaining limits
 
-These three **P2** findings remain unfixed. They describe specific source paths,
-not failures observed on the running installation.
+The source review identified three P2 defects. The repairs below require the
+updated gateway and companion component 0.5.1; updating documentation or a CLI
+does not update a running service. No failure was injected into the installation.
 
-- **AMI action deadline:** [`AMI.action()`](../containers/asterisk/phone_gateway.py)
-  checks its eight-second deadline outside the inner frame-reading loop.
-  An in-memory reproduction with a matching response and a mocked clock returned
-  success at 12 seconds. A slow frame can therefore delay gateway work beyond
-  the intended bound. [`test_gateway_ami_errors.py`](../tests/test_gateway_ami_errors.py)
-  covers error handling but lacks this deadline regression.
+- **AMI response deadline:** [`AMI.action()`](../containers/asterisk/phone_gateway.py)
+  previously accepted a synthetic response at 12 seconds despite an eight-second
+  deadline. A bounded chunk reader now checks remaining time around each read
+  and before returning success, preserving buffered bytes between frames.
+  Connection, send and banner limits remain separate from the eight-second
+  response limit. [Deadline regressions](../tests/test_gateway_ami_deadline.py)
+  cover silence, partial lines, byte trickles, framing and response limits.
 - **Entity-driven schedule save:** companion
   [`PhoneCoordinator.configure()` / `timer()`](https://github.com/ha-homelab/asterisk-telephony/blob/main/custom_components/cisco_phone_control/coordinator.py)
-  update live settings before awaiting storage without restoring them on
-  failure. A failed alarm-enable or timer-start can remain armed in memory.
-  This is a source-traced finding; no failure was injected into live HA.
-  The storage-failure cases in
-  [`test_phone_controls_runtime.py`](https://github.com/ha-homelab/asterisk-telephony/blob/main/tests/test_phone_controls_runtime.py)
-  exercise the separate atomic service and scheduler claim, not this entity path.
-- **Schedule request after unload:** companion
+  now stage a candidate and publish it after its write completes. A strict
+  [Store adapter](https://github.com/ha-homelab/asterisk-telephony/blob/main/custom_components/cisco_phone_control/storage.py)
+  surfaces errors that HA's ordinary Store can log without raising. The
+  [entity regressions](https://github.com/ha-homelab/asterisk-telephony/blob/main/tests/test_schedule_entity_failures.py)
+  cover failed writes, recovery, queued changes and cancellation.
+- **Schedule request crossing unload:** companion
   [`schedule()`](https://github.com/ha-homelab/asterisk-telephony/blob/main/custom_components/cisco_phone_control/scheduling_api.py)
-  checks the closing flag before awaiting a snapshot, but does not recheck it
-  before later saves. A request crossing unload can write old coordinator
-  settings after a replacement has loaded the same store. This is also
-  source-traced; the existing unload regression covers `_tick()`, not these
-  service await boundaries.
+  rechecks closing after awaited work. Explicit component unload drains the
+  old settings owner, including in-flight executor writes, before replacement
+  setup can reuse the Store key. The
+  [unload regressions](https://github.com/ha-homelab/asterisk-telephony/blob/main/tests/test_schedule_unload.py)
+  and [real Store tests](https://github.com/ha-homelab/asterisk-telephony/blob/main/tests/test_schedule_storage.py)
+  exercise these lifecycle boundaries.
+
+Cancellation cannot undo a completed filesystem write. A successfully written
+candidate is reflected in memory before cancellation is reported; inspect
+schedule status before retrying. A filesystem error after replacement can also
+leave an uncertain disk outcome. These repairs do not promise that every failed
+request leaves the old file intact or that an alarm will fire during an outage.
 
 The pinned upstream AMI adapter has additional source-derived limits: synchronous
 response waits occur inside async HA paths, and its raw-action service does not

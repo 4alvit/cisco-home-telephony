@@ -49,7 +49,7 @@ conversion to MPP is not required.
   exercises synthetic sessions without contacting a real phone or Home Assistant.
 - **Understand the code and infrastructure:** the [maintainer map](docs/code-and-infrastructure-map.md)
   connects entry points, control and audio paths, persistent state, recovery,
-  test coverage and known failure-handling gaps.
+  test coverage, failure-handling repairs and remaining limits.
 - **Evaluate a voice assistant or video:** the [7945G software feasibility study](docs/native-app-feasibility.md)
   compares stock XML/RTP, signed Java applications and firmware work, with
   effort estimates and explicit limits on native video.

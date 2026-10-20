@@ -165,33 +165,74 @@ class AMI:
     """One bounded, event-filtered AMI session per fresh operation."""
     def __init__(self, config):
         self.config = config
+        self.sock = None
+        self.file = None
+        self._read_buffer = b''
 
     def __enter__(self):
         self.sock = socket.create_connection((self.config['host'], self.config['port']), timeout=5)
-        self.file = self.sock.makefile('rb')
         try:
-            require(self.file.readline(1024).startswith(b'Asterisk Call Manager/'), 'bad_ami_banner', 503)
+            self.file = self.sock.makefile('rb')
+            self._read_buffer = b''
+            banner = self._readline(1024, time.monotonic() + 5)
+            require(banner.startswith(b'Asterisk Call Manager/'), 'bad_ami_banner', 503)
             self.action('Login', Username=self.config['username'], Secret=self.config['secret'], Events='off')
         except Exception:
-            self.file.close()
-            self.sock.close()
+            self.__exit__()
             raise
         return self
 
     def __exit__(self, *_):
-        self.file.close()
-        self.sock.close()
+        try:
+            if self.file is not None:
+                self.file.close()
+        finally:
+            if self.sock is not None:
+                self.sock.close()
+
+    def _remaining(self, deadline):
+        remaining = deadline - time.monotonic()
+        require(remaining > 0, 'ami_timeout', 503)
+        return remaining
+
+    def _readline(self, limit, deadline):
+        """Assemble a bounded line without resetting its absolute deadline."""
+        while True:
+            remaining = self._remaining(deadline)
+            end = self._read_buffer.find(b'\n', 0, limit) + 1
+            if not end and len(self._read_buffer) >= limit:
+                end = limit
+            if end:
+                line = self._read_buffer[:end]
+                self._read_buffer = self._read_buffer[end:]
+                return line
+
+            self.sock.settimeout(min(5, remaining))
+            try:
+                # read1 performs at most one raw read. Buffered readline can
+                # keep receiving trickled bytes past an absolute deadline.
+                chunk = self.file.read1(min(4096, limit - len(self._read_buffer)))
+            except socket.timeout:
+                raise Refused('ami_timeout', 503) from None
+            self._remaining(deadline)
+            if not chunk:
+                line = self._read_buffer
+                self._read_buffer = b''
+                return line
+            self._read_buffer += chunk
 
     def action(self, name, complete=None, **headers):
         action_id = secrets.token_hex(12)
         data = {'Action': name, 'ActionID': action_id, **headers}
         require(all(not re.search(r'[\r\n\x00]', str(value)) for value in data.values()), 'invalid_ami_header', 400)
+        # A previous response may have left only a tiny read timeout.
+        self.sock.settimeout(5)
         self.sock.sendall(('\r\n'.join(f'{key}: {value}' for key, value in data.items()) + '\r\n\r\n').encode())
         results, total, deadline = [], 0, time.monotonic() + 8
-        while time.monotonic() < deadline:
+        while True:
             fields = {}
             while True:
-                line = self.file.readline(16385)
+                line = self._readline(16385, deadline)
                 total += len(line)
                 require(line and len(line) <= 16384 and total <= 1024 * 1024, 'invalid_ami_response', 503)
                 if line in (b'\r\n', b'\n'):
@@ -219,10 +260,11 @@ class AMI:
                 raise error
             results.append(fields)
             if complete and fields.get('Event') == complete:
+                self._remaining(deadline)
                 return results
             if not complete and fields.get('Response') in ('Success', 'Follows'):
+                self._remaining(deadline)
                 return results
-        raise Refused('ami_timeout', 503)
 
     def snapshot(self):
         endpoints = self.action('PJSIPShowEndpoints', complete='EndpointListComplete')
