@@ -144,7 +144,7 @@ python3 scripts/test-intercom-originate.py --image "$prefix/asterisk:22.11.0"
 python3 scripts/test-radio-wideband.py --image "$prefix/asterisk:22.11.0"
 for module in chan_audiosocket codec_g722 codec_resample; do
   docker exec "$container" asterisk -rx "module show like $module" |
-    grep -Eq "^[[:space:]]*$module[.]so[[:space:]].*[[:space:]][0-9]+[[:space:]]+Running([[:space:]]|$)"
+    grep -E "^[[:space:]]*$module[.]so[[:space:]].*[[:space:]][0-9]+[[:space:]]+Running([[:space:]]|$)" > /dev/null
 done
 docker exec "$container" asterisk -rx 'dialplan show 702@home' | grep -F 'AGI(radio.py,echo)' > /dev/null
 docker exec "$container" asterisk -rx 'dialplan show 640@home' | grep -F 'Wait(2)' > /dev/null
