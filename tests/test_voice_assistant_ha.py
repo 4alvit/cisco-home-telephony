@@ -1,8 +1,8 @@
 """Synthetic HA protocol and bounded audio transport checks; never contacts HA."""
 
 import asyncio
-from contextlib import asynccontextmanager, contextmanager
-from io import BytesIO
+from contextlib import asynccontextmanager, contextmanager, redirect_stderr, redirect_stdout
+from io import BytesIO, StringIO
 import json
 from types import SimpleNamespace
 import unittest
@@ -148,6 +148,57 @@ class HAProtocolTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(AssistError, "pipeline-not-found"):
             await client_for(socket).run(samples())
         self.assertTrue(socket.closed)
+
+    async def assert_server_error_contract(self, code, expected):
+        private_message = "synthetic private server message"
+        socket = FakeWebSocket(run_messages=[{
+            "id": 1, "type": "result", "success": False,
+            "error": {"code": code, "message": private_message},
+        }])
+        instance = client_for(socket)
+        stdout, stderr = StringIO(), StringIO()
+        with patch("socket.socket", side_effect=AssertionError("network forbidden")) as sockets, \
+                patch("socket.create_connection", side_effect=AssertionError("network forbidden")) as connections, \
+                patch("subprocess.Popen", side_effect=AssertionError("subprocess forbidden")) as processes, \
+                patch.object(instance, "_connect", wraps=instance._connect) as connected, \
+                patch.object(socket, "close", wraps=socket.close) as closed, \
+                redirect_stdout(stdout), redirect_stderr(stderr):
+            try:
+                with self.assertRaises(AssistError) as raised:
+                    await instance.run(samples())
+            finally:
+                self.assertTrue(socket.closed)
+                self.assertEqual((connected.await_count, closed.await_count), (1, 1))
+                self.assertEqual([item["type"] for item in socket.commands],
+                                 ["auth", "assist_pipeline/run"])
+                self.assertEqual(socket.binary, [])
+                self.assertEqual((sockets.call_count, connections.call_count, processes.call_count), (0, 0, 0))
+                self.assertFalse(bool(stdout.getvalue() or stderr.getvalue()), "mapper printed output")
+        value = raised.exception
+        self.assertFalse(private_message in str(value), "server message was exposed")
+        if expected == "server-error" and isinstance(code, str):
+            self.assertFalse(code in str(value) or code == value.code,
+                             "unapproved server code was exposed")
+        self.assertEqual(value.code, expected)
+        self.assertIs(type(value), AssistTimeout if expected == "timeout" else AssistError)
+
+    async def test_server_error_allowlist_preserves_approved_codes_and_types(self):
+        approved = (
+            "wake-engine-missing", "wake-provider-missing", "wake-stream-failed",
+            "wake-word-timeout", "stt-provider-missing", "stt-provider-unsupported-metadata",
+            "stt-stream-failed", "stt-no-text-recognized", "cloud-auth-failed",
+            "intent-agent-not-found", "intent-not-supported", "intent-failed",
+            "tts-not-supported", "duplicate_wake_up_detected", "timeout",
+            "pipeline-not-found", "not_found", "validation-error", "wake_word_detection_aborted",
+        )
+        for code in approved:
+            with self.subTest(code=code):
+                await self.assert_server_error_contract(code, code)
+
+    async def test_server_error_unknown_and_unhashable_codes_use_fixed_fallback(self):
+        for index, code in enumerate(("synthetic_private_token_428", "stt-no-text-recognized_private", [], {})):
+            with self.subTest(case_index=index):
+                await self.assert_server_error_contract(code, "server-error")
 
     async def test_server_timeout_after_run_end_is_not_success(self):
         socket = FakeWebSocket(completion=[event("run-end"), event("error", {"code": "timeout", "message": "private detail"})])

@@ -1,7 +1,7 @@
 """The readiness probe must never submit speech or execute an intent."""
 
 import asyncio
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
 import io
 import json
@@ -248,6 +248,47 @@ class PipelineCLITests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(json.loads(output), {"success": False, "error_code": "server-error"})
         self.assertNotIn("private", output)
+
+    def test_unknown_server_codes_are_redacted_in_json_and_text_cli(self):
+        # Initialize asyncio's local self-pipe before denying all new sockets.
+        loop = asyncio.new_event_loop()
+        try:
+            with patch("asyncio.run", side_effect=loop.run_until_complete), \
+                    patch("socket.socket", side_effect=AssertionError("network forbidden")) as sockets, \
+                    patch("socket.create_connection", side_effect=AssertionError("network forbidden")) as connections, \
+                    patch("subprocess.Popen", side_effect=AssertionError("subprocess forbidden")) as processes:
+                for index, server_code in enumerate(("synthetic_private_token_428", "not_found_private")):
+                    for json_mode in (True, False):
+                        with self.subTest(case_index=index, json_mode=json_mode):
+                            socket = Socket()
+                            message = "synthetic private server message"
+                            socket.error = {"code": server_code, "message": message}
+                            instance = client(socket)
+                            stderr = io.StringIO()
+                            with patch(__name__ + ".client", return_value=instance), \
+                                    patch.object(instance, "_connect", wraps=instance._connect) as connected, \
+                                    patch.object(socket, "close", wraps=socket.close) as closed, \
+                                    redirect_stderr(stderr):
+                                try:
+                                    code, output, _ = self.invoke(socket, *(["--json"] if json_mode else []))
+                                finally:
+                                    self.assertTrue(socket.closed)
+                                    self.assertEqual((connected.await_count, closed.await_count), (1, 1))
+                                    self.assertEqual([item["type"] for item in socket.commands],
+                                                     ["auth", "assist_pipeline/pipeline/get"])
+                                    self.assertEqual((sockets.call_count, connections.call_count,
+                                                      processes.call_count), (0, 0, 0))
+                                    self.assertFalse(bool(stderr.getvalue()), "CLI printed to stderr")
+                            self.assertEqual(code, 1)
+                            self.assertFalse(server_code in output or message in output,
+                                             "unapproved server data was exposed")
+                            if json_mode:
+                                self.assertEqual(json.loads(output),
+                                                 {"success": False, "error_code": "server-error"})
+                            else:
+                                self.assertEqual(output, "Pipeline inspection: not ready\nError: server-error\n")
+        finally:
+            loop.close()
 
 
 if __name__ == "__main__":
