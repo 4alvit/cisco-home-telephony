@@ -143,6 +143,61 @@ class OwnedContainerTest(unittest.TestCase):
 
 
 class WireAndLifecycleTest(unittest.TestCase):
+    def test_l16_directional_patterns_are_repeatable_and_nonoverlapping(self):
+        incoming = lab.pcm_pattern("incoming", "L16")
+        outgoing = lab.pcm_pattern("outgoing", "L16")
+        self.assertEqual(incoming, lab.pcm_pattern("incoming", "L16"))
+        self.assertEqual(outgoing, lab.pcm_pattern("outgoing", "L16"))
+        self.assertEqual(len(incoming), lab.FRAME_COUNT * 640)
+        self.assertNotIn(incoming[6400:32000], outgoing)
+        self.assertNotIn(outgoing[6400:32000], incoming)
+
+    def test_duplex_oracle_accepts_correct_path_and_rejects_swaps_or_reflection(self):
+        incoming = lab.pcm_pattern("incoming", "L16")
+        outgoing = lab.pcm_pattern("outgoing", "L16")
+
+        def big_endian(pcm):
+            return b"".join(pcm[index:index + 2][::-1] for index in range(0, len(pcm), 2))
+
+        result = lab._check_l16_duplex(big_endian(outgoing), incoming)
+        self.assertEqual(result["duplex_exact_samples"], 12800)
+        for label, rtp, audio in (
+            ("swapped directions", big_endian(incoming), outgoing),
+            ("incoming reflected to RTP", big_endian(incoming), incoming),
+            ("outgoing reflected to AudioSocket", big_endian(outgoing), outgoing),
+            ("missing RTP", b"", incoming),
+            ("missing AudioSocket", big_endian(outgoing), b""),
+            ("wrong RTP byte order", outgoing, incoming),
+        ):
+            with self.subTest(label=label), self.assertRaisesRegex(lab.LabError, "byte identity"):
+                lab._check_l16_duplex(rtp, audio)
+
+    def test_run_case_rejects_reflected_media_without_any_bridge(self):
+        # Each side receives its own signal. This must not establish duplex
+        # delivery, even though packet counts, clocks and cleanup look valid.
+        pcm = lab.pcm_pattern("incoming", "L16")
+        reflected = bytearray(pcm)
+        reflected[0::2], reflected[1::2] = reflected[1::2], reflected[0::2]
+        codec = protocol.parse_audio_sdp(lab._sdp(102, "L16")).codecs[0]
+        packets = [(index * .02, protocol.make_rtp(
+            bytes(reflected[index * 640:(index + 1) * 640]),
+            102, 1000 + index, 100000 + index * 320, 123456))
+            for index in range(lab.FRAME_COUNT)]
+        peer = SimpleNamespace(error=None, confirmed=True, bye=True, payload=102,
+                               codec=codec, packets=packets, rtp=SimpleNamespace(sendto=Mock()),
+                               target_rtp=("127.0.0.1", 10000), dial=Mock(), close=Mock(),
+                               offer_sdp="synthetic", answer_sdp="synthetic")
+
+        def self_echo_audio(outgoing):
+            return SimpleNamespace(error=None, connected=True, ended=True,
+                                   received=bytearray(outgoing), frames=lab.FRAME_COUNT, close=Mock())
+
+        with patch.object(lab, "SipPeer", return_value=peer), \
+                patch.object(lab, "AudioSocketPeer", side_effect=self_echo_audio), \
+                patch.object(lab, "_no_channels", return_value=True), patch.object(lab.time, "sleep"):
+            with self.assertRaisesRegex(lab.LabError, "byte identity"):
+                lab.run_case("reflection_regression", True, "L16", 102)
+
     def test_outgoing_uses_offered_l16_payload_and_incoming_does_not_accept_remapping(self):
         peer = object.__new__(lab.SipPeer)
         peer.codec_name, peer.incoming, peer.payload = "L16", False, None
@@ -227,6 +282,15 @@ class WireAndLifecycleTest(unittest.TestCase):
         with patch.object(lab.subprocess, "run", side_effect=[
                 SimpleNamespace(returncode=0, stdout=listing), SimpleNamespace(returncode=0, stdout=detail)]):
             self.assertEqual(lab._channel_snapshot(), {"PJSIP/lab-00000001": "1234567890.12"})
+
+    def test_channel_snapshot_accepts_audiosocket_address_with_port(self):
+        name = "AudioSocket/127.0.0.1:9019-11111111-2222-4333-8444-555555555555"
+        listing = SimpleNamespace(returncode=0, stdout=name + "!l16-lab!9001!3!Up\n")
+        detail = SimpleNamespace(returncode=0, stdout="       UniqueID: 1234567890.13\n")
+        with patch.object(lab.subprocess, "run", side_effect=[listing, detail]) as run:
+            self.assertEqual(lab._channel_snapshot(), {name: "1234567890.13"})
+        self.assertEqual(run.call_args_list[1].args[0],
+                         ["asterisk", "-rx", "core show channel " + name])
 
     def test_channel_inspection_error_or_missing_uniqueid_cannot_mean_target_gone(self):
         listing = "PJSIP/lab-00000001!l16-lab!9002!2!Up!Dial!synthetic\n"

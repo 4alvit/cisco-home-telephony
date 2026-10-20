@@ -6,6 +6,7 @@ Its internal SIP and AudioSocket peers run only inside the owned container.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import math
 import os
@@ -472,13 +473,28 @@ class SipPeer:
 
 
 def pcm_pattern(direction, codec):
+    need(direction in ("incoming", "outgoing") and codec in ("L16", "G722"), "invalid synthetic PCM pattern")
     frequency = 1000 if direction == "incoming" else 2200
     if codec == "G722":
         samples = [round(6000 * math.sin(2 * math.pi * frequency * i / 16000)) for i in range(FRAME_SAMPLES * FRAME_COUNT)]
     else:
-        seed = 17 if direction == "incoming" else 103
-        samples = [((i * 137 + seed * 53) % 18001) - 9000 for i in range(FRAME_SAMPLES * FRAME_COUNT)]
+        # Separate deterministic streams, not phase shifts of one waveform:
+        # a reflected signal must never satisfy the other direction's oracle.
+        count = FRAME_SAMPLES * FRAME_COUNT
+        raw = hashlib.shake_256(("l16-lab/pcm/v1/" + direction).encode("ascii")).digest(count * 2)
+        samples = [value // 4 for value in struct.unpack(">" + "h" * count, raw)]
     return struct.pack("<" + "h" * len(samples), *samples)
+
+
+def _check_l16_duplex(payloads, received):
+    expected_le = pcm_pattern("outgoing", "L16")[10 * 640:50 * 640]
+    expected_be = bytearray(expected_le)
+    expected_be[0::2], expected_be[1::2] = expected_be[1::2], expected_be[0::2]
+    need(bytes(expected_be) in payloads, "AudioSocket little-endian to RTP big-endian byte identity failed")
+    expected_incoming = pcm_pattern("incoming", "L16")[10 * 640:50 * 640]
+    need(expected_incoming in received, "RTP big-endian to AudioSocket little-endian byte identity failed")
+    return {"rtp_big_endian_verified": True, "audiosocket_little_endian_verified": True,
+            "duplex_exact_samples": 40 * FRAME_SAMPLES}
 
 
 def _ffmpeg(data, *, encode):
@@ -649,13 +665,7 @@ def run_case(name, incoming, codec_name, payload):
         need(diagnostics["ok"], "RTP clock, framing, sequence or pacing check failed")
         payloads = b"".join(protocol.parse_rtp(wire).payload for _, wire in peer.packets)
         if codec_name == "L16":
-            expected_le = outgoing_pcm[10 * 640:50 * 640]
-            expected_be = bytearray(expected_le)
-            expected_be[0::2], expected_be[1::2] = expected_be[1::2], expected_be[0::2]
-            need(bytes(expected_be) in payloads, "AudioSocket little-endian to RTP big-endian byte identity failed")
-            need(incoming_pcm[10 * 640:50 * 640] in audio.received, "RTP big-endian to AudioSocket little-endian byte identity failed")
-            content = {"rtp_big_endian_verified": True, "audiosocket_little_endian_verified": True,
-                       "duplex_exact_samples": 40 * FRAME_SAMPLES}
+            content = _check_l16_duplex(payloads, audio.received)
         else:
             decoded = _ffmpeg(payloads, encode=False)
             outgoing_level = _tone_level(decoded, 2200)
@@ -683,7 +693,7 @@ def _channel_snapshot():
     need(len(names) <= 12, "unexpected channel count in isolated fixture")
     result = {}
     for name in names:
-        need(re.fullmatch(r"[A-Za-z0-9_@./;+-]{1,160}", name), "invalid isolated channel name")
+        need(re.fullmatch(r"[A-Za-z0-9_@./;:+-]{1,160}", name), "invalid isolated channel name")
         detail = subprocess.run(["asterisk", "-rx", "core show channel " + name],
                                 capture_output=True, text=True, timeout=3)
         need(detail.returncode == 0, "channel identity inspection failed")
