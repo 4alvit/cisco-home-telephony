@@ -22,6 +22,8 @@ COMMANDS = {
     'image': 'image FILE [--title TITLE]', 'ring': 'ring [DESTINATION]',
     'alert': 'alert timer|alarm', 'alert_stop': 'stop-alert [--alert-id ID]',
 }
+VOICE_COMMANDS = ['voice status', 'voice start --idempotency-key KEY --attended --exclusive-media --enable-microphone',
+                  'voice stop --session-id ID']
 MAX_FILE = 2 * 1024 * 1024
 SCHEDULE_COMMANDS = ['schedule', 'timer [status]', 'timer start MINUTES [--replace]',
     'timer cancel', 'alarm [status]', 'alarm set HH:MM --days DAYS [--enable] [--replace]',
@@ -297,6 +299,8 @@ def commands(phone):
         result.append('call NUMBER')
     if 'intercom' in phone['capabilities']:
         result.append('drop-in NUMBER')
+    if 'voice' in phone['capabilities']:
+        result.extend(VOICE_COMMANDS)
     return result
 
 
@@ -482,6 +486,81 @@ def schedule_result(value, phone, line):
             'alert': alert, 'operation_result': operation}
 
 
+def voice_status(value):
+    """Validate the public voice schema and discard all untrusted extra fields."""
+    states = {'idle', 'starting', 'running', 'stopping', 'stopped', 'cancelled',
+              'failed', 'recovery_required', 'external_owner'}
+    require(isinstance(value, dict) and type(value.get('schema_version')) is int
+            and value['schema_version'] == 1 and value.get('state') in states,
+            'invalid_voice_response')
+    require(all(type(value.get(key)) is bool
+                for key in ('active', 'stop_requested', 'stop_confirmed')), 'invalid_voice_response')
+    require(all(isinstance(value.get(key), str) and re.fullmatch(r'2[0-9]{2}', value[key])
+                for key in ('phone', 'line')), 'invalid_voice_response')
+    session = value.get('session_id')
+    require(session is None or isinstance(session, str) and re.fullmatch(r'[0-9a-f]{32}', session),
+            'invalid_voice_response')
+    remaining = value.get('remaining_seconds')
+    require(type(remaining) in (int, float) and math.isfinite(remaining) and 0 <= remaining <= 30,
+            'invalid_voice_response')
+    return {key: value[key] for key in ('schema_version', 'phone', 'line', 'session_id', 'state',
+            'active', 'remaining_seconds', 'stop_requested', 'stop_confirmed')}
+
+
+def voice_command(args, config):
+    client = Gateway(config, args.timeout)
+    operation = args.voice_action
+    path = '/v1/phones/' + args.extension + '/voice_'
+    key = None
+    if operation == 'stop':
+        require(re.fullmatch(r'[0-9a-f]{32}', args.session_id), 'unknown_voice_session')
+    read_only = operation == 'status' or operation == 'stop' and args.dry_run
+    if read_only:
+        response = client.request(path + 'status')
+        require(isinstance(response, dict) and response.get('status') == 'ok', 'invalid_voice_response')
+    else:
+        key = args.idempotency_key
+        if operation == 'stop' and key is None:
+            key = 'voice-stop-' + args.session_id
+        require(isinstance(key, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{8,128}', key),
+                'voice_request_id_required')
+        body = {'idempotency_key': key}
+        if operation == 'start':
+            require(args.attended and args.exclusive_media and args.enable_microphone,
+                    'explicit_voice_start_required')
+            body.update(attended=True, exclusive_media=True, enable_microphone=True, dry_run=args.dry_run)
+        else:
+            body['session_id'] = args.session_id
+        response = client.request(path + operation, body)
+        require(isinstance(response, dict) and response.get('status') == 'accepted'
+                and response.get('action_id') == key, 'unconfirmed_gateway_response')
+    value = response.get('voice')
+    require(isinstance(value, dict), 'invalid_voice_response')
+    if operation == 'start' and args.dry_run:
+        duration = value.get('duration_seconds')
+        require(type(value.get('schema_version')) is int and value['schema_version'] == 1
+                and value.get('valid') is True and value.get('microphone_started') is False
+                and type(value.get('network_actions')) is int and value['network_actions'] == 0
+                and type(duration) in (int, float) and math.isfinite(duration) and 0 < duration <= 30
+                and isinstance(value.get('phone'), str) and re.fullmatch(r'2[0-9]{2}', value['phone'])
+                and value.get('line') == args.extension, 'invalid_voice_response')
+        return {'status': 'dry_run', 'action': 'voice_start', 'action_id': key,
+                'selected_line': args.extension, 'microphone_started': False}
+    require('valid' not in value, 'invalid_voice_response')
+    value = voice_status(value)
+    if operation == 'stop':
+        require(value['session_id'] == args.session_id, 'voice_session_changed')
+        if args.dry_run:
+            return {'status': 'dry_run', 'action': 'voice_stop',
+                    'session_id': args.session_id, 'selected_line': args.extension}
+    elif operation == 'start':
+        require(value['session_id'] is not None, 'invalid_voice_response')
+    result = {'status': 'ok' if operation == 'status' else 'accepted', 'voice': value}
+    if key is not None:
+        result['action_id'] = key
+    return result
+
+
 def global_options(p, *, inherited=False):
     def default(value):
         return argparse.SUPPRESS if inherited else value
@@ -489,7 +568,7 @@ def global_options(p, *, inherited=False):
     p.add_argument('-j', '--json', action='store_true', default=default(False), help='machine-readable JSON only')
     p.add_argument('-t', '--timeout', type=int, default=default(20), help='HTTP timeout seconds, 1..60 (default 20)')
     p.add_argument('--idempotency-key', default=default(None), help='reuse only for the same logical operation and exact request')
-    p.add_argument('--dry-run', action='store_true', default=default(False), help='read live inventory and show a redacted action without posting')
+    p.add_argument('--dry-run', action='store_true', default=default(False), help='validate without changing the phone; voice Start asks the server for dry validation')
 
 
 def normalize_shorthand(argv):
@@ -564,9 +643,16 @@ def parser():
     alarm.add_argument('--days', required=True, help='mon,tue,... or weekdays, weekend, daily')
     alarm.add_argument('--enable', action='store_true', help='enable this alarm; otherwise save it disabled')
     alarm.add_argument('--replace', action='store_true', help='explicitly replace an alarm owned by the sibling line')
+    voice_sub = sub.add_parser('voice', help='Bounded attended voice controls').add_subparsers(
+        dest='voice_action', required=True)
+    voice_sub.add_parser('status', help='Read voice ownership without an AMI inventory request')
+    voice_start = voice_sub.add_parser('start', help='Requires --idempotency-key and all explicit microphone gates')
+    for flag in ('attended', 'exclusive-media', 'enable-microphone'):
+        voice_start.add_argument('--' + flag, action='store_true')
+    voice_sub.add_parser('stop').add_argument('--session-id', required=True)
     for command_parser in dict.fromkeys(sub.choices.values()):
         global_options(command_parser, inherited=True)
-    for command_parser in (*timer_sub.choices.values(), *alarm_sub.choices.values()):
+    for command_parser in (*timer_sub.choices.values(), *alarm_sub.choices.values(), *voice_sub.choices.values()):
         global_options(command_parser, inherited=True)
     return p
 
@@ -660,19 +746,20 @@ def main(argv=None):
     p = parser()
     if not argv or argv in (['--json'], ['-j']):
         if argv:
-            print(json.dumps({'status': 'help', 'commands': ['status', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS]}))
+            print(json.dumps({'status': 'help', 'commands': ['status', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS]}))
         else:
             p.print_help()
         return 0
     args = p.parse_args(normalize_shorthand(argv))
     if args.command == 'help':
         if args.json:
-            print(json.dumps({'status': 'help', 'commands': ['status', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS]}))
+            print(json.dumps({'status': 'help', 'commands': ['status', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS]}))
         else:
             p.print_help()
             print('\nDevice commands: ' + '; '.join(COMMANDS.values()))
             print('pickup: answer one exact ringing call; idle speaker use requires explicit speaker toggle.')
             print('Schedules (optional Home Assistant config): ' + '; '.join(SCHEDULE_COMMANDS))
+            print('Voice (requires configured gateway supervisor): ' + '; '.join(VOICE_COMMANDS))
         return 0
     action_key = None
     exit_code = 0
@@ -684,6 +771,18 @@ def main(argv=None):
             require(re.fullmatch(r'2[0-9]{2}', args.extension), 'extension_requires_three_digit_cisco_line')
         require(1 <= args.timeout <= 60, 'timeout_requires_1_to_60_seconds')
         config = load_config(args.config)
+        if args.command == 'voice':
+            result = voice_command(args, config)
+            if args.json or 'voice' not in result:
+                print(json.dumps(result, sort_keys=True))
+            else:
+                value = result['voice']
+                print('Voice: ' + value['state'])
+                print('Session: ' + (value['session_id'] or 'none'))
+                print('Stop confirmed: ' + str(value['stop_confirmed']))
+                if 'action_id' in result:
+                    print('Action: ' + result['action_id'])
+            return 1 if result.get('voice', {}).get('state') == 'recovery_required' else 0
         phone = None
         if args.command not in ('schedule', 'timer', 'alarm'):
             try:
@@ -795,7 +894,7 @@ def main(argv=None):
         if action_key is not None:
             result.update(action_id=action_key, note='Do not retry blindly; inspect status first.')
         elif args.command is None:
-            result['offline_commands'] = ['status', 'help', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS]
+            result['offline_commands'] = ['status', 'help', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS]
         print(json.dumps(result), file=sys.stdout if args.json else sys.stderr)
         if not args.json and args.command is None:
             print('Offline command help (live availability unknown):', file=sys.stderr)

@@ -105,14 +105,18 @@ bash scripts/smoke-voice-image.sh cisco-home-ci/voice:pilot
 The smoke script runs `/opt/voice/smoke.py` with networking disabled, a read-only
 filesystem, a temporary filesystem, dropped capabilities and a non-root user.
 It uses the existing local image ID without pulling another image. Checks cover
-locked versions and imports, a Pillow round trip, synthetic FFmpeg decoding and
-session CLI validation. A passing report includes `image_smoke: "passed"`,
+locked versions and imports, a Pillow round trip, synthetic FFmpeg decoding,
+AtomicWriter input staging, control configuration, gateway attach/status and
+session CLI validation. The gateway check uses synthetic state without starting
+listeners or the background reconciliation loop. A passing report includes `image_smoke: "passed"`,
 `network_actions: 0` and `microphone_started: false`. It does not use phone or HA
 credentials. A passed smoke test is evidence of runtime dependencies and local
 processing, not live HA connectivity, phone compatibility or microphone Stop.
-The dedicated image has not yet been built or container-smoke-tested in this
-implementation environment; Docker is unavailable locally. The operator owns
-the CI build, smoke result, image transfer and digest verification.
+An earlier manual-session runtime was built, smoke-tested and exported in CI.
+The gateway-capable revision described below has not yet been image-built or
+container-smoke-tested; Docker is unavailable locally. Its source checks do not
+substitute for that image check. The operator owns the build, smoke result,
+image transfer and digest verification for the exact revision being deployed.
 
 Before rendering for a live pilot, set `VOICE_IMAGE` to the verified immutable
 `repository@sha256:...` reference and ensure that exact image is available on
@@ -276,3 +280,140 @@ python3 -m unittest discover -s tests -p 'test_render_voice_job.py'
 These checks validate manifest construction and input rejection. Image runtime
 dependencies, cluster admission, node reachability, physical audio behavior,
 call priority and watchdog behavior under Pod failure remain acceptance gates.
+
+## Existing control gateway: gated runtime replacement
+
+The dedicated image can also package the
+[bounded voice control gateway](voice-control.md), which owns sessions across
+separate Start, status and Stop requests. The intended deployment replaces the
+single existing gateway while preserving its configuration, ports and state.
+Asterisk remains unchanged. `render_voice_job.py` still emits only the suspended
+manual Job described above; it does not render or deploy a gateway replacement.
+
+The gateway reconciles DND preferences and other phone controls in its
+background loop. Another instance with a fresh database could reset preferences
+even without a voice Start request. **Do not start a second gateway or replace
+the existing preferences database with an empty one.** Audit the current
+deployment and volume mapping first, preserving the existing `gateway.sqlite3`
+and any voice ownership journals before changing the runtime image.
+
+The first validation gate is a separate preflight Job with audit hooks denying
+all network and hardware operations. It should validate imports, staged files,
+configuration and state paths without starting listeners or a voice session.
+Passing preflight does not authorize replacement or establish live phone
+acceptance. This guide does not create or run that Job.
+
+Preserve the image's source layout and use separate runtime storage:
+
+| Path | Gateway role |
+| --- | --- |
+| `/workspace` | Immutable image sources; do not cover them with the manual Job's source projection. |
+| `/run/voice-inputs` | Read-only immutable input Secret, including an explicit staging manifest. |
+| `/run/voice/.local/config` | Fresh real `emptyDir` directory, owned by user 10001 with mode 0700; staged files are real mode-0600 files. |
+| `/run/voice/.local/state/gateway` | Persistent real child directory containing the preserved gateway database. |
+| `/run/voice/.local/state/voice-control` | Persistent real child directory containing voice ownership journals. |
+
+The control loader rejects symlinks throughout its private paths. Mounting a
+Kubernetes Secret directly as its configuration is therefore unsuitable. The
+staging helper may read Kubernetes AtomicWriter links within the input root,
+then writes only explicitly listed, bounded files to the real configuration
+directory. It does not relax the control loader's privacy checks. Both state
+child directories must be owned by user 10001 with mode 0700. Setting `fsGroup`
+alone does not change a mounted volume root's owning UID; verify the actual
+storage mapping and provision owned child directories rather than assuming the
+PVC root satisfies the loader.
+
+The input Secret's `staging.json` lists flat `.json` and `.txt` filenames, for
+example:
+
+```json
+{
+  "version": 1,
+  "files": [
+    "gateway.json",
+    "voice-control.json",
+    "transport.json",
+    "voice.json",
+    "ha-token.txt"
+  ]
+}
+```
+
+Set `immutable: true` on this input Secret and use a new Secret for each changed
+configuration. A read-only mount alone does not prevent kubelet updates. The
+helper reads the manifest and payloads before publishing the staged files, but
+does not pin one AtomicWriter generation across all reads. An immutable Secret
+therefore prevents a mixed configuration snapshot. Staging is a prestart
+snapshot, not a configuration watcher or live-update mechanism.
+
+Each additional profile requires its own explicitly listed files. Use a fresh
+configuration `emptyDir` for each Pod: the staging helper refuses existing
+destination content rather than replacing live configuration. It does not copy
+or clear the persistent state directory. Provision the PVC and its ownership
+before starting the process; do not delete journals to clear an unresolved
+session.
+
+Run staging as user 10001 after provisioning the real, empty, mode-0700
+configuration directory:
+
+```sh
+/usr/local/bin/python3 /opt/voice/stage_private.py \
+  --source /run/voice-inputs \
+  --destination /run/voice/.local/config \
+  --manifest /run/voice-inputs/staging.json
+```
+
+The manifest permits 1–128 unique flat ASCII `.json` or `.txt` names, excluding
+the manifest itself. Its size is limited to 32 KiB, each input to 256 KiB and
+the total copied payload to 1 MiB. Files with leading dots, `..` or slashes are
+rejected. Staging does not start the gateway, contact a phone or modify state.
+
+In the staged registry, set `python_executable` to `/usr/local/bin/python3`,
+`ffmpeg_executable` to `/usr/bin/ffmpeg`, `state_directory` to
+`.local/state/voice-control`, and profile paths to
+`.local/config/transport.json` and `.local/config/voice.json`. The transport's
+`gateway_config` references `.local/config/gateway.json`; the voice
+configuration's `ha.token_file` references `.local/config/ha-token.txt`. The
+private workspace is `/run/voice`, independently of the source root
+`/workspace`. Keep the registry disabled while preparing these inputs.
+
+Validate staged profiles offline before considering replacement:
+
+```sh
+/usr/local/bin/python3 /workspace/containers/asterisk/phone_voice_control.py validate \
+  --config /run/voice/.local/config/voice-control.json \
+  --workspace /run/voice
+```
+
+This validates configuration without starting audio. It does not exercise the
+live network, the existing preferences database or shutdown under load.
+
+Use one replica with the `Recreate` strategy, explicit node pinning and the
+existing API and callback/listener ports. Retain the runtime's non-root,
+read-only and capability restrictions. Set `terminationGracePeriodSeconds` to
+at least 60 seconds; 75 seconds is recommended to allow more than the gateway's
+roughly 47-second voice cleanup window before a forced Pod kill. The persistent
+volume must preserve the same physical control ownership. Old and replacement
+gateways must not run concurrently or compete for the state or the phones.
+
+Only after the replacement is approved, staging and preflight pass, the
+existing gateway is stopped, and its preserved state is mapped to the paths
+above, the replacement container's daemon command is:
+
+```sh
+/usr/local/bin/python3 /workspace/containers/asterisk/phone_gateway.py \
+  --config /run/voice/.local/config/gateway.json \
+  --state-directory /run/voice/.local/state/gateway \
+  --voice-control-config /run/voice/.local/config/voice-control.json \
+  --voice-workspace /run/voice
+```
+
+This command opens the existing gateway listeners and starts its normal
+background reconciliation. It is not an offline preflight command.
+
+Daemon startup does not authorize a microphone session. Each Start must still
+supply the attendance, exclusive-media and microphone gates from
+[voice control](voice-control.md); existing call priority, bounded duration,
+explicit Stop and persistent uncertain-cleanup rules continue to apply. The
+short manual Job remains unchanged: its source projection is `/workspace`, its
+Secret mount is `/run/voice/.local`, and its runtime workspace is `/run/voice`.

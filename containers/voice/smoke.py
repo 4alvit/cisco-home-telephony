@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -39,7 +40,8 @@ def check_imports():
             locked[name] = version
     require({'aiohttp', 'Pillow', 'websockets'} <= locked.keys(), 'incomplete_runtime_lock')
     for module in ('aiohttp', 'websockets.asyncio.client', 'PIL.Image',
-                   'phone_voice_transport', 'phone_voice_controller', 'phone_voice_display',
+                   'phone_voice_transport', 'phone_voice_controller', 'phone_voice_control',
+                   'phone_voice_display', 'stage_private',
                    'phone_gateway', 'phone_apps', 'phone_apps_ha', 'voice_assistant',
                    'voice_assistant.config', 'voice_assistant.audio', 'voice_assistant.service',
                    'voice_assistant.ha', 'voice_assistant.playback'):
@@ -69,9 +71,16 @@ def check_ffmpeg():
 
 def check_cli():
     with tempfile.TemporaryDirectory(prefix='voice-smoke-') as directory:
-        root = Path(directory)
+        root = Path(directory).resolve()
         local = root / '.local'
         local.mkdir(mode=0o700)
+        config = local / 'config'
+        config.mkdir(mode=0o700)
+        state = local / 'state'
+        state.mkdir(mode=0o700)
+        state_sentinel = state / 'persistent-owner-journal.txt'
+        state_sentinel.write_text('synthetic state must remain unchanged\n')
+        state_sentinel.chmod(0o600)
         gateway = {
             'persistent_enabled': True, 'bind_ipv4': '192.168.50.10', 'api_port': 18084,
             'api_token': 'a' * 48, 'api_clients': ['192.168.50.11'],
@@ -84,22 +93,74 @@ def check_cli():
                         'username': 'u' * 24, 'password': 'p' * 24}],
         }
         transport = {
-            'gateway_config': str(local / 'gateway.json'), 'line': '201',
+            'gateway_config': str(config / 'gateway.json'), 'line': '201',
             'bind_ipv4': '192.168.50.10', 'bind_port': 24576, 'phone_rtp_port': 24578,
             'duration_seconds': 1, 'receive_idle_seconds': 1, 'volume': 10,
         }
         voice = {
             'service': {'enabled': True, 'rearm_after_turn': False}, 'phones': {'201': True},
             'ha': {'base_url': 'http://192.168.50.30:8123',
-                   'token_file': '.local/token.txt', 'pipeline_id': 'synthetic-pipeline'},
+                   'token_file': '.local/config/token.txt', 'pipeline_id': 'synthetic-pipeline'},
             'wake': {'mode': 'manual', 'bundle_file': '.local/unused-bundle.json'},
         }
-        for name, value in (('gateway', gateway), ('transport', transport), ('voice', voice)):
-            path = local / (name + '.json')
-            path.write_text(json.dumps(value))
-            path.chmod(0o600)
-        (local / 'token.txt').write_text('synthetic-token\n')
-        (local / 'token.txt').chmod(0o600)
+        control = {
+            'version': 1, 'enabled': False, 'state_directory': '.local/state/voice-control',
+            'python_executable': '/usr/local/bin/python3', 'ffmpeg_executable': '/usr/bin/ffmpeg',
+            'profiles': [{'transport_config': '.local/config/transport.json',
+                          'voice_config': '.local/config/voice.json', 'display_port': None}],
+        }
+        # Model Kubernetes AtomicWriter: public file links point through ..data
+        # to a read-only version directory. The controller refuses these links
+        # directly, so production staging must turn them into real private files.
+        inputs = root / 'inputs'
+        inputs.mkdir()
+        version = inputs / '..synthetic-version'
+        version.mkdir()
+        values = {name + '.json': json.dumps(value)
+                  for name, value in (('gateway', gateway), ('transport', transport),
+                                      ('voice', voice), ('control', control))}
+        values['token.txt'] = 'synthetic-token\n'
+        values['staging.json'] = json.dumps({'version': 1, 'files': list(values)})
+        for name, value in values.items():
+            (version / name).write_text(value)
+            (version / name).chmod(0o440)
+            (inputs / name).symlink_to(Path('..data') / name)
+        (inputs / '..data').symlink_to(version.name, target_is_directory=True)
+        from stage_private import stage_private, StageError
+        require(stage_private(inputs, config, inputs / 'staging.json') == 5,
+                'secret_staging_failed')
+        require(all(not path.is_symlink() and path.stat().st_uid == os.geteuid()
+                    and stat.S_IMODE(path.stat().st_mode) == 0o600
+                    for path in config.iterdir()), 'staged_file_permissions_failed')
+        try:
+            stage_private(inputs, config, inputs / 'staging.json')
+        except StageError:
+            pass
+        else:
+            raise RuntimeError('staging_overwrote_existing_config')
+        from phone_voice_control import load_control_config, VoiceControl
+        loaded = load_control_config(config / 'control.json', root)
+        supervisor = VoiceControl(loaded, authorize=lambda *_: True, monitor=False)
+        try:
+            require(supervisor.status('201', context={})['state'] == 'idle', 'control_status_failed')
+        finally:
+            supervisor.close()
+        # Exercise the actual gateway adapter without opening its listeners or
+        # starting its PBX synchronization/background loop. The state DB here is
+        # synthetic scratch, independent of the persistent-state sentinel.
+        from phone_gateway import Gateway
+        adapter = Gateway(gateway, root / 'synthetic-gateway-state')
+        try:
+            adapter.attach_voice(config / 'control.json', root)
+            response = adapter.voice_request('201', 'status', {}, {
+                'source': '192.168.50.11', 'authorization': ('Bearer ' + 'a' * 48,)})
+            require(response['voice']['state'] == 'idle', 'gateway_voice_status_failed')
+        finally:
+            adapter.close_voice()
+            adapter.db.close()
+        require(list(state.iterdir()) == [state_sentinel]
+                and state_sentinel.read_text() == 'synthetic state must remain unchanged\n',
+                'persistent_state_changed')
         # Construction exercises the real private-path/token loader. It does
         # not activate a stream or connect to HA; the audit hook enforces that.
         from voice_assistant.config import build_service
@@ -115,8 +176,8 @@ def check_cli():
         subprocess.run(command + ['--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                        timeout=10, check=True)
         result = subprocess.run(
-            command + ['--transport-config', str(local / 'transport.json'),
-                       '--voice-config', str(local / 'voice.json'), '--workspace', str(root)],
+            command + ['--transport-config', str(config / 'transport.json'),
+                       '--voice-config', str(config / 'voice.json'), '--workspace', str(root)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, check=True)
         require(json.loads(result.stdout) ==
                 {'valid': True, 'network_actions': 0, 'microphone_started': False},
@@ -130,6 +191,8 @@ def main():
     check_cli()
     print(json.dumps({'image_smoke': 'passed', 'dependencies': locked,
                       'synthetic_ffmpeg_decode': True, 'cli_dry_run': True,
+                      'atomicwriter_staging': True, 'control_validation': True,
+                      'gateway_voice_attachment': True,
                       'network_actions': 0, 'microphone_started': False}, sort_keys=True))
 
 

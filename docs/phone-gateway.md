@@ -215,6 +215,41 @@ be active per phone. Registered/idle and DND checks apply before it starts, so
 busy, offline and missed occurrences remain visible instead of interrupting
 another call. This is not a guarantee of ringing through a network failure.
 
+## Optional bounded voice controls
+
+Start the gateway with both `--voice-control-config PATH` and
+`--voice-workspace DIR` to load an explicitly configured voice registry.
+Omitting them preserves the ordinary gateway without a voice owner. An invalid
+registry is a startup error. The runtime needs the complete voice source layout
+and dependencies described in the [voice control guide](voice-control.md).
+
+These authenticated endpoints resolve either configured line directly to its
+physical phone and do not require a fresh AMI snapshot:
+
+- `GET /v1/phones/LINE/voice_status`
+- `POST /v1/phones/LINE/voice_start`
+- `POST /v1/phones/LINE/voice_stop`
+
+Start accepts `idempotency_key`, `attended`, `exclusive_media`,
+`enable_microphone` and optional `dry_run`. The three confirmations must all
+be literal `true`; no default request enables microphone capture. The private
+profile selects a manual session of at most 30 seconds with rearm disabled.
+Stop accepts `idempotency_key` and the exact `session_id` returned by Start or
+status. Unknown request fields are refused.
+
+Mutations return the existing `status: "accepted"` and matching `action_id`,
+plus a sanitized `voice` object. Status returns `status: "ok"` with that object.
+Acceptance is not evidence that capture began or the microphone closed.
+Clients must inspect `stop_confirmed` and preserve `recovery_required`
+uncertainty. Never create a fresh Start automatically after an ambiguous reply.
+
+Existing exact-source and Bearer checks apply to API requests. Phone menu
+requests use the existing source-checked, per-phone application path and a
+one-use microphone confirmation. Closing the gateway requests owned-session
+cleanup; give the runtime more than 47 seconds to finish. Persist the private
+voice state through replacement and never delete a lock or journal to bypass
+an unresolved session.
+
 ## Behavioral limits
 
 The controller distinguishes Asterisk **Ringing** (the phone is being called)

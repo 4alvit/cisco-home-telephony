@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "enabled": false,
+  "state_directory": ".local/voice-control",
+  "python_executable": "/usr/bin/python3",
+  "ffmpeg_executable": "/usr/bin/ffmpeg",
+  "profiles": [
+    {
+      "transport_config": ".local/voice/transport.json",
+      "voice_config": ".local/voice/assistant.json",
+      "display_port": null
+    }
+  ]
+}

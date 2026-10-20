@@ -38,6 +38,7 @@ files = (
     'scripts/voice_session.py',
     'containers/asterisk/phone_voice_transport.py',
     'containers/asterisk/phone_voice_controller.py',
+    'containers/asterisk/phone_voice_control.py',
     'containers/asterisk/phone_voice_display.py',
     'containers/asterisk/phone_gateway.py',
     'containers/asterisk/phone_apps.py',
@@ -46,7 +47,7 @@ files = (
     'voice_assistant/audio.py', 'voice_assistant/service.py',
     'voice_assistant/ha.py', 'voice_assistant/playback.py',
     'containers/voice/Dockerfile', 'containers/voice/requirements.lock',
-    'containers/voice/smoke.py',
+    'containers/voice/smoke.py', 'containers/voice/stage_private.py',
 )
 for relative in files:
     source = root / relative

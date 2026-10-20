@@ -291,13 +291,30 @@ uninstalled HACS local-STT listing, but no successful local transcription or
 healthy dedicated `localSTT` deployment. Private evidence paths remain outside
 this public guide.
 
+The later dedicated local service restored Russian transcription with a pinned
+multilingual base model using CPU/int8. A separate Assist pipeline then combined
+that verified local STT endpoint with the compact conversation agent and local
+Baya speech, preserving all previous pipelines and the preferred selection.
+Three synthetic full-cycle trials took 17.07 seconds for clean audio, 16.41 for
+a PCMU round trip and 11.85 for a PCMA round trip. These measurements include
+streamed input and delivery of the actual decoded reply PCM to a silent sink at
+its sample rate; they exclude physical phone transport and acoustic latency.
+
+Only the clean trial passed the transcript and reply checks. Both telephone
+codec variants introduced a recognition error that the conversation agent
+repeated in its reply. Raising the recognizer beam size from one to three or
+five did not fix either fixture. Thus the base model passes this small latency
+sample but **does not pass the telephone recognition gate**. A stronger local
+model requires separate quality and latency qualification before replacing the
+working base service. No general latency or acoustic acceptance claim follows
+from these three trials.
+
 The payload below is an unapplied example for isolating local STT/TTS with HA's
 built-in conversation engine. It creates a separate pipeline only after each
 provider is verified. It is a **WebSocket payload**, not `configuration.yaml`,
-and is not the compact conversation candidate already measured above. Once
-local STT is ready, clone the compact candidate into another pipeline with the
-verified STT entity and benchmark clean and G.711 synthetic speech before
-selecting it for phone use:
+and is not either candidate already measured above. For a new installation,
+verify the STT entity and benchmark clean and G.711 synthetic speech before
+selecting the resulting pipeline for phone use:
 
 ```json
 {
@@ -318,7 +335,7 @@ selecting it for phone use:
 }
 ```
 
-The parent should first resolve the saved Whisper `setup_retry` cause and
+For a service still reporting `setup_retry`, first resolve its cause and
 verify the real local endpoint. If a separate STT deployment is needed, qualify
 an isolated, pinned Wyoming faster-whisper service with a pre-provisioned
 multilingual model. Russian `small`, CPU/int8 is a benchmark candidate, not a

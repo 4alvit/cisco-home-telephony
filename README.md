@@ -37,6 +37,9 @@ conversion to MPP is not required.
   lists published test menus, account restrictions and the difference between a SIP identity and an incoming telephone number.
 - **Try the stock-phone voice pilot:** [implementation and measured acceptance](docs/voice-rollout.md),
   [CLI installation](docs/voice-cli-install.md), and [one-shot k3s execution](docs/voice-k3s.md).
+- **Control bounded voice sessions:** [gateway, CLI and phone menu setup](docs/voice-control.md).
+  These optional controls require the matching voice runtime and private registry;
+  updating a client alone does not enable capture.
 - **Evaluate a voice assistant or video:** the [7945G software feasibility study](docs/native-app-feasibility.md)
   compares stock XML/RTP, signed Java applications and firmware work, with
   effort estimates and explicit limits on native video.

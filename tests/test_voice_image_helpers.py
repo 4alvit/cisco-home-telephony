@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -16,7 +17,9 @@ IMAGE_FILES = (
     "containers/voice/Dockerfile",
     "containers/voice/requirements.lock",
     "containers/voice/smoke.py",
+    "containers/voice/stage_private.py",
 )
+CONTROL_SOURCE = "containers/asterisk/phone_voice_control.py"
 BASE_DIGEST = "sha256:" + "a" * 64
 IMAGE_ID = "sha256:" + "b" * 64
 
@@ -84,7 +87,7 @@ class VoiceImageHelperTests(unittest.TestCase):
         for path in (self.repo, self.bin, self.records, self.tmp):
             path.mkdir()
         self.sources = renderer_sources()
-        for relative in self.sources:
+        for relative in (*self.sources, CONTROL_SOURCE):
             self.write(relative, "# Synthetic source: " + relative + "\n")
         for relative in (*IMAGE_FILES, "scripts/build-voice-image.sh", "scripts/smoke-voice-image.sh"):
             target = self.repo / relative
@@ -137,12 +140,24 @@ class VoiceImageHelperTests(unittest.TestCase):
         self.assertFalse(any(args[0] in {"build", "run"} for args in self.calls()), self.calls())
         self.assertEqual(list(self.tmp.iterdir()), [])
 
-    def test_build_snapshots_only_renderer_sources_and_three_image_files(self):
+    def test_build_snapshots_only_runner_control_and_image_files(self):
         result = self.build()
         self.assertEqual(result.returncode, 0, result.stderr)
         snapshot = json.loads((self.records / "context.json").read_text())
-        expected = set(self.sources) | set(IMAGE_FILES)
+        self.assertNotIn(CONTROL_SOURCE, self.sources,
+                         "One-shot Job snapshots must not include the gateway control adapter")
+        expected = set(self.sources) | {CONTROL_SOURCE} | set(IMAGE_FILES)
         self.assertEqual(set(snapshot["files"]), expected)
+        dockerfile = (self.repo / "containers/voice/Dockerfile").read_text().replace("\\\n", " ")
+        copied = {}
+        for line in dockerfile.splitlines():
+            fields = shlex.split(line, comments=True)
+            if fields and fields[0] == "COPY":
+                for source in fields[1:-1]:
+                    copied[source] = fields[-1]
+        self.assertEqual(set(copied), expected - {"containers/voice/Dockerfile"})
+        self.assertEqual(copied[CONTROL_SOURCE], "/workspace/containers/asterisk/")
+        self.assertEqual(copied["containers/voice/stage_private.py"], "/opt/voice/stage_private.py")
         for relative, info in snapshot["files"].items():
             self.assertEqual(info["sha256"], hashlib.sha256((self.repo / relative).read_bytes()).hexdigest())
             self.assertEqual(info["mode"], 0o644)

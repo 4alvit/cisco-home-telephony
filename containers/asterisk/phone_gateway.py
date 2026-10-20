@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import signal
 import socket
 import sqlite3
 import sys
@@ -300,12 +301,122 @@ class Gateway:
             self.db.execute('INSERT OR IGNORE INTO preferences VALUES (?, 0, 0)', (phone,))
         self.db.commit()
 
+        self.voice = None
+        self._voice_profiles = ()
         self.apps = None
         if config.get('applications', {}).get('enabled'):
             backend_config = config['applications'].get('home_assistant')
             backend = (app_module('phone_apps_ha').HomeAssistantApps(backend_config)
                        if backend_config else None)
             self.apps = app_module('phone_apps').PhoneApps(self, backend)
+
+    def attach_voice(self, path, workspace):
+        require(self.voice is None, 'voice_control_already_attached', 409)
+        module = app_module('phone_voice_control')
+        try:
+            config = module.load_control_config(path, workspace)
+        except module.ControlError as error:
+            raise Refused(error.reason, error.status) from None
+        # Refuse a registry copied from a different physical-phone inventory.
+        for profile in config.profiles:
+            phone = self.phones.get(profile.phone_id)
+            require(phone is not None and tuple(phone['lines']) == profile.lines
+                    and phone['device'] == profile.device
+                    and phone['ipv4'] == profile.ipv4,
+                    'voice_inventory_mismatch', 400)
+        api_authorize = module.TokenSourceAuthorizer(
+            self.config['api_token'], self.config['api_clients'])
+        self._voice_phone_proof = object()
+        self._voice_profiles = config.profiles
+        self._voice_module = module
+
+        def authorize(context, action, canonical_phone_id):
+            if action not in ('start', 'status', 'stop'):
+                return False
+            if canonical_phone_id not in self.phones:
+                return False
+            if (isinstance(context, dict)
+                    and context.get('_phone_proof') is self._voice_phone_proof):
+                return context.get('phone') == canonical_phone_id
+            return api_authorize(context, action, canonical_phone_id)
+
+        self.voice = module.VoiceControl(config, authorize=authorize)
+
+    def _phone_voice_context(self, phone_id):
+        # Call only from the already source-checked per-phone listener or shutdown.
+        require(self.voice is not None, 'voice_control_unavailable', 503)
+        require(phone_id in self.phones, 'unknown_phone', 404)
+        return {'_phone_proof': self._voice_phone_proof, 'phone': phone_id}
+
+    def voice_request(self, target, operation, body, context):
+        require(self.voice is not None, 'voice_control_unavailable', 503)
+        require(operation in ('status', 'start', 'stop'), 'unknown_action', 404)
+        require(isinstance(body, dict), 'json_object_required', 400)
+        allowed = {
+            'status': set(),
+            'start': {'idempotency_key', 'attended', 'exclusive_media',
+                      'enable_microphone', 'dry_run'},
+            'stop': {'idempotency_key', 'session_id'},
+        }[operation]
+        require(set(body) <= allowed, 'invalid_voice_request', 400)
+        key = body.get('idempotency_key')
+        if operation != 'status':
+            require(isinstance(key, str)
+                    and re.fullmatch(r'[A-Za-z0-9_.:-]{8,128}', key),
+                    'idempotency_key_required', 400)
+        try:
+            if operation == 'status':
+                value = self.voice.status(target, context=context)
+                return {'status': 'ok', 'voice': value}
+            if operation == 'start':
+                for flag in ('attended', 'exclusive_media', 'enable_microphone', 'dry_run'):
+                    require(flag not in body or type(body[flag]) is bool,
+                            'invalid_voice_request', 400)
+                value = self.voice.start(
+                    target, key, context=context,
+                    attended=body.get('attended', False),
+                    exclusive_media=body.get('exclusive_media', False),
+                    enable_microphone=body.get('enable_microphone', False),
+                    dry_run=body.get('dry_run', False))
+            else:
+                session_id = body.get('session_id')
+                require(isinstance(session_id, str)
+                        and re.fullmatch(r'[0-9a-f]{32}', session_id),
+                        'unknown_voice_session', 400)
+                value = self.voice.stop(target, session_id, context=context)
+            # Stop's exact session ID supplies idempotence. Its key is correlation;
+            # Start's key is also the manager's replay/duplicate-start identity.
+            return {'status': 'accepted', 'action_id': key, 'voice': value}
+        except self._voice_module.ControlError as error:
+            raise Refused(error.reason, error.status) from None
+
+    def close_voice(self, *, uncertain=False):
+        if self.voice is None:
+            return
+        try:
+            self.voice.close()  # Nonblocking request, not proof of cleanup.
+        except Exception:
+            uncertain = True
+        deadline = time.monotonic() + self._voice_module.STOP_GRACE_SECONDS + 2
+        while time.monotonic() < deadline:
+            try:
+                self.voice.tick()
+                states = [self.voice.status(
+                    profile.phone_id,
+                    context=self._phone_voice_context(profile.phone_id))
+                    for profile in self._voice_profiles]
+            except Exception:
+                uncertain = True
+                states = []
+            # Recovery can mean the runner died while its watchdog still owns
+            # a delayed Stop sweep. Keep authentication available for the full
+            # bounded grace even though that state is no longer active.
+            if not uncertain and all(not state['active'] and state['state'] not in
+                   ('recovery_required', 'external_owner') for state in states):
+                return
+            time.sleep(0.05)
+        # Never unlink a lease, journal or snapshot to force a clean shutdown.
+        # The existing durable recovery state and surviving watchdog remain.
 
     def preference(self, phone_id):
         row = self.db.execute('SELECT dnd,autoanswer FROM preferences WHERE phone=?', (phone_id,)).fetchone()
@@ -410,7 +521,8 @@ class Gateway:
                  'channels': [{'name': item['Channel'], 'uniqueid': item.get('Uniqueid'),
                                'state': item.get('ChannelStateDesc'), 'line': item['Channel'].split('/')[1].split('-')[0]}
                               for item in own_channels(phone, channels)],
-                 'capabilities': ['dial', 'intercom', 'answer', 'hangup', 'speaker_toggle', 'message', 'image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop']}
+                 'capabilities': ['dial', 'intercom', 'answer', 'hangup', 'speaker_toggle', 'message', 'image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop'] + (['voice'] if any(
+                     profile.phone_id == phone['id'] for profile in self._voice_profiles) else [])}
                 for phone in self.phones.values()]}
 
     @staticmethod
@@ -748,6 +860,15 @@ class Gateway:
                 pass
 
 
+def voice_object(pairs):
+    """Reject duplicate JSON fields before dispatching any voice operation."""
+    value = {}
+    for key, item in pairs:
+        require(key not in value, 'invalid_voice_request', 400)
+        value[key] = item
+    return value
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = 'CiscoHomeGateway'
     sys_version = ''
@@ -821,6 +942,24 @@ class Handler(BaseHTTPRequestHandler):
         require(source in gateway.config['api_clients'], 'forbidden', 403)
         require(len(self.headers.get_all('Authorization', [])) == 1
                 and constant(self.headers.get('Authorization', ''), 'Bearer ' + gateway.config['api_token']), 'forbidden', 403)
+        voice_match = re.fullmatch(
+            r'/v1/phones/(2[0-9]{2})/voice_(status|start|stop)', self.path)
+        if voice_match:
+            target, operation = voice_match.groups()
+            if operation == 'status':
+                require(self.command == 'GET' and not self.body(0), 'bad_voice_method', 400)
+                data = {}
+            else:
+                require(self.command == 'POST', 'bad_voice_method', 400)
+                require(self.headers.get('Content-Type', '').split(';')[0] == 'application/json',
+                        'json_required', 400)
+                try:
+                    data = json.loads(self.body(8192), object_pairs_hook=voice_object)
+                except (ValueError, UnicodeError):
+                    raise Refused('invalid_json', 400) from None
+            context = {'source': source,
+                       'authorization': tuple(self.headers.get_all('Authorization', []))}
+            return self.reply(200, gateway.voice_request(target, operation, data, context))
         if self.command == 'GET':
             require(self.path == '/v1/phones' and not self.body(0), 'not_found', 404)
             return self.reply(200, gateway.listing())
@@ -848,29 +987,58 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True)
     parser.add_argument('--state-directory', required=True)
+    parser.add_argument('--voice-control-config')
+    parser.add_argument('--voice-workspace')
     args = parser.parse_args()
+    require(bool(args.voice_control_config) == bool(args.voice_workspace),
+            'voice_config_and_workspace_required', 400)
     os.umask(0o077)
     config_path = Path(args.config)
     # Kubernetes projects Secrets using symlinks. The read-only Secret volume,
     # restricted pod identity and fixed operator-supplied path are the boundary.
     require(config_path.is_file() and config_path.stat().st_size <= 128 * 1024, 'invalid_config_file', 400)
     gateway = Gateway(json.loads(config_path.read_text()), args.state_directory)
-    servers = []
-    for phone in [None, *gateway.phones.values()]:
-        server = ThreadingHTTPServer((gateway.config['bind_ipv4'], phone['port'] if phone else gateway.config['api_port']), Handler)
-        server.daemon_threads = True
-        server.gateway, server.phone = gateway, phone
-        servers.append(server)
-    threading.Thread(target=gateway.background, daemon=True).start()
-    for server in servers:
-        threading.Thread(target=server.serve_forever, daemon=True).start()
+    servers, started, previous_signals = [], [], {}
+    shutdown = threading.Event()
+
+    def request_shutdown(_number, _frame):
+        shutdown.set()
+
     try:
-        while True:
-            time.sleep(60)
-    except KeyboardInterrupt:
-        gateway.stopped.set()
+        if args.voice_control_config:
+            gateway.attach_voice(args.voice_control_config, args.voice_workspace)
+        for number in (signal.SIGINT, signal.SIGTERM):
+            previous_signals[number] = signal.signal(number, request_shutdown)
+        for phone in [None, *gateway.phones.values()]:
+            server = ThreadingHTTPServer((gateway.config['bind_ipv4'],
+                phone['port'] if phone else gateway.config['api_port']), Handler)
+            server.daemon_threads = True
+            server.gateway, server.phone = gateway, phone
+            servers.append(server)
+        threading.Thread(target=gateway.background, daemon=True).start()
         for server in servers:
-            server.shutdown()
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            started.append(server)
+        shutdown.wait()
+    finally:
+        # Reject new voice starts, but retain phone authentication callbacks
+        # until the runner and watchdog have attempted their Stop commands.
+        uncertain = False
+        if gateway.voice is not None:
+            try:
+                gateway.voice.close()
+            except Exception:
+                uncertain = True
+        gateway.stopped.set()
+        try:
+            gateway.close_voice(uncertain=uncertain)
+        finally:
+            for server in started:
+                server.shutdown()
+            for server in servers:
+                server.server_close()
+            for number, previous in previous_signals.items():
+                signal.signal(number, previous)
 
 
 if __name__ == '__main__':

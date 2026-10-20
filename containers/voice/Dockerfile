@@ -17,7 +17,9 @@ RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
     && groupadd --gid 10001 cisco-voice \
     && useradd --uid 10001 --gid 10001 --no-create-home \
        --home-dir /nonexistent --shell /usr/sbin/nologin cisco-voice \
-    && mkdir -p /run/voice/.local /workspace
+    && mkdir -p /run/voice/.local/config /run/voice/.local/state /workspace \
+    && chown -R 10001:10001 /run/voice \
+    && chmod 0700 /run/voice /run/voice/.local /run/voice/.local/config /run/voice/.local/state
 
 COPY containers/voice/requirements.lock /opt/voice/requirements.lock
 RUN python3 -m pip --isolated install --no-cache-dir --disable-pip-version-check \
@@ -25,9 +27,10 @@ RUN python3 -m pip --isolated install --no-cache-dir --disable-pip-version-check
     && python3 -m pip check
 
 COPY scripts/voice_session.py /workspace/scripts/
-COPY containers/asterisk/phone_voice_transport.py containers/asterisk/phone_voice_controller.py containers/asterisk/phone_voice_display.py containers/asterisk/phone_gateway.py containers/asterisk/phone_apps.py containers/asterisk/phone_apps_ha.py /workspace/containers/asterisk/
+COPY containers/asterisk/phone_voice_transport.py containers/asterisk/phone_voice_controller.py containers/asterisk/phone_voice_control.py containers/asterisk/phone_voice_display.py containers/asterisk/phone_gateway.py containers/asterisk/phone_apps.py containers/asterisk/phone_apps_ha.py /workspace/containers/asterisk/
 COPY voice_assistant/__init__.py voice_assistant/config.py voice_assistant/audio.py voice_assistant/service.py voice_assistant/ha.py voice_assistant/playback.py /workspace/voice_assistant/
 COPY containers/voice/smoke.py /opt/voice/smoke.py
+COPY containers/voice/stage_private.py /opt/voice/stage_private.py
 
 ENV PYTHONPATH=/workspace:/workspace/containers/asterisk \
     PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 TMPDIR=/tmp

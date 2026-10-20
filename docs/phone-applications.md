@@ -40,13 +40,27 @@ different phone.
 - **Camera Snapshot** displays one still image from an allowlisted HA camera.
 - **Phone Status** shows registration, DND, auto-answer, active calls and alert
   status without displaying SIP passwords, management credentials or HA tokens.
+- **Voice** appears when bounded voice control is configured for this phone.
+  Opening it only reads session status. Start requires a separate confirmation
+  that the user is present and authorizes microphone capture for the bounded
+  session. Stop targets the exact displayed session ID, including when selected
+  from the sibling line. Refresh is explicit and never repeats Start.
 
-Changes and calls require a separate **Confirm** selection. Merely opening a
-menu or submitting a form does not execute an action. Confirmations expire after
+Changes, calls and Voice Start require a separate **Confirm** selection. Voice
+Stop sends its request immediately for the exact session shown on screen; it
+does not require another confirmation. Merely opening a menu or submitting a form
+does not execute an action. Confirmations expire after
 90 seconds and are consumed once, including when a dependency fails. Reopening
 the menu creates a new confirmation; do not blindly repeat an operation after
 an uncertain outcome. Confirmations are short-lived memory state and do not
 survive a gateway restart.
+
+Voice sessions use the gateway's configured phone mapping, so their status and
+Stop controls do not require fresh AMI call inventory. Sessions last at most
+30 seconds, use manual activation and do not rearm. The displayed process state
+is not proof that the microphone is closed: inspect Stop confirmation and
+resolve `recovery_required` at the physical phone. See the
+[voice control guide](voice-control.md) for runtime setup and recovery.
 
 ### Timers and recurring alarms
 

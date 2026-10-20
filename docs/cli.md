@@ -18,7 +18,7 @@ The two dialing commands above originate from 212 and 213 respectively. They wor
 
 ![A selected line is resolved to its physical phone before an action](diagrams/cli-routing.svg)
 
-The CLI uses the existing [phone gateway](phone-gateway.md). Gateway actions resolve the selected extension against fresh `GET /v1/phones` data. For example, 213 belongs to the phone whose primary ID is 212; requests go to that phone's API route while explicitly retaining `line: "213"`. Schedule actions let the HA service resolve the exact line from its validated gateway inventory. Neither path guesses the primary line from odd/even numbering. The Mac softphone, 209, can be a configured call destination but is not a Cisco gateway control target.
+The CLI uses the existing [phone gateway](phone-gateway.md). Ordinary gateway actions resolve the selected extension against fresh `GET /v1/phones` data. For example, 213 belongs to the phone whose primary ID is 212; requests go to that phone's API route while explicitly retaining `line: "213"`. Schedule actions let the HA service resolve the exact line from its validated gateway inventory. Voice controls use the gateway's configured mapping directly so status and Stop remain available during an AMI outage. None of these paths guesses the primary line from odd/even numbering. The Mac softphone, 209, can be a configured call destination but is not a Cisco gateway control target.
 
 ## Room directory
 
@@ -158,6 +158,36 @@ For idle speaker/dial-tone use, explicitly run `cisco 213 speaker toggle`. The g
 `cisco 213 autoanswer on` opts the whole hosting phone into gateway auto-answer; `autoanswer off` disables it, and `autoanswer` alone reads status. Incoming calls must pass the gateway's fresh isolated-call checks. Timer and alarm alerts remain manual regardless of this preference. Neither auto-answer nor pickup guarantees that a particular audio output device or volume is selected on the physical handset.
 
 `alert timer` and `alert alarm` start an alert immediately; they do not schedule it. Alerts ring until manual answer/reject or Stop, with no audio after answering. For countdowns and recurring weekday schedules, use the [Home Assistant integration](https://github.com/ha-homelab/asterisk-telephony) and [radio/alarms guide](radio-and-alarms.md). `ring 640` keeps the legacy 20-second ringing timeout and finite destination behavior.
+
+## Bounded voice sessions
+
+An explicitly enabled voice gateway accepts `cisco LINE voice status`,
+`voice start` and `voice stop`. Both lines of one physical phone share a single
+session owner. These commands use the existing private client configuration
+and direct or Kubernetes transport; they do not fetch call inventory first.
+
+```bash
+cisco 213 voice status
+cisco 213 voice start --idempotency-key voice-example-001 \
+  --attended --exclusive-media --enable-microphone --dry-run
+cisco 213 voice stop --session-id 0123456789abcdef0123456789abcdef
+```
+
+The IDs above are examples. Start requires a stable caller-chosen request key
+and explicit confirmation that an attendant is present, the phone media path
+is reserved, and microphone use is authorized. Remove `--dry-run` only for the
+intended attended attempt. Each session is bounded to at most 30 seconds and
+never rearms automatically. Stop requires the exact ID returned by Start or
+status; repeating an old Stop cannot stop a replacement session.
+
+Start dry-run validates through the gateway without launching the runner.
+Stop dry-run only reads status and checks the ID. `--json` returns sanitized
+metadata. An accepted request is not proof of capture or physical closure:
+check `stop_confirmed`, and treat `recovery_required` as unresolved ownership.
+Do not automatically retry an uncertain Start. See the
+[voice control guide](voice-control.md) for setup, bounded replay history and
+recovery details. The gateway and voice runtime must be deployed together;
+updating this CLI does not enable voice on its own.
 
 ## Countdown timers and recurring alarms
 

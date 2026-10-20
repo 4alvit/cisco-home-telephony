@@ -1,10 +1,12 @@
 """Native Cisco XML services for a source-restricted, per-phone HTTP listener.
 
 This module never accepts a phone identity, URL, entity ID or service name from
-the handset. The listener supplies the physical phone identity. GET forms only
-prepare actions; a short-lived, single-use confirmation authorizes execution.
+the handset. The listener supplies the physical phone identity. Start and edit
+actions require a short-lived, single-use confirmation; voice Stop targets the
+exact session shown on an explicitly selected Stop link.
 """
 import copy
+import math
 import re
 import secrets
 import threading
@@ -109,6 +111,9 @@ class PhoneApps:
             'ha_timer_replace_required': 'A timer already exists. Cancel it before starting a new one.',
             'ha_request_outcome_unknown': 'Home Assistant did not confirm the result. Check current status before trying again.',
             'ha_change_not_confirmed': 'Home Assistant did not confirm the change. Check current status before trying again.',
+            'voice_control_unavailable': 'Voice control is not configured for this phone.',
+            'voice_response_invalid': 'Voice status is unconfirmed. Check status before any new attempt.',
+            'voice_request_failed': 'The voice request was not confirmed. Check status; do not start again blindly.',
             'not_configured': 'No alarm has been configured. Set its time and days first.',
         }
         root = ET.Element('CiscoIPPhoneText')
@@ -168,6 +173,77 @@ class PhoneApps:
                 value.get('lines') == self.gateway.phones[phone_id]['lines'], 'schedule_identity_changed', 503)
         return value
 
+    def voice_enabled(self, phone_id):
+        return (getattr(self.gateway, 'voice', None) is not None
+                and any(profile.phone_id == phone_id
+                        for profile in getattr(self.gateway, '_voice_profiles', ())))
+
+    def voice(self, phone_id, line, operation='status', **body):
+        require(self.voice_enabled(phone_id),
+                'voice_control_unavailable', 503)
+        try:
+            # Only the source-checked handset handler can reach this adapter.
+            context = self.gateway._phone_voice_context(phone_id)
+            result = self.gateway.voice_request(line, operation, body, context)
+        except Exception:
+            raise AppError('voice_request_failed', 503) from None
+        valid = isinstance(result, dict)
+        if operation == 'status':
+            valid = valid and result.get('status') == 'ok'
+        else:
+            valid = (valid and result.get('status') == 'accepted'
+                     and result.get('action_id') == body.get('idempotency_key'))
+        require(valid, 'voice_response_invalid', 503)
+        value = result.get('voice')
+        fields = {'schema_version', 'phone', 'line', 'session_id', 'state', 'active',
+                  'remaining_seconds', 'stop_requested', 'stop_confirmed', 'error'}
+        states = {'idle', 'starting', 'running', 'stopping', 'stopped', 'cancelled',
+                  'failed', 'recovery_required', 'external_owner'}
+        errors = {'voice_state_unavailable', 'voice_owner_unavailable', 'voice_start_failed',
+                  'voice_start_uncertain', 'voice_signal_failed', 'voice_session_failed',
+                  'voice_stop_unconfirmed'}
+        require(isinstance(value, dict) and set(value) == fields,
+                'voice_response_invalid', 503)
+        state, session, remaining = value['state'], value['session_id'], value['remaining_seconds']
+        require(type(value['schema_version']) is int and value['schema_version'] == 1
+                and value['phone'] == phone_id
+                and value['line'] in self.gateway.phones[phone_id]['lines']
+                and isinstance(state, str) and state in states
+                and all(type(value[key]) is bool for key in ('active', 'stop_requested', 'stop_confirmed'))
+                and value['active'] == (state in ('starting', 'running', 'stopping'))
+                and ((session is None and state == 'idle') or
+                     (isinstance(session, str) and re.fullmatch(r'[0-9a-f]{32}', session) and state != 'idle'))
+                and type(remaining) in (int, float) and 0 <= remaining <= 30 and math.isfinite(remaining)
+                and (value['error'] is None or isinstance(value['error'], str) and value['error'] in errors),
+                'voice_response_invalid', 503)
+        if operation == 'start':
+            require(state != 'idle', 'voice_response_invalid', 503)
+        if operation == 'stop':
+            require(session == body.get('session_id'), 'voice_response_invalid', 503)
+        return {key: value[key] for key in fields}
+
+    def voice_page(self, phone_id, line, value):
+        root = ET.Element('CiscoIPPhoneText')
+        child(root, 'Title', 'Voice Assistant')
+        child(root, 'Prompt', 'Manual session; microphone up to 30s')
+        text = ('State: ' + value['state'].replace('_', ' ') + '\nSession line: ' + value['line']
+                + '\nRemaining: ' + str(value['remaining_seconds']) + ' seconds'
+                + '\nStop requested: ' + ('Yes' if value['stop_requested'] else 'No')
+                + '\nStop confirmed: ' + ('Yes' if value['stop_confirmed'] else 'No'))
+        if value['session_id']:
+            text += '\nSession: ' + value['session_id']
+        if value['error'] or value['state'] in ('recovery_required', 'external_owner'):
+            text += '\nCleanup may be unconfirmed. Check the phone; do not restart blindly.'
+        child(root, 'Text', text)
+        self.softkey(root, 'Refresh', self.url(phone_id, '/voice', line=line), 1)
+        if value['state'] in ('idle', 'stopped', 'cancelled', 'failed'):
+            self.softkey(root, 'Start', self.url(phone_id, '/voice-start', line=line), 2)
+        elif value['session_id'] and not value['stop_confirmed']:
+            self.softkey(root, 'Stop', self.url(phone_id, '/voice-stop', line=line,
+                                              session=value['session_id']), 2)
+        self.navigation(root, phone_id, line)
+        return xml(root)
+
     def current_phone(self, phone_id):
         matches = [phone for phone in self.gateway.listing()['phones'] if phone['id'] == phone_id]
         require(len(matches) == 1, 'phone_unavailable', 503)
@@ -206,8 +282,9 @@ class PhoneApps:
         require(phone_id in self.gateway.phones, 'invalid_line', 404)
         require(isinstance(query, str) and len(query) <= 2048, 'invalid_query')
         try:
-            pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True,
-                              encoding='utf-8', errors='strict', max_num_fields=8)
+            pairs = [] if query == '' else parse_qsl(
+                query, keep_blank_values=True, strict_parsing=True,
+                encoding='utf-8', errors='strict', max_num_fields=8)
         except (ValueError, UnicodeError):
             raise AppError('invalid_query') from None
         params = dict(pairs)
@@ -222,6 +299,7 @@ class PhoneApps:
             '/home': {'line', 'page'}, '/entity': {'line', 'id'},
             '/entity-set': {'line', 'id', 'enabled'}, '/cameras': {'line', 'page'},
             '/camera': {'line', 'id'},
+            '/voice': {'line'}, '/voice-start': {'line'}, '/voice-stop': {'line', 'session'},
         }
         require(path in route_fields, 'not_found', 404)
         require(set(params) <= route_fields[path], 'invalid_query')
@@ -232,7 +310,7 @@ class PhoneApps:
         page = int(page_string)
         url = lambda route='/', **values: self.url(phone_id, route, line=line, **values)
         if path == '/':
-            return self.menu(phone_id, line, 'Home Phone Apps', [
+            entries = [
                 ('Phone Directory', url('/directory')),
                 ('Internet Radio', url('/radio')),
                 ('Timers & Alarms', url('/schedules')),
@@ -240,7 +318,23 @@ class PhoneApps:
                 ('Home Assistant', url('/home')),
                 ('Camera Snapshot', url('/cameras')),
                 ('Phone Status', url('/status')),
-                ('Select line: ' + line, url('/lines'))], 'Choose an app; line ' + line)
+                ('Select line: ' + line, url('/lines'))]
+            if self.voice_enabled(phone_id):
+                entries.insert(0, ('Voice Assistant', url('/voice')))
+            return self.menu(phone_id, line, 'Home Phone Apps', entries, 'Choose an app; line ' + line)
+        if path == '/voice':
+            return self.voice_page(phone_id, line, self.voice(phone_id, line))
+        if path == '/voice-start':
+            require(self.voice_enabled(phone_id),
+                    'voice_control_unavailable', 503)
+            return self.issue(phone_id, line, 'voice', 'start', {},
+                              'Microphone <=30s; I am here; audio reserved')
+        if path == '/voice-stop':
+            session = params.get('session', '')
+            require(re.fullmatch(r'[0-9a-f]{32}', session), 'invalid_query')
+            value = self.voice(phone_id, line, 'stop', session_id=session,
+                               idempotency_key='apps-voice-stop-' + session)
+            return self.voice_page(phone_id, line, value)
         if path == '/lines':
             return self.menu(phone_id, line, 'Select source line', [
                 ('Line ' + item, self.url(phone_id, line=item))
@@ -408,6 +502,11 @@ class PhoneApps:
             token = params.get('token')
             row = self.consume(phone_id, token)
             payload, line = row['payload'], row['line']
+            if row['kind'] == 'voice':
+                require(row['action'] == 'start', 'invalid_operation')
+                value = self.voice(phone_id, line, 'start', idempotency_key='apps-' + token,
+                                   attended=True, exclusive_media=True, enable_microphone=True)
+                return self.voice_page(phone_id, line, value)
             if row['kind'] == 'gateway':
                 result = self.gateway.mutate(phone_id, row['action'],
                         {'line': line, 'idempotency_key': 'apps-' + token, **payload})

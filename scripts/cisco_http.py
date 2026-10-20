@@ -33,6 +33,14 @@ HA_ERRORS = {
     'Schedule storage failed; no operation was sent': 'ha_storage_failed_no_operation_sent',
     'Cisco phone controls are unloading': 'ha_integration_unloading',
 }
+VOICE_REASONS = frozenset('''voice_control_unavailable voice_inventory_mismatch
+invalid_voice_request bad_voice_method unknown_voice_phone unknown_voice_session
+voice_request_id_required explicit_voice_start_required voice_control_closed
+voice_control_disabled voice_request_id_conflict voice_phone_busy
+voice_recovery_required voice_state_unavailable voice_start_failed
+voice_profile_changed voice_rtp_endpoint_collision
+voice_display_port_collision invalid_voice_ffmpeg'''.split())
+SAFE_REASONS = SAFE_REASONS | VOICE_REASONS
 ERROR_REASONS = SAFE_REASONS | frozenset(('invalid_gateway_response', 'gateway_http_error',
     'network_outcome_unknown', 'invalid_gateway_response_or_request', 'invalid_worker_input',
     'ha_service_http_error', 'ha_schedule_service_response_missing')) | frozenset(HA_ERRORS.values())

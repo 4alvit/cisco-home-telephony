@@ -36,6 +36,38 @@ or secrets. The `cisco-home-ci/*` tags are local: retag them for your registry
 before pushing, following the [deployment runbook](k3s-deployment.md). Use the
 resulting registry digests in k3s, not image IDs or mutable tags.
 
+## Voice runtime export
+
+The same manual run also exports the separate, smoke-tested voice runtime as
+`verified-voice-amd64-COMMIT_SHA`. Download it to a different private directory
+so its provenance and checksums cannot overwrite the PBX export:
+
+```sh
+mkdir -p .local/ci-voice
+gh run download RUN_ID --repo 4alvit/cisco-home-telephony \
+  --name verified-voice-amd64-COMMIT_SHA --dir .local/ci-voice
+cd .local/ci-voice
+shasum -a 256 -c SHA256SUMS
+cat source.json
+docker load --input voice-amd64.tar.gz
+docker image inspect cisco-home-ci/voice:pilot
+```
+
+Require the same successful-run checks above. Compare the loaded image's
+configuration ID, operating system and architecture with `image.json`. The
+configuration ID is **not** the registry manifest digest required by
+`render_voice_job.py --voice-image`. Obtain that digest from the destination
+registry, or from the verified image manifest imported into the node's
+container runtime. Keep the source commit, artifact checksum and resulting
+manifest digest together in private deployment records.
+
+The voice archive uses gzip level 9 and has a 250 MiB export limit. The combined
+voice, Asterisk and TFTP exports must still fit below 400 MiB. These are workflow
+guards, not additional GitHub storage allowances. A successful image smoke
+checks dependencies and synthetic media with networking disabled; it does not
+prove that a live phone or Home Assistant pipeline works. Follow the separate
+[voice pilot runbook](voice-k3s.md) for runtime and device acceptance.
+
 For an internal HTTP registry, avoid changing the Docker daemon by extracting
 the `.tar.gz` and using `skopeo copy --dest-tls-verify=false
 docker-archive:/absolute/path/asterisk-amd64.tar

@@ -6,9 +6,10 @@ configuration by default. A live invocation runs one attended, bounded voice
 session on one selected physical phone; it does not install an always-on
 listener, configure Home Assistant, change firmware or enable startup services.
 
-The coordinating operator has established a stock-phone RTP capture and audible
-playback baseline. That is not acceptance of HA conversation, private wake
-detection, duplex acoustics, call coexistence or unattended listening. See
+The coordinating operator has established stock-phone RTP capture, a private
+wake-detection pilot on a Python 3.10 target, and audible reply playback. These
+are bounded observations, not acceptance of one acoustic HA conversation from
+speech through response, duplex acoustics, call coexistence or unattended listening. See
 [the recorded transport scope](voice-transport.md#observed-transport-pilots).
 
 All addresses, phone identities, room names, credentials, wake phrases, model
@@ -46,10 +47,10 @@ The file specifies `async_timeout>=4,<6; python_version < "3.11"`. On Python
 3.10, the installer requires an importable, callable `async_timeout.timeout`
 and an installed distribution with major version 4 or 5. Python 3.11+ uses
 the standard-library timeout and needs no compatibility extra. Installer
-tests exercise the 3.10 branch with a simulated version on the available
-interpreter; this track has not performed a target-host run. Native Python
-3.10 runtime and target-host acceptance remain the coordinating operator's
-responsibility.
+tests exercise the 3.10 branch with a simulated version, and the controller
+suite also runs under native Python 3.10. A separate private target-host pilot
+verified capture, wake detection and playback on Python 3.10. Those observations
+do not establish the complete acoustic HA conversation path or unattended use.
 
 The foreground CLI uses the default WebSocket transport. Its current
 [requirement file](../voice_assistant/requirements-websocket.txt) specifies
@@ -331,6 +332,6 @@ Exit zero requires a completed turn and a confirmed Stop path in the current
 CLI. A deliberate Ctrl+C can return nonzero even after successful cleanup;
 an error or nonzero result is not permission for an automatic retry. Keep run
 output under `.local/` if retaining it and record physical observations
-separately. HA end-to-end behavior, the local pipeline, wake recognition,
+separately. The complete acoustic HA conversation path, sustained wake accuracy,
 Mute/Stop and both-line call coexistence remain acceptance work beyond the
-transport baseline.
+bounded capture, wake and playback pilots.
