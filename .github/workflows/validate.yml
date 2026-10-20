@@ -78,11 +78,12 @@ jobs:
       - name: Isolated smoke with synthetic generated configuration
         run: bash scripts/smoke-containers.sh cisco-home-ci
       - name: Verify isolated L16 media and native call expiry
-        run: >-
-          .venv/bin/python -m tools.l16_lab asterisk
-          --image cisco-home-ci/asterisk:22.11.0
-          --docker-socket /var/run/docker.sock
-          --execute --output .local/l16/ci-1
+        run: |
+          .venv/bin/python -m tools.l16_lab asterisk \
+            --image cisco-home-ci/asterisk:22.11.0 \
+            --docker-socket /var/run/docker.sock \
+            --execute --output .local/l16/ci-1
+          cat .local/l16/ci-1/report.json
       - name: Export verified amd64 images
         if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target != 'voice' && github.ref == 'refs/heads/main'
         run: |
