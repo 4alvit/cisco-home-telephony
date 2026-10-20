@@ -312,6 +312,15 @@ fetched or displayed it. An optional administrator-source HTTP rejection check
 timed out, so no particular HTTP rejection status was verified by that probe.
 These results do not establish physical full-turn or wake-phrase accuracy.
 
+The companion Home Assistant component also passed live upgrade acceptance:
+the integration loaded, existing device identities and preferences were
+preserved, and status-only requests through both aliases returned the same
+idle physical phone with no active session. This check did not start capture.
+Keep component backups outside `custom_components`, including hidden backup
+directories: Home Assistant can discover their duplicate manifests. Verify
+the selected package and version as well as configuration validity before a
+restart, then confirm the integration and service actually loaded afterward.
+
 See the [deployment guide](voice-gateway-deployment.md),
 [wake evaluation guide](wake-qualification.md) and
 [response-stage measurements](local-voice-performance.md) for reproducible

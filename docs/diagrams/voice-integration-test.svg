@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="800" viewBox="0 0 1120 800" role="img" aria-labelledby="title desc">
+  <title id="title">Offline integrated voice fixture</title>
+  <desc id="desc">Real CLI and HTTP gateway connect to real ownership and child-process orchestration. The voice runner, controller, assistant, HA protocol client, and playback run with synthetic device and provider interfaces. Cleanup is checked separately. No acoustic acceptance is claimed.</desc>
+  <defs>
+    <style>
+      text{font-family:Arial,Helvetica,sans-serif;fill:#163044}
+      .title{font-size:28px;font-weight:700}
+      .sub{font-size:16px;fill:#496171}
+      .head{font-size:19px;font-weight:700}
+      .body{font-size:16px}
+      .small{font-size:14px;fill:#496171}
+      .real{fill:#e7f4f0;stroke:#29826f;stroke-width:2}
+      .fake{fill:#fff4dd;stroke:#b98525;stroke-width:2}
+      .frame{fill:#f5f8fb;stroke:#c4d2de;stroke-width:1.5}
+      .arrow{fill:none;stroke:#426b83;stroke-width:2;marker-end:url(#arrow)}
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#426b83"/>
+    </marker>
+  </defs>
+  <rect width="1120" height="800" fill="#ffffff"/>
+  <text x="40" y="49" class="title">One offline voice integration fixture</text>
+  <text x="40" y="79" class="sub">Fresh private workspace · synthetic secrets · bounded execution · loopback HTTP only</text>
+
+  <rect x="40" y="110" width="1040" height="145" rx="12" class="frame"/>
+  <rect x="58" y="128" width="278" height="107" rx="9" class="real"/>
+  <text x="76" y="157" class="head">Cisco CLI</text>
+  <text x="76" y="184" class="body">Real parser and response checks</text>
+  <text x="76" y="210" class="small">Fixture endpoint addressing adapter</text>
+  <path d="M337 181H375" class="arrow"/>
+  <rect x="385" y="128" width="302" height="107" rx="9" class="real"/>
+  <text x="403" y="157" class="head">Authenticated gateway</text>
+  <text x="403" y="184" class="body">Real HTTP routes and bearer checks</text>
+  <text x="403" y="210" class="small">Only the temporary listener receives traffic</text>
+  <path d="M688 181H726" class="arrow"/>
+  <rect x="736" y="128" width="326" height="107" rx="9" class="real"/>
+  <text x="754" y="157" class="head">VoiceControl owner</text>
+  <text x="754" y="184" class="body">Lease · journal · private snapshots</text>
+  <text x="754" y="210" class="small">Primary and sibling lines share one owner</text>
+
+  <path d="M900 255V290" class="arrow"/>
+  <rect x="40" y="300" width="1040" height="211" rx="12" class="frame"/>
+  <text x="60" y="332" class="head">Real child process; fixture bootstrap replaces external interfaces</text>
+  <rect x="60" y="351" width="278" height="136" rx="9" class="real"/>
+  <text x="78" y="383" class="head">Voice session + controller</text>
+  <text x="78" y="413" class="body">Production orchestration</text>
+  <text x="78" y="440" class="body">Input conversion and Stop</text>
+  <text x="78" y="467" class="small">Subprocess handle and signals are real</text>
+  <path d="M339 417H378" class="arrow"/>
+  <rect x="388" y="351" width="300" height="136" rx="9" class="real"/>
+  <text x="406" y="383" class="head">Assistant + HA client</text>
+  <text x="406" y="413" class="body">Real state and protocol handling</text>
+  <text x="406" y="440" class="body">Synthetic response events</text>
+  <text x="406" y="467" class="small">No real STT, LLM, TTS, or HA actions</text>
+  <path d="M689 417H727" class="arrow"/>
+  <rect x="737" y="351" width="323" height="136" rx="9" class="real"/>
+  <text x="755" y="383" class="head">WAV playback + PCM sink</text>
+  <text x="755" y="413" class="body">Real decode and frame delivery</text>
+  <text x="755" y="440" class="body">Generated audio into fake media</text>
+  <text x="755" y="467" class="small">No claim that sound was audible</text>
+
+  <rect x="40" y="537" width="1040" height="92" rx="11" class="fake"/>
+  <text x="60" y="569" class="head">Simulated external boundaries</text>
+  <text x="60" y="596" class="body">Address mapping · phone presence and commands · captured/output media · HA peer · TTS fetch · watchdog</text>
+
+  <rect x="40" y="651" width="1040" height="111" rx="11" class="real"/>
+  <text x="60" y="684" class="head">Pass requires expected outcomes and verified teardown</text>
+  <text x="60" y="712" class="body">Child reaped · listener closed · owner released · snapshots removed · temporary workspace deleted</text>
+  <text x="60" y="742" class="small">Evidence: software integration with explicit fakes. Remaining: acoustic, real-device, deployment, and watchdog acceptance.</text>
+</svg>

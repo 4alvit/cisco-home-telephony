@@ -8,11 +8,12 @@ through final cleanup after actual decoded audio was delivered to a paced,
 silent sink. They do not include a physical phone, microphone, speaker, wake
 detection or acoustic latency.
 
-This investigation reuses those results. It adds offline analysis and a
-prepared measurement plan; it has **not measured a new latency reduction**.
-Live benchmarks remain deferred until the coordinating deployment work opens
-a benchmark window. The existing STT services and assistant pipelines are
-unchanged by this work.
+This investigation reuses those results and adds one bounded A–B–A experiment
+on finite prerecorded input. The VAD-bypass arm measured 0.784 seconds faster
+to first delivered audio and 0.783 seconds faster overall than the faster
+baseline, but missed the predeclared 5% thresholds. **The candidate was rejected.**
+The experiment and its limits are reported below; the existing STT services,
+assistant pipelines and live handset behavior remain unchanged.
 
 ![Seven measured local voice timelines](diagrams/local-voice-performance.svg)
 
@@ -96,12 +97,12 @@ are not a measured network or VAD overhead budget. See the
 
 ## Improvements worth testing
 
-1. **Instrument the existing path first.** A prepared private replay preserves
+1. **Use the instrumented path for comparisons.** The private replay preserves
    the qualified small model, explicit local pipeline, provider checks,
    sample-rate pacing and 30-second turn deadline. It adds timestamps for
    input feed, completed binary sends, end marker, Assist return, fetch,
-   decoder and the first delivered PCM block. A short serial run after the
-   HA change will establish comparable boundaries without replacing services.
+   decoder and the first delivered PCM block. The bounded A–B–A run below
+   used these boundaries without replacing services.
 2. **Investigate earlier audio delivery.** All seven saved runs advertise
    streaming TTS and an early proxy URL, while the current client waits and
    buffers the entire payload. A future implementation could fetch while the
@@ -139,7 +140,7 @@ Optimizing decoder setup, final cleanup or benchmark sleep drift cannot explain
 the multi-second delay. Removing the protocol barrier is also inappropriate:
 the current adapter uses it to catch a late pipeline error after `run-end`.
 
-## Offline tooling and the next benchmark window
+## Offline tooling and bounded execution
 
 `scripts/benchmark_voice_stages.py` uses the Python standard library. Its two
 commands are **offline only**: neither contacts HA nor executes a subprocess.
@@ -178,8 +179,10 @@ limits, not execution enforcement.** A reviewed supervisor must enforce them.
 Hashes bind local inputs; they do not prove a running provider is still local
 or unchanged after deployment work.
 
-The prepared site-specific window uses **three serial trials**, one per saved
-clean/mu-law/A-law input, **60 seconds per child** and **240 seconds overall**.
+An initial site-specific plan proposed three serial trials, one per saved
+clean/mu-law/A-law input. The executed experiment below instead used one
+identical mu-law input in **three serial A–B–A trials**, with the same bounds:
+**60 seconds per child** and **240 seconds overall**.
 A private supervisor rechecks pinned files and fresh output paths, captures
 logs privately, terminates the process group on timeout and stops at the first
 failed acceptance check. It requires explicit execution, local-backend and
@@ -190,7 +193,8 @@ This adds one local supervisor, at most one local replay process and an optional
 local decoder child. It adds **no Kubernetes deployment, model copy, CPU
 reservation or HA pipeline**. Existing backend resource limits still govern
 inference; a serial run can nevertheless contend with other users of those
-backends. Wait for the deployment coordinator's window before executing it.
+backends. The one approved window is now closed. Any further live execution
+requires a new window from the deployment coordinator.
 
 Acceptance requires the expected transcript and answer, nonempty decoded PCM,
 normal stopped completion, all expected local providers and a complete turn
@@ -202,3 +206,93 @@ guarantee or real-phone acceptance.
 
 Site-specific commands, resource snapshots, raw audio, phrases, identities and
 hashed source receipts are retained only in the private rollout directory.
+
+## Completed experiment for finite input
+
+The tested candidate changed one request field: **`input.no_vad: true`**, solely
+for a complete prerecorded input that sends an explicit end-of-audio marker.
+The baseline keeps HA's normal VAD. The candidate preserves the entire source
+PCM, final-frame padding, input pacing, selected pipeline, recognition model,
+conversation settings and Silero Baya voice. It changes no stored configuration.
+The private candidate refuses execution without a separate environment opt-in.
+
+**This is not a candidate for the current live handset mode.** That mode has an
+open microphone stream and no explicit end-of-utterance action. Disabling its
+VAD could keep it waiting until the lease or turn deadline. Its behavior remains
+unchanged. The supported boundary for this experiment is the finite-file replay
+interface; any future live adoption would first require a real, tested
+end-of-utterance control.
+
+The cached HA 2026.10.0 source and its pinned schema validator were checked
+offline. The STT request accepts the field; it disables the audio VAD processor
+and external speech segmenter. The source stream still ends at its explicit
+marker. Crucially, the baseline already stops at finite EOF: this experiment
+does **not** assume an extra silence timeout disappears. A possible improvement
+would come from avoiding processing and backpressure, and could be zero or
+negative. Without VAD, the recognizer may also receive silence that the baseline
+would have removed, so unchanged client PCM does not guarantee identical
+recognizer input or answer quality.
+
+The experiment was **A–B–A on one identical saved G.711 mu-law clip**:
+normal VAD, candidate bypass, normal VAD. Each trial created a fresh conversation
+and used the same explicit qualified pipeline. All three completed within the
+60-second child, 240-second overall and 30-second Assist bounds. The supervisor
+finished in 54.795 seconds, with no retry. The final baseline helps expose
+warm-up or load drift but does not make three trials a statistical performance
+guarantee.
+
+The decision criteria were fixed before execution:
+
+- Any transcript, answer, provider, complete-input, end-marker or deadline
+  failure rejects the candidate. Missing comparable evidence is inconclusive.
+- More than 20% drift between baseline timings is inconclusive.
+- To retain the candidate for **finite-input evaluation only**, both first
+  delivered PCM and complete-turn time must beat both baselines by at least
+  0.5 seconds or 5% of the faster baseline, whichever is larger. The observed
+  STT stage must also beat both baselines by at least 0.25 seconds.
+- A smaller or mixed improvement is rejected as insufficient measured benefit.
+  No conclusion extends to the open-microphone handset path or arbitrary speech.
+
+### Measured result: reject
+
+All times are seconds. First delivered audio is measured after the first
+20-millisecond sink block completes; unlike the earlier first-PCM callback
+metric, it includes that block's pacing wait. Total time runs from activation
+through final cleanup.
+
+| Measurement | A1: normal VAD | B: bypass | A2: normal VAD |
+| --- | ---: | ---: | ---: |
+| Activation to first delivered PCM | 16.555 | 15.771 | 17.015 |
+| Activation to final cleanup | 18.021 | 17.237 | 18.483 |
+| HA STT interval | 10.264 | 9.907 | 10.833 |
+| Conversation interval | 5.985 | 5.554 | 5.921 |
+| Full audio fetch | 0.126 | 0.076 | 0.077 |
+
+Against the faster baseline, first audio improved by **0.784 seconds (4.74%)**,
+below the required 0.828 seconds. Total time improved by **0.783 seconds
+(4.35%)**, below the required 0.901 seconds. STT improved by 0.357 seconds,
+exceeding its 0.250-second threshold. Baseline drift was 2.78% for first audio,
+2.57% for total time and 5.55% for STT, all below the 20% inconclusive boundary.
+The two end-to-end thresholds failed, so the result is **insufficient measured
+benefit**, not an inconclusive run.
+
+All three trials matched the expected transcript and answer, produced nonempty
+decoded PCM and completed normally. The selected pipeline, provider identities,
+conversation configuration and input were identical. Preflight confirmed local
+backends and the resolved Silero Baya runtime. Each trial sent the complete
+padded PCM and exactly one end marker; the candidate additionally verified
+the transmitted PCM hash. Only B carried the request override.
+
+The source feed took 2.241 seconds in each arm. The interval from the sent end
+marker to STT completion was 8.064, 7.795 and 8.651 seconds respectively. These
+are observed intervals that include service work, queuing and event delivery;
+they do not isolate model compute or establish VAD's causal cost. Conversation
+and fetch timing also varied, so the entire end-to-end difference cannot be
+attributed to VAD processing. Each reply contained 1.416 seconds of decoded PCM.
+Three short, repeated replies do not establish cold-cache, tail-latency or
+general speech quality.
+
+The live window is closed. The candidate remains private and opt-in; the
+baseline runner omits the request field. There is no deployment or stored HA
+setting to restore. No physical audio device or phone connection was used, and
+**no live handset speedup is established**.

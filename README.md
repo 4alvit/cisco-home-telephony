@@ -45,6 +45,8 @@ conversion to MPP is not required.
 - **Measure voice quality:** [wake detection evaluation](docs/wake-qualification.md)
   separates labeled accuracy from unlabeled activations;
   [latency analysis](docs/local-voice-performance.md) measures each response stage.
+- **Test the integrated voice path:** the [offline acceptance harness](docs/voice-integration-test.md)
+  exercises synthetic sessions without contacting a real phone or Home Assistant.
 - **Evaluate a voice assistant or video:** the [7945G software feasibility study](docs/native-app-feasibility.md)
   compares stock XML/RTP, signed Java applications and firmware work, with
   effort estimates and explicit limits on native video.
