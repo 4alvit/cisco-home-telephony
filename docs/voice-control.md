@@ -102,8 +102,11 @@ sources under `/workspace` and use a separate writable private workspace.
 All referenced private paths must then resolve under that workspace's `.local`
 directory. Kubernetes projected Secrets use symlinks: copy their contents into
 ordinary owner-only files before loading the registry rather than pointing
-the controller at the projection. Keep state persistent across replacements,
-with the same runtime user and a shutdown grace longer than 47 seconds.
+the controller at the projection. Keep state persistent across replacements
+with the same runtime user. The gateway keeps callbacks available for up to
+145 seconds during shutdown; use the current gateway renderer's minimum
+180-second Pod termination grace, including its larger floor for large
+inventories.
 
 The selected interpreter and source checkout must remain at their configured
 paths. The controller creates immutable private snapshots for its child runner
@@ -128,6 +131,20 @@ voice session owns the phone, direct dial, speaker-key, remote-answer and
 display changes are refused with `voice_phone_busy`; the same rule covers both
 lines and both phones in an intercom request. Unresolved voice ownership also
 blocks these conflicting operations.
+
+While voice control is attached, each direct command for any gateway handset
+holds the same per-device file lock used by the standalone wake runner until
+synchronous phone I/O finishes. An intercom holds both devices' locks. Phones
+without a manual voice profile receive control-only identities; this does not
+enable their voice Start or expose a voice status endpoint. The wake pilot must
+use the same state directory and a handset in this gateway's inventory.
+
+These temporary locks do not rewrite voice journals or block status and Stop.
+They close the gap between checking an idle journal and sending a command while
+the gateway is running. They do not provide durable fencing after a gateway
+crash or prove that a timed-out HTTP command cannot arrive later. Before starting
+a wake pilot, resolve any gateway operation with an unknown outcome and confirm
+the handset is idle. Do not use a new wake attempt to bypass that uncertainty.
 
 Ordinary incoming SIP calls retain priority. The gateway's `ring` and
 timer/alarm `alert` operations remain eligible to originate incoming calls,
@@ -270,11 +287,32 @@ to each call; the controller resolves line aliases before authorization.
 an optional `dry_run`; `status(target, ..., session_id=None)` reads state;
 `stop(target, session_id, ...)` targets one session.
 
+The gateway additionally supplies its full trusted inventory as immutable
+`ControlPhone` identities through `control_phones=`. Its internal `control`
+authorization permits `reserve_control(target, context=...)` to fence a direct
+phone command; this context manager releases its file lock in `finally`. These
+identities do not add manual voice profiles, and the gateway does not grant this
+internal authorization to a bearer request or expose it as a separate route.
+Shutdown uses internal `reserve_shutdown` contexts for every inventory handset.
+They check the actual shared file lock as well as the current journal, including
+the interval before an external owner writes its first journal. Each quiescent
+phone stays fenced until the final authentication listener closes.
+
 The default monitor supervises deadlines without starting media by itself.
 An embedding that sets `monitor=False` must call `tick()` regularly.
 `close()` rejects new Starts and requests cleanup, but returns without waiting
 for all children to finish. Keep supervision alive during shutdown; do not
 equate a returned `close()` call with confirmed microphone closure.
+During gateway shutdown, phone authentication callbacks remain available for
+up to 145 seconds while any inventory handset has active or uncertain ownership.
+The budget covers the external runner's 30-second lease, 45-second Stop allowance,
+7-second completion margin and possible 55-second uncertain-cleanup drain, plus
+8 seconds of margin. The gateway does not signal a process it does not own.
+Confirmed cleanup and acquired fences permit an earlier exit; a timeout returns
+an incomplete result and does not clear unresolved journals. The updated gateway
+renderer requires at least 180 seconds of Pod termination grace and increases
+that minimum for large inventories to allow listener closure. Do not release new
+wake Jobs while the gateway is shutting down.
 
 The existing client transport uses these flat gateway action routes:
 

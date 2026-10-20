@@ -1,5 +1,6 @@
 """Offline gateway voice adapters: fake supervisor, listeners and phone I/O."""
 import copy
+import contextlib
 from email.message import Message
 import io
 import json
@@ -25,6 +26,7 @@ class GatewayVoiceTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.gateway = gateway.Gateway(config(), self.directory.name)
         self.addCleanup(self.gateway.db.close)
+        self.addCleanup(self.gateway.release_voice_shutdown)
         self.core = gateway.app_module('phone_voice_control')
         self.voice = mock.Mock()
         for action in ('status', 'start', 'stop'):
@@ -35,8 +37,22 @@ class GatewayVoiceTests(unittest.TestCase):
         self.registry = SimpleNamespace(profiles=(self.profile,), enabled=True)
         self.module = SimpleNamespace(load_control_config=mock.Mock(return_value=self.registry),
             TokenSourceAuthorizer=self.core.TokenSourceAuthorizer,
-            VoiceControl=mock.Mock(return_value=self.voice), ControlError=self.core.ControlError,
-            STOP_GRACE_SECONDS=45, _safe_status=self.core._safe_status)
+            VoiceControl=mock.Mock(return_value=self.voice), ControlPhone=self.core.ControlPhone,
+            ControlError=self.core.ControlError,
+            STOP_GRACE_SECONDS=45, EXTERNAL_OWNER_GRACE_SECONDS=145,
+            _safe_status=self.core._safe_status)
+
+        @contextlib.contextmanager
+        def reserve(target, *, context):
+            value = self.core._safe_status(self.voice.status(target, context=context))
+            self.core._require(not value['active'] and value['state'] not in {
+                'starting', 'running', 'stopping', 'recovery_required', 'external_owner'},
+                'voice_phone_busy', 409)
+            yield
+
+        self.voice.reserve_control.side_effect = reserve
+        self.voice.reserve_shutdown.side_effect = reserve
+        self.reservation = reserve
 
     def attach(self):
         with mock.patch.object(gateway, 'app_module', return_value=self.module):
@@ -75,6 +91,15 @@ class GatewayVoiceTests(unittest.TestCase):
             setattr(self.profile, field, before)
         self.module.VoiceControl.assert_not_called()
 
+    def test_attachment_fences_all_inventory_without_enabling_all_voice_profiles(self):
+        destination = dict(config()['phones'][0], id='203', lines=['203', '204'],
+                           device='SEP020000000002', ipv4='192.168.50.22')
+        self.gateway.phones['203'] = destination
+        self.attach()
+        identities = self.module.VoiceControl.call_args.kwargs['control_phones']
+        self.assertEqual({phone.phone_id for phone in identities}, {'201', '203'})
+        self.assertEqual({profile.phone_id for profile in self.gateway._voice_profiles}, {'201'})
+
     def test_api_and_phone_contexts_require_distinct_trusted_proofs(self):
         self.attach()
         authorize = self.module.VoiceControl.call_args.kwargs['authorize']
@@ -84,6 +109,8 @@ class GatewayVoiceTests(unittest.TestCase):
         self.assertFalse(authorize(dict(context, authorization=context['authorization'] * 2), 'start', '201'))
         phone_context = self.gateway._phone_voice_context('201')
         self.assertTrue(authorize(phone_context, 'stop', '201'))
+        self.assertTrue(authorize(phone_context, 'control', '201'))
+        self.assertFalse(authorize(context, 'control', '201'))
         self.assertFalse(authorize({'phone': '201', '_phone_proof': object()}, 'stop', '201'))
         self.assertFalse(authorize(phone_context, 'stop', '203'))
         with self.assertRaises(gateway.Refused):
@@ -371,33 +398,30 @@ class GatewayVoiceTests(unittest.TestCase):
 
     def test_shutdown_wait_is_bounded_and_does_not_claim_cleanup(self):
         self.attach()
-        for state, active in (('stopping', True), ('recovery_required', False)):
-            self.voice.reset_mock()
-            self.voice.status.return_value = dict(voice_status(), state=state,
-                                                  active=active, stop_confirmed=False)
-            with self.subTest(state=state), \
-                 mock.patch.object(gateway.time, 'monotonic', side_effect=(0, 0, 50)), \
-                 mock.patch.object(gateway.time, 'sleep') as sleep:
-                self.gateway.close_voice()
-            self.voice.close.assert_called_once()
-            self.voice.tick.assert_called_once()
-            sleep.assert_called_once_with(0.05)
-            self.assertFalse(self.voice.status.return_value['stop_confirmed'])
+        self.voice.reserve_shutdown.side_effect = self.core.ControlError('voice_phone_busy')
+        with mock.patch.object(gateway.time, 'monotonic', side_effect=(0, 0, 146)), \
+             mock.patch.object(gateway.time, 'sleep') as sleep:
+            self.assertFalse(self.gateway.close_voice())
+        self.voice.close.assert_called_once()
+        self.voice.tick.assert_called_once()
+        sleep.assert_called_once_with(0.05)
+        self.voice.stop.assert_not_called()
 
     def test_shutdown_close_tick_or_status_failure_preserves_full_grace(self):
         self.attach()
-        for method in ('close', 'tick', 'status'):
+        for method in ('close', 'tick', 'reserve_shutdown'):
             self.voice.reset_mock(side_effect=True)
-            self.voice.status.return_value = voice_status()
+            self.voice.reserve_shutdown.side_effect = self.reservation
             getattr(self.voice, method).side_effect = RuntimeError('synthetic private storage error')
             with self.subTest(method=method), \
-                 mock.patch.object(gateway.time, 'monotonic', side_effect=(0, 0, 50)) as clock, \
+                 mock.patch.object(gateway.time, 'monotonic', side_effect=(0, 0, 146)) as clock, \
                  mock.patch.object(gateway.time, 'sleep') as sleep:
-                self.gateway.close_voice()
+                self.assertFalse(self.gateway.close_voice())
             self.assertEqual(clock.call_count, 3)
             sleep.assert_called_once_with(0.05)
+            self.gateway.release_voice_shutdown()
 
-    def test_main_keeps_phone_callbacks_alive_until_voice_cleanup_finishes(self):
+    def test_main_reports_incomplete_drain_and_releases_fences_after_callbacks(self):
         path = Path(self.directory.name) / 'gateway.json'
         path.write_text(json.dumps(config()))
         events = []
@@ -405,12 +429,15 @@ class GatewayVoiceTests(unittest.TestCase):
         instance.phones = self.gateway.phones
         instance.config = self.gateway.config
         instance.voice.close.side_effect = lambda: events.append('voice-close')
-        instance.close_voice.side_effect = lambda **_kwargs: events.append('voice-finish')
+        instance.close_voice.side_effect = lambda **_kwargs: (events.append('voice-finish'), False)[1]
+        instance.release_voice_shutdown.side_effect = lambda: events.append('release-fences')
         listeners = [mock.Mock(), mock.Mock()]
         for listener in listeners:
             listener.shutdown.side_effect = lambda: events.append('listener-shutdown')
             listener.server_close.side_effect = lambda: events.append('listener-close')
-        with mock.patch.object(gateway, 'Gateway', return_value=instance), \
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), \
+             mock.patch.object(gateway, 'Gateway', return_value=instance), \
              mock.patch.object(gateway, 'ThreadingHTTPServer', side_effect=listeners), \
              mock.patch.object(gateway.threading, 'Thread'), \
              mock.patch.object(gateway.threading, 'Event'), \
@@ -423,6 +450,9 @@ class GatewayVoiceTests(unittest.TestCase):
         instance.attach_voice.assert_called_once_with('synthetic', self.directory.name)
         self.assertLess(events.index('voice-close'), events.index('voice-finish'))
         self.assertLess(events.index('voice-finish'), events.index('listener-shutdown'))
+        self.assertGreater(events.index('release-fences'),
+                           max(index for index, event in enumerate(events) if event == 'listener-close'))
+        self.assertEqual(stderr.getvalue(), 'Voice shutdown incomplete; ownership records retained.\n')
 
 
 if __name__ == '__main__':

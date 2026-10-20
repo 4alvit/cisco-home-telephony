@@ -396,9 +396,11 @@ live network, the existing preferences database or shutdown under load.
 
 Use one replica with the `Recreate` strategy, explicit node pinning and the
 existing API and callback/listener ports. Retain the runtime's non-root,
-read-only and capability restrictions. Set `terminationGracePeriodSeconds` to
-at least 60 seconds; 75 seconds is recommended to allow more than the gateway's
-roughly 47-second voice cleanup window before a forced Pod kill. The persistent
+read-only and capability restrictions. Use the
+[gateway renderer](voice-gateway-deployment.md) to set
+`terminationGracePeriodSeconds` to at least 180 seconds; its inventory-aware
+minimum grows for larger deployments. This includes the gateway's bounded
+145-second callback retention and time to close its listeners. The persistent
 volume must preserve the same physical control ownership. Old and replacement
 gateways must not run concurrently or compete for the state or the phones.
 

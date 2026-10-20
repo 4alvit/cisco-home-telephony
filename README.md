@@ -37,6 +37,9 @@ conversion to MPP is not required.
   lists published test menus, account restrictions and the difference between a SIP identity and an incoming telephone number.
 - **Try the stock-phone voice pilot:** [implementation and measured acceptance](docs/voice-rollout.md),
   [CLI installation](docs/voice-cli-install.md), and [one-shot k3s execution](docs/voice-k3s.md).
+- **Try the optional wake pilot:** [build the CPU wake runtime](docs/voice-wake-runtime.md)
+  and [prepare a suspended one-shot k3s Job](docs/voice-wake-k3s.md).
+  Private models remain outside the image; activation is explicit and bounded.
 - **Control bounded voice sessions:** [gateway, CLI and phone menu setup](docs/voice-control.md).
   These optional controls require the matching voice runtime and private registry;
   updating a client alone does not enable capture.

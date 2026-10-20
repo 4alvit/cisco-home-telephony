@@ -7,6 +7,7 @@ Key/Dial URIs are immediate: all control decisions use fresh AMI observations.
 """
 import argparse
 import base64
+from contextlib import contextmanager, ExitStack
 import hashlib
 import hmac
 import io
@@ -345,6 +346,8 @@ class Gateway:
 
         self.voice = None
         self._voice_profiles = ()
+        self._voice_shutdown_reservations = ExitStack()
+        self._voice_shutdown_phones = set()
         self.apps = None
         if config.get('applications', {}).get('enabled'):
             backend_config = config['applications'].get('home_assistant')
@@ -373,16 +376,21 @@ class Gateway:
         self._voice_module = module
 
         def authorize(context, action, canonical_phone_id):
-            if action not in ('start', 'status', 'stop'):
+            if action not in ('start', 'status', 'stop', 'control'):
                 return False
             if canonical_phone_id not in self.phones:
                 return False
             if (isinstance(context, dict)
                     and context.get('_phone_proof') is self._voice_phone_proof):
                 return context.get('phone') == canonical_phone_id
+            if action == 'control':
+                return False  # Only the trusted internal mutation adapter uses it.
             return api_authorize(context, action, canonical_phone_id)
 
-        self.voice = module.VoiceControl(config, authorize=authorize)
+        control_phones = tuple(module.ControlPhone(
+            phone['id'], tuple(phone['lines']), phone['device'])
+            for phone in self.phones.values())
+        self.voice = module.VoiceControl(config, authorize=authorize, control_phones=control_phones)
 
     def _phone_voice_context(self, phone_id):
         # Call only from the already source-checked per-phone listener or shutdown.
@@ -436,53 +444,70 @@ class Gateway:
         except self._voice_module.ControlError as error:
             raise Refused(error.reason, error.status) from None
 
-    def require_voice_available(self, phone):
-        """Do not overwrite media while a voice owner is active or uncertain.
+    @contextmanager
+    def reserve_phone_controls(self, *phones):
+        """Hold shared phone reservations throughout direct media/key/display I/O.
 
         Called under the gateway mutation lock. Incoming SIP calls, including
         ring and scheduled alert origination, preempt the voice runner through
         its fresh AMI observer. Hangup, Stop and preferences remain available.
         """
-        if self.voice is None or not any(
-                profile.phone_id == phone['id'] for profile in self._voice_profiles):
-            return
-        try:
-            value = self.voice.status(
-                phone['id'], context=self._phone_voice_context(phone['id']))
-            value = self._voice_module._safe_status(value)
-        except self._voice_module.ControlError as error:
-            raise Refused(error.reason, error.status) from None
-        require(not value['active'] and value['state'] not in {
-            'starting', 'running', 'stopping', 'recovery_required', 'external_owner'},
-            'voice_phone_busy')
+        with ExitStack() as reservations:
+            for phone_id in sorted({phone['id'] for phone in phones}):
+                if self.voice is None:
+                    continue
+                try:
+                    reservations.enter_context(self.voice.reserve_control(
+                        phone_id, context=self._phone_voice_context(phone_id)))
+                except self._voice_module.ControlError as error:
+                    reason = ('voice_phone_busy' if error.reason == 'voice_recovery_required'
+                              else error.reason)
+                    raise Refused(reason, error.status) from None
+            yield
 
     def close_voice(self, *, uncertain=False):
         if self.voice is None:
-            return
+            return True
         try:
             self.voice.close()  # Nonblocking request, not proof of cleanup.
         except Exception:
             uncertain = True
-        deadline = time.monotonic() + self._voice_module.STOP_GRACE_SECONDS + 2
+        grace = max(self._voice_module.STOP_GRACE_SECONDS + 2,
+                    self._voice_module.EXTERNAL_OWNER_GRACE_SECONDS)
+        deadline = time.monotonic() + grace
         while time.monotonic() < deadline:
             try:
                 self.voice.tick()
-                states = [self.voice.status(
-                    profile.phone_id,
-                    context=self._phone_voice_context(profile.phone_id))
-                    for profile in self._voice_profiles]
             except Exception:
                 uncertain = True
-                states = []
+            for phone_id in self.phones:
+                if phone_id in self._voice_shutdown_phones:
+                    continue
+                try:
+                    self._voice_shutdown_reservations.enter_context(self.voice.reserve_shutdown(
+                        phone_id, context=self._phone_voice_context(phone_id)))
+                    self._voice_shutdown_phones.add(phone_id)
+                except self._voice_module.ControlError as error:
+                    if error.reason not in ('voice_phone_busy', 'voice_recovery_required'):
+                        uncertain = True
+                except Exception:
+                    uncertain = True
             # Recovery can mean the runner died while its watchdog still owns
             # a delayed Stop sweep. Keep authentication available for the full
             # bounded grace even though that state is no longer active.
-            if not uncertain and all(not state['active'] and state['state'] not in
-                   ('recovery_required', 'external_owner') for state in states):
-                return
+            if not uncertain and len(self._voice_shutdown_phones) == len(self.phones):
+                return True
             time.sleep(0.05)
         # Never unlink a lease, journal or snapshot to force a clean shutdown.
         # The existing durable recovery state and surviving watchdog remain.
+        return False
+
+    def release_voice_shutdown(self):
+        """Release quiescent-phone fences only after all callback listeners close."""
+        try:
+            self._voice_shutdown_reservations.close()
+        finally:
+            self._voice_shutdown_phones.clear()
 
     def preference(self, phone_id):
         row = self.db.execute('SELECT dnd,autoanswer FROM preferences WHERE phone=?', (phone_id,)).fetchone()
@@ -639,14 +664,21 @@ class Gateway:
                 self.db.execute('DELETE FROM intercoms WHERE root=?', (root,))
                 self.db.commit()
 
-    def intercom(self, ami, phone, line, destination, endpoints, channels):
+    def intercom(self, ami, phone, line, destination):
         require(isinstance(destination, str) and destination in self.config['dial_allowlist'], 'number_not_allowed')
         targets = [item for item in self.phones.values() if destination in item['lines']]
         require(len(targets) == 1, 'intercom_requires_cisco_destination')
         target = targets[0]
         require(target['id'] != phone['id'], 'intercom_requires_two_phones')
+        with self.reserve_phone_controls(phone, target):
+            # Both devices are fenced before taking the observation used for
+            # origination and before either speaker key can be sent.
+            endpoints, channels = ami.snapshot()
+            return self._intercom_reserved(ami, phone, line, destination, target,
+                                           endpoints, channels)
+
+    def _intercom_reserved(self, ami, phone, line, destination, target, endpoints, channels):
         for item in (phone, target):
-            self.require_voice_available(item)
             require(all(endpoints.get(number) not in (None, 'Unavailable', 'Invalid') for number in item['lines']),
                     'phone_unavailable', 503)
             require(not own_channels(item, channels) and
@@ -794,9 +826,12 @@ class Gateway:
         require(line in phone['lines'], 'line_does_not_belong_to_phone', 400)
         # Ring/alert originate ordinary incoming calls, whose higher priority
         # must interrupt voice listening. Only direct phone media/key/display
-        # mutations need to wait for the voice owner to finish.
-        if action in ('dial', 'speaker', 'message', 'image', 'answer'):
-            self.require_voice_available(phone)
+        # mutations need a reservation. Intercom reserves both endpoints itself.
+        phones = (phone,) if action in ('dial', 'speaker', 'message', 'image', 'answer') else ()
+        with self.reserve_phone_controls(*phones):
+            return self._mutate_reserved(phone, action, body, line)
+
+    def _mutate_reserved(self, phone, action, body, line):
         if action in ('dnd', 'autoanswer'):
             require(type(body.get('enabled')) is bool, 'enabled_boolean_required', 400)
             # Persist desired state before AMI writes. A partial two-line update
@@ -814,7 +849,7 @@ class Gateway:
             endpoints, channels = ami.snapshot()
             self.reconcile_alerts(ami, channels)
             if action == 'intercom':
-                return self.intercom(ami, phone, line, body.get('number'), endpoints, channels)
+                return self.intercom(ami, phone, line, body.get('number'))
             if action == 'alert_stop':
                 alert_id = body.get('alert_id')
                 require(isinstance(alert_id, str) and re.fullmatch(r'[0-9a-f]{32}', alert_id), 'bad_alert_id', 400)
@@ -1112,12 +1147,17 @@ def main():
                 uncertain = True
         gateway.stopped.set()
         try:
-            gateway.close_voice(uncertain=uncertain)
+            # ExitStack runs every close even if one fails. Quiescent-phone
+            # fences remain held through the final authentication listener.
+            with ExitStack() as cleanup:
+                cleanup.callback(gateway.release_voice_shutdown)
+                for server in reversed(servers):
+                    cleanup.callback(server.server_close)
+                for server in reversed(started):
+                    cleanup.callback(server.shutdown)
+                if not gateway.close_voice(uncertain=uncertain):
+                    print('Voice shutdown incomplete; ownership records retained.', file=sys.stderr)
         finally:
-            for server in started:
-                server.shutdown()
-            for server in servers:
-                server.server_close()
             for number, previous in previous_signals.items():
                 signal.signal(number, previous)
 

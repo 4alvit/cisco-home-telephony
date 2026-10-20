@@ -33,7 +33,7 @@ from stage_models import _validate_bundle, MAX_MODEL_BYTES, MAX_TOTAL_BYTES
 from voice_assistant.config import validate_config
 from voice_assistant.service import ServiceSettings
 
-UNCERTAIN_CLEANUP_SECONDS = 55  # 30-second lease + 23-second watchdog sweep + margin.
+UNCERTAIN_CLEANUP_SECONDS = control.UNCERTAIN_CLEANUP_SECONDS
 
 
 class GuardedSubprocessHandle(control._SubprocessHandle):
@@ -307,7 +307,8 @@ def run(args, inputs):
     failure = None
     for number in (signal.SIGINT, signal.SIGTERM):
         previous[number] = signal.signal(number, lambda *_: stopped.set())
-    deadline = time.monotonic() + inputs.profile.duration + control.STOP_GRACE_SECONDS + 7
+    deadline = (time.monotonic() + inputs.profile.duration + control.STOP_GRACE_SECONDS
+                + control.RUNNER_COMPLETION_MARGIN_SECONDS)
     try:
         request_id = claim_attempt(inputs, args.attempt_id)
         if stopped.is_set():

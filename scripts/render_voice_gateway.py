@@ -314,7 +314,7 @@ def state_binding(pod, container):
 
 def render(deployment, config, receipt, capacity, *, image, cpu_request, cpu_limit,
            memory_request='128Mi', memory_limit='512Mi', profiles=None, enable_voice=False,
-           workspace=ROOT, grace_seconds=75, max_capacity_age_seconds=900, now=None):
+           workspace=ROOT, grace_seconds=180, max_capacity_age_seconds=900, now=None):
     deployment = clean_deployment(deployment)
     config = copy.deepcopy(config)
     gateway.validate(config)
@@ -334,7 +334,10 @@ def render(deployment, config, receipt, capacity, *, image, cpu_request, cpu_lim
                         and init[0].get('command') == ['/usr/local/bin/python3', '-c', INIT_CODE]),
             'foreign_init_containers_not_supported')
     path, mount = state_binding(pod, container)
-    require(type(grace_seconds) is int and 60 <= grace_seconds <= 600, 'grace_must_be_60_to_600_seconds')
+    # One second per callback/API listener plus ten seconds of scheduling margin.
+    minimum_grace = max(180, int(control.EXTERNAL_OWNER_GRACE_SECONDS) + len(config['phones']) + 11)
+    require(type(grace_seconds) is int and minimum_grace <= grace_seconds <= 600,
+            'grace_must_cover_shutdown_and_listeners')
     resources = {'requests': {'cpu': cpu_request, 'memory': memory_request},
                  'limits': {'cpu': cpu_limit, 'memory': memory_limit}}
     requests, limits = resource_pair(resources['requests']), resource_pair(resources['limits'])
@@ -430,7 +433,7 @@ def main(argv=None):
     parser.add_argument('--enable-voice', action='store_true')
     parser.add_argument('--memory-request', default='128Mi')
     parser.add_argument('--memory-limit', default='512Mi')
-    parser.add_argument('--grace-seconds', type=int, default=75)
+    parser.add_argument('--grace-seconds', type=int, default=180)
     parser.add_argument('--max-capacity-age-seconds', type=int, default=900)
     args = parser.parse_args(argv)
     try:

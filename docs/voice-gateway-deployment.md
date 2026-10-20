@@ -37,7 +37,10 @@ PVC migration is outside this renderer's scope.
 The output contains an immutable, content-addressed Secret and the replacement
 Deployment. It uses one replica, `Recreate`, UID/GID `10001`, dropped
 capabilities, a read-only root filesystem and no service-account token. The
-default shutdown grace is 75 seconds; values below 60 seconds are rejected.
+default shutdown grace is 180 seconds; values below 180 seconds are rejected.
+Large inventories require an additional floor of 145 seconds plus one second
+per phone/API listener and ten seconds of margin. This leaves time for the
+gateway's full external-owner cleanup wait and final listener closure.
 Existing gateway `/state` storage remains at the same path. The same volume is
 also mounted at `/run/voice/.local/state` for persistent voice ownership and
 cleanup journals. Source stays in the image under `/workspace`.
@@ -231,7 +234,7 @@ python3 scripts/render_voice_gateway.py \
   --capacity .local/voice-gateway/capacity.json \
   --cpu-request 250m --cpu-limit 1000m \
   --memory-request 128Mi --memory-limit 512Mi \
-  --grace-seconds 75 \
+  --grace-seconds 180 \
   --output .local/voice-gateway/candidate-disabled.json
 ```
 
@@ -332,7 +335,7 @@ keeps each Pod's staged input coherent.
 
 To roll back, finish active sessions and retain their state, then apply the
 reviewed baseline Deployment and its exact Secret references using the same
-ownership process. Keep one replica and `Recreate`; allow at least 60 seconds
+ownership process. Keep one replica and `Recreate`; allow at least 180 seconds
 of shutdown grace for the voice-capable Pod being replaced. A plain
 `kubectl set image` is insufficient because command, mounts and init staging
 also changed. Do not automatically restore an old database backup during an

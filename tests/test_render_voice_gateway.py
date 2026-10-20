@@ -131,7 +131,7 @@ class RenderVoiceGatewayTests(unittest.TestCase):
         self.assertEqual(pod['imagePullSecrets'], oldpod['imagePullSecrets'])
         self.assertEqual(pod['containers'][0]['ports'], oldpod['containers'][0]['ports'])
         self.assertEqual(pod['containers'][0]['readinessProbe'], oldpod['containers'][0]['readinessProbe'])
-        self.assertEqual(pod['terminationGracePeriodSeconds'], 75)
+        self.assertEqual(pod['terminationGracePeriodSeconds'], 180)
         self.assertNotIn('status', new)
         self.assertNotIn('uid', new['metadata'])
         self.assertEqual(new['metadata']['annotations'], {'operator-note': 'preserve'})
@@ -397,9 +397,24 @@ class RenderVoiceGatewayTests(unittest.TestCase):
 
     def test_grace_floor_and_existing_longer_grace_preserved(self):
         with self.assertRaisesRegex(ValueError, 'grace_must'):
-            self.render(grace_seconds=59)
-        self.deployment['spec']['template']['spec']['terminationGracePeriodSeconds'] = 120
-        self.assertEqual(self.pod(self.render())['terminationGracePeriodSeconds'], 120)
+            self.render(grace_seconds=179)
+        self.deployment['spec']['template']['spec']['terminationGracePeriodSeconds'] = 240
+        self.assertEqual(self.pod(self.render())['terminationGracePeriodSeconds'], 240)
+
+    def test_large_inventory_requires_listener_close_margin(self):
+        template = self.gateway['phones'][0]
+        self.gateway['softphones'] = []
+        self.gateway['phones'] = [
+            dict(template, id=str(200 + index), lines=[str(200 + index)],
+                 ipv4='192.168.50.' + str(20 + index), port=20000 + index,
+                 device='SEP' + format(index + 1, '012X'))
+            for index in range(32)]
+        required = int(r.control.EXTERNAL_OWNER_GRACE_SECONDS) + 32 + 11
+        self.assertGreater(required, 180)
+        with self.assertRaisesRegex(ValueError, 'grace_must'):
+            self.render(grace_seconds=required - 1)
+        self.assertEqual(self.pod(self.render(grace_seconds=required))['terminationGracePeriodSeconds'],
+                         required)
 
     def test_profile_gateway_inventory_must_match_complete_object(self):
         different = copy.deepcopy(self.gateway)

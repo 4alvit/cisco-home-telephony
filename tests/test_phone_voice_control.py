@@ -140,13 +140,14 @@ class ControlFixture(unittest.TestCase):
         self.launches.append((list(argv), cwd, dict(env), lease_fd))
         return runner
 
-    def make_control(self, *, authorize=None, runner_factory=None, config=None):
+    def make_control(self, *, authorize=None, runner_factory=None, config=None, control_phones=None):
         if authorize is None:
             authorize = lambda context, action, phone_id: (
-                context == ALLOWED and action in {"start", "status", "stop"} and phone_id == "201")
+                context == ALLOWED and action in {"start", "status", "stop", "control"} and phone_id == "201")
         instance = control.VoiceControl(
             self.load() if config is None else config, authorize=authorize,
-            runner_factory=runner_factory or self.launch, clock=self.clock, monitor=False)
+            runner_factory=runner_factory or self.launch, clock=self.clock, monitor=False,
+            control_phones=control_phones)
         self.controls.append(instance)
         return instance
 
@@ -380,6 +381,188 @@ class ControlAuthorizationTests(ControlFixture):
                 with self.subTest(flag=missing, value=value), self.assertRaises(control.ControlError):
                     instance.start("201", "a" * 32, context=ALLOWED, **flags)
         self.assertEqual(self.launches, [])
+
+
+class DirectControlReservationTests(ControlFixture):
+    def test_control_only_identity_does_not_enable_voice_start_or_status(self):
+        profile = self.load().profiles[0]
+        extra = control.ControlPhone("203", ("203", "204"), "SEP020000000002")
+        owner = self.make_control(authorize=lambda *_: True, control_phones=(
+            control.ControlPhone(profile.phone_id, profile.lines, profile.device), extra))
+        with owner.reserve_control("204", context=ALLOWED):
+            pass
+        with self.assertRaisesRegex(control.ControlError, "unknown_voice_phone"):
+            self.start(owner, "204")
+        with self.assertRaisesRegex(control.ControlError, "unknown_voice_phone"):
+            self.status(owner, "204")
+        self.assertEqual(self.launches, [])
+
+    def test_control_inventory_cannot_replace_or_duplicate_media_identity(self):
+        profile = self.load().profiles[0]
+        valid = control.ControlPhone(profile.phone_id, profile.lines, profile.device)
+        invalid = (
+            (),
+            (valid, valid),
+            (control.ControlPhone("203", ("203", "204"), profile.device),),
+            (control.ControlPhone(profile.phone_id, profile.lines, "SEP020000000002"),),
+            (valid, control.ControlPhone("203", ("203", "201"), "SEP020000000002")),
+        )
+        for identities in invalid:
+            with self.subTest(identities=identities), self.assertRaises(control.ControlError):
+                self.make_control(control_phones=identities)
+
+    def test_idle_reservation_blocks_both_alias_starts_without_journal_or_child(self):
+        owner, other = self.make_control(), self.make_control()
+        with owner.reserve_control("202", context=ALLOWED):
+            self.assertEqual(self.status(owner)["state"], "idle")
+            for alias in ("201", "202"):
+                with self.assertRaisesRegex(control.ControlError, "voice_phone_busy"):
+                    self.start(other, alias)
+            self.assertEqual(self.launches, [])
+            self.assertEqual(list((self.local / "control").glob("*.json")), [])
+        self.start(other)
+        self.assertEqual(len(self.launches), 1)
+
+    def test_body_exception_releases_fd_without_rewriting_completed_journal(self):
+        owner, other = self.make_control(), self.make_control()
+        self.start(owner)
+        self.runners[0].finish()
+        owner.tick()
+        path = owner._paths(owner.config.profiles[0])[1]
+        before = (path.read_bytes(), path.stat().st_ino)
+        with self.assertRaisesRegex(RuntimeError, "synthetic action error"):
+            with owner.reserve_control("201", context=ALLOWED):
+                raise RuntimeError("synthetic action error")
+        self.assertEqual((path.read_bytes(), path.stat().st_ino), before)
+        self.start(other, request_id="b" * 32)
+        self.assertEqual(len(self.launches), 2)
+
+    def test_status_and_old_stop_do_not_wait_for_direct_io(self):
+        owner = self.make_control()
+        old = self.start(owner)
+        self.runners[0].finish()
+        owner.tick()
+        completed = threading.Event()
+        errors = []
+
+        def inspect():
+            try:
+                self.assertEqual(self.status(owner)["state"], "stopped")
+                self.stop(owner, old["session_id"])
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                completed.set()
+
+        thread = threading.Thread(target=inspect)
+        try:
+            with owner.reserve_control("202", context=ALLOWED):
+                thread.start()
+                self.assertTrue(completed.wait(2), "manager lock held across direct I/O")
+        finally:
+            thread.join(2)
+        self.assertEqual(errors, [])
+
+    def test_failed_local_history_cannot_hide_a_new_foreign_owner(self):
+        owner, other = self.make_control(), self.make_control()
+        old = self.start(owner)
+        self.runners[0].finish(completed_report("assistant_error"))
+        owner.tick()
+        self.assertEqual(owner._sessions[old["session_id"]].state, "failed")
+        self.start(other, request_id="b" * 32)
+        with self.assertRaisesRegex(control.ControlError, "voice_phone_busy"):
+            with owner.reserve_control("201", context=ALLOWED):
+                self.fail("foreign owner must block direct I/O")
+        self.runners[1].finish()
+        other.tick()
+        path = other._paths(other.config.profiles[0])[1]
+        before = path.read_bytes()
+        # A stale local recovery view is likewise not authoritative over a
+        # newer, verified completed journal from the external process.
+        owner._sessions[old["session_id"]].state = "recovery_required"
+        with owner.reserve_control("202", context=ALLOWED):
+            pass
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_foreign_lock_before_journal_write_also_blocks_direct_io(self):
+        owner, other = self.make_control(), self.make_control()
+        fd = other._acquire(other.config.profiles[0])
+        try:
+            self.assertEqual(self.status(owner)["state"], "idle")
+            with self.assertRaisesRegex(control.ControlError, "voice_phone_busy"):
+                with owner.reserve_control("201", context=ALLOWED):
+                    self.fail("lock must precede journal inspection")
+        finally:
+            os.close(fd)
+        with owner.reserve_control("201", context=ALLOWED):
+            pass
+
+    def test_recovery_journal_is_preserved_and_failed_acquire_releases_fd(self):
+        owner, other = self.make_control(), self.make_control()
+        self.start(owner)
+        self.runners[0].finish(completed_report(confirmed=False))
+        owner.tick()
+        lock_path, journal_path = owner._paths(owner.config.profiles[0])
+        before = journal_path.read_bytes()
+        with self.assertRaisesRegex(control.ControlError, "voice_recovery_required"):
+            with other.reserve_control("202", context=ALLOWED):
+                self.fail("unconfirmed cleanup must block")
+        self.assertEqual(journal_path.read_bytes(), before)
+        # Only inspect lock release, never erase or repair the retained journal.
+        fd = os.open(lock_path, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(fd)
+
+    def test_control_authorization_precedes_state_access(self):
+        owner = self.make_control()
+        with self.assertRaisesRegex(control.ControlError, "forbidden"):
+            with owner.reserve_control("201", context=None):
+                self.fail("unauthorized reservation")
+        self.assertFalse((self.local / "control").exists())
+
+    def test_shutdown_reservation_requires_close_and_retains_idle_fence(self):
+        owner, other = self.make_control(), self.make_control()
+        with self.assertRaisesRegex(control.ControlError, "voice_shutdown_not_started"):
+            with owner.reserve_shutdown("202", context=ALLOWED):
+                self.fail("shutdown reservation before closing")
+        self.assertFalse((self.local / "control").exists())
+        owner.close()
+        with owner.reserve_shutdown("202", context=ALLOWED):
+            with self.assertRaisesRegex(control.ControlError, "voice_phone_busy"):
+                self.start(other)
+        self.start(other)
+        with self.assertRaisesRegex(control.ControlError, "forbidden"):
+            owner.reserve_shutdown("202", context=None)
+
+    def test_shutdown_reservation_sees_foreign_lock_before_any_journal(self):
+        owner, other = self.make_control(), self.make_control()
+        fd = other._acquire(other.config.profiles[0])
+        owner.close()
+        try:
+            self.assertEqual(self.status(owner)["state"], "idle")
+            with self.assertRaisesRegex(control.ControlError, "voice_phone_busy"):
+                with owner.reserve_shutdown("202", context=ALLOWED):
+                    self.fail("foreign lock must block")
+            self.assertEqual(list((self.local / "control").glob("*.json")), [])
+        finally:
+            os.close(fd)
+        with owner.reserve_shutdown("202", context=ALLOWED):
+            pass
+
+    def test_shutdown_reservation_preserves_recovery(self):
+        owner = self.make_control()
+        self.start(owner)
+        self.runners[0].finish(completed_report(confirmed=False))
+        owner.tick()
+        path = owner._paths(owner.config.profiles[0])[1]
+        before = path.read_bytes()
+        owner.close()
+        with self.assertRaisesRegex(control.ControlError, "voice_recovery_required"):
+            with owner.reserve_shutdown("201", context=ALLOWED):
+                self.fail("unconfirmed cleanup must remain reserved")
+        self.assertEqual(path.read_bytes(), before)
 
 
 class ControlLifecycleTests(ControlFixture):

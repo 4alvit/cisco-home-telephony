@@ -8,6 +8,7 @@ import argparse
 import copy
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -27,11 +28,17 @@ def module(name, path):
 
 manual = module("_wake_job_manual", ROOT / "scripts/render_voice_job.py")
 models = module("_wake_job_models", ROOT / "containers/voice-wake/stage_models.py")
+control = module("_wake_job_control", ROOT / "containers/asterisk/phone_voice_control.py")
 require = manual._require
 canonical = manual._canonical
 RUNTIME = "/run/voice"
 CONFIG = RUNTIME + "/.local/config"
 STATE = RUNTIME + "/.local/state/voice-control"
+# A child that ignores Stop can consume the complete kill/report deadlines
+# before the wrapper enters its separate uncertain-cleanup drain.
+TERMINATION_GRACE_SECONDS = math.ceil(
+    control.STOP_GRACE_SECONDS + control.REPORT_GRACE_SECONDS
+    + control.UNCERTAIN_CLEANUP_SECONDS + 18)
 
 # Only this initializer runs as root. It sees a new emptyDir, no host state,
 # Secret or model PVC. CHOWN is its only extra capability.
@@ -153,7 +160,8 @@ def render(site, transport_config, gateway_config, voice_config, token, bundle, 
         "limits": {"cpu": "1000m", "memory": "512Mi", "ephemeral-storage": "256Mi"},
     }
     pod = manual.k3s.pod_base(site)
-    pod.update(restartPolicy="Never", enableServiceLinks=False, terminationGracePeriodSeconds=75)
+    pod.update(restartPolicy="Never", enableServiceLinks=False,
+               terminationGracePeriodSeconds=TERMINATION_GRACE_SECONDS)
     # Do not set fsGroup: kubelet must not recursively alter an existing model
     # PVC or the gateway's state. Provision their UID permissions separately.
     pod["securityContext"].update(runAsNonRoot=True, runAsUser=10001, runAsGroup=10001)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 from collections import OrderedDict
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 import fcntl
 import hashlib
@@ -32,6 +33,10 @@ ROOT = Path(__file__).resolve().parents[2]
 MAX_CONFIG = 256 * 1024
 MAX_REPORT = 16 * 1024
 STOP_GRACE_SECONDS = 45.0
+RUNNER_COMPLETION_MARGIN_SECONDS = 7.0
+UNCERTAIN_CLEANUP_SECONDS = 55.0
+EXTERNAL_OWNER_GRACE_SECONDS = (
+    30 + STOP_GRACE_SECONDS + RUNNER_COMPLETION_MARGIN_SECONDS + UNCERTAIN_CLEANUP_SECONDS + 8)
 REPORT_GRACE_SECONDS = 2.0
 STATES = frozenset(('idle', 'starting', 'running', 'stopping', 'stopped',
                     'cancelled', 'failed', 'recovery_required', 'external_owner'))
@@ -126,6 +131,14 @@ def _libraries():
     from voice_assistant.config import validate_config
     from voice_assistant.service import ServiceSettings
     return sys.modules[name], validate_config, ServiceSettings
+
+
+@dataclass(frozen=True)
+class ControlPhone:
+    """Trusted physical identity for fencing; it does not enable voice Start."""
+    phone_id: str
+    lines: tuple[str, ...]
+    device: str = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -312,7 +325,7 @@ class VoiceControl:
     Only verified cleanup permits another start. Never remove a live lock file.
     """
     def __init__(self, config, *, authorize, runner_factory=_SubprocessHandle,
-                 clock=time.monotonic, monitor=True):
+                 clock=time.monotonic, monitor=True, control_phones=None):
         _require(isinstance(config, ControlConfig) and callable(authorize))
         _require(1 <= len(config.profiles) <= 32 and type(config.enabled) is bool)
         _require(all(isinstance(p, Profile) and type(p.duration) in (int, float)
@@ -328,8 +341,30 @@ class VoiceControl:
         display_endpoints = [(p.bind_ipv4, p.display_port) for p in config.profiles
                              if p.display_port is not None]
         _require(len(display_endpoints) == len(set(display_endpoints)), 'voice_display_port_collision')
+        if control_phones is None:
+            control_phones = tuple(ControlPhone(p.phone_id, p.lines, p.device)
+                                   for p in config.profiles)
+        _require(isinstance(control_phones, tuple) and 1 <= len(control_phones) <= 100,
+                 'invalid_control_phone_inventory')
+        for phone in control_phones:
+            _require(isinstance(phone, ControlPhone)
+                     and isinstance(phone.phone_id, str)
+                     and isinstance(phone.lines, tuple) and 1 <= len(phone.lines) <= 2
+                     and phone.phone_id == phone.lines[0]
+                     and all(isinstance(line, str) and re.fullmatch(r'2[0-9]{2}', line)
+                             for line in phone.lines)
+                     and isinstance(phone.device, str) and re.fullmatch(r'SEP[0-9A-F]{12}', phone.device),
+                     'invalid_control_phone_inventory')
+        control_lines = [line for phone in control_phones for line in phone.lines]
+        _require(len(control_lines) == len(set(control_lines))
+                 and len({phone.device for phone in control_phones}) == len(control_phones),
+                 'duplicate_control_phone')
+        by_id = {phone.phone_id: phone for phone in control_phones}
+        _require(all(by_id.get(p.phone_id) == ControlPhone(p.phone_id, p.lines, p.device)
+                     for p in config.profiles), 'control_phone_inventory_mismatch')
         self.config, self.authorize, self.runner_factory, self.clock = config, authorize, runner_factory, clock
         self._profiles = {line: p for p in config.profiles for line in p.lines}
+        self._control_phones = {line: phone for phone in control_phones for line in phone.lines}
         self._sessions, self._requests = OrderedDict(), {}
         self._current, self._lock, self._wake = {}, threading.RLock(), threading.Event()
         self._closed = False
@@ -340,7 +375,8 @@ class VoiceControl:
 
     def _profile(self, target, context, action):
         # Invalid targets reveal no registry/configuration before authorization.
-        p = self._profiles.get(target) if isinstance(target, str) else None
+        profiles = self._control_phones if action == 'control' else self._profiles
+        p = profiles.get(target) if isinstance(target, str) else None
         try:
             allowed = self.authorize(context, action, p.phone_id if p else None) is True
         except Exception:
@@ -413,6 +449,44 @@ class VoiceControl:
             if 'fd' in locals():
                 os.close(fd)
             raise
+
+    def reserve_control(self, target, *, context):
+        """Fence direct phone I/O against every manager using this state directory.
+
+        This temporary reservation never changes a voice journal or signals a
+        runner. Hold only the file descriptor across caller I/O, not the manager
+        lock: status and Stop must remain available. The locked current journal,
+        rather than a stale local session, determines external ownership.
+        """
+        p = self._profile(target, context, 'control')
+        return self._reserve_phone(p, shutdown=False)
+
+    def reserve_shutdown(self, target, *, context):
+        """Retain a quiescent phone's fence until authentication listeners close."""
+        p = self._profile(target, context, 'control')
+        return self._reserve_phone(p, shutdown=True)
+
+    @contextmanager
+    def _reserve_phone(self, p, *, shutdown):
+        fd = None
+        try:
+            with self._lock:
+                if shutdown:
+                    _require(self._closed, 'voice_shutdown_not_started', 503)
+                else:
+                    _require(not self._closed, 'voice_control_closed', 503)
+                try:
+                    fd = self._acquire(p)
+                    prior = self._journal(p)
+                except OSError:
+                    raise ControlError('voice_state_unavailable', 503) from None
+                _require(not prior or not prior['active'] and prior['state'] not in {
+                    'starting', 'running', 'stopping', 'recovery_required', 'external_owner'},
+                    'voice_phone_busy', 409)
+            yield
+        finally:
+            if fd is not None:
+                os.close(fd)
 
     def _view(self, s):
         remaining = 0 if s.started is None else max(0, s.profile.duration - (self.clock() - s.started))

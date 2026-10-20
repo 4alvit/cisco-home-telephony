@@ -33,6 +33,22 @@ actual mount. Compare the live gateway's mount and private registry before
 running a pilot. It deliberately uses `hostPath.type: Directory`, never creates
 a missing directory, and does not set `fsGroup` on existing storage.
 
+The gateway must be running the shared direct-control reservation implementation,
+with voice control attached and the selected handset in its inventory. This
+fences direct commands even when that handset has no manual voice profile.
+Deploy the gateway using the current gateway renderer before enabling a wake
+Job: its termination grace defaults to at least 180 seconds, with a larger
+minimum for large inventories. An image-only update retaining an older 75-second
+grace is insufficient. The gateway may retain callbacks for up to 145 seconds
+while an external owner completes its full primary and uncertain-cleanup budgets,
+and holds quiescent phones' locks through final listener closure.
+Before releasing the suspended Job, resolve any gateway command with an unknown
+outcome, including commands interrupted by a gateway crash or HTTP timeout, and
+confirm the handset is idle. The temporary direct-command lock ends when its
+process or request ends; it cannot exclude delayed delivery of an earlier HTTP
+command. The Job does not automatically check or clear these uncertain operations.
+Do not release new wake Jobs during gateway shutdown.
+
 The model PVC is mounted read-only into a non-root init container. A separate
 initializer creates the fresh private runtime directory; only that initializer
 runs as root, with `CHOWN` and no access to models, credentials or host state.
@@ -113,12 +129,19 @@ The display progresses through Listening, Thinking and Speaking. Use its
 **Stop** softkey to finish. The normal SIP call observer also ends capture when
 the phone becomes busy, unavailable or uncertain.
 
-For a remote stop, terminate this exact Job with its normal grace period:
+For a remote stop, terminate this exact Job with its normal 120-second grace
+period. This is the wake Job's own stop budget; the gateway Deployment separately
+requires at least 180 seconds so its callbacks can outlive a draining Job:
 
 ```sh
 kubectl --kubeconfig .local/kubeconfig --context YOUR_CONTEXT \
-  -n YOUR_NAMESPACE delete job EXACT_JOB_NAME --grace-period=75
+  -n YOUR_NAMESPACE delete job EXACT_JOB_NAME --grace-period=120
 ```
+
+The Job budget includes up to 45 seconds waiting for the child to stop,
+two seconds for its report, a separate 55-second uncertain-cleanup drain, and
+18 seconds of margin. A shorter grace can kill the wrapper before that drain
+finishes.
 
 Do not use force deletion or a zero grace period as a normal stop mechanism.
 The process forwards shutdown to the session owner and preserves time for the

@@ -246,9 +246,11 @@ uncertainty. Never create a fresh Start automatically after an ambiguous reply.
 Existing exact-source and Bearer checks apply to API requests. Phone menu
 requests use the existing source-checked, per-phone application path and a
 one-use microphone confirmation. Closing the gateway requests owned-session
-cleanup; give the runtime more than 47 seconds to finish. Persist the private
-voice state through replacement and never delete a lock or journal to bypass
-an unresolved session.
+cleanup and retains authentication callbacks for up to 145 seconds while local
+or external owners drain. Use the gateway renderer's minimum 180-second Pod
+termination grace; larger inventories may require more time for listener
+closure. Persist the private voice state through replacement and never delete
+a lock or journal to bypass an unresolved session.
 
 ## Behavioral limits
 

@@ -47,7 +47,7 @@
 
   <rect x="48" y="471" width="1184" height="304" rx="20" fill="white" stroke="#adc1d4" stroke-width="2"/>
   <text x="70" y="507" class="heading">voice-node · 192.0.2.20</text>
-  <text x="1210" y="507" text-anchor="end" class="small">One replica · Recreate · ≥60s grace · host network</text>
+  <text x="1210" y="507" text-anchor="end" class="small">One replica · Recreate · ≥180s grace · host network</text>
 
   <rect x="70" y="529" width="320" height="159" rx="14" fill="#fff1d9" stroke="#e6ba6d"/>
   <text x="90" y="562" class="heading">Init: stage private files</text>

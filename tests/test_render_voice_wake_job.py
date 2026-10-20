@@ -56,7 +56,11 @@ class WakeJobTests(unittest.TestCase):
         pod = spec["template"]["spec"]
         self.assertEqual(pod["restartPolicy"], "Never")
         self.assertFalse(pod["automountServiceAccountToken"])
-        self.assertEqual(pod["terminationGracePeriodSeconds"], 75)
+        self.assertEqual(pod["terminationGracePeriodSeconds"], 120)
+        self.assertGreaterEqual(
+            pod["terminationGracePeriodSeconds"],
+            r.control.STOP_GRACE_SECONDS + r.control.REPORT_GRACE_SECONDS
+            + r.control.UNCERTAIN_CLEANUP_SECONDS + 10)
         self.assertNotIn("fsGroup", pod["securityContext"])
         self.assertIn("synthetic-node", json.dumps(pod["affinity"]))
 
