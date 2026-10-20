@@ -281,10 +281,11 @@ does not update a running service. No failure was injected into the installation
   and [real Store tests](https://github.com/ha-homelab/asterisk-telephony/blob/main/tests/test_schedule_storage.py)
   exercise these lifecycle boundaries.
 
-Cancellation cannot undo a completed filesystem write. A successfully written
-candidate is reflected in memory before cancellation is reported; inspect
-schedule status before retrying. A filesystem error after replacement can also
-leave an uncertain disk outcome. These repairs do not promise that every failed
+Cancellation cannot undo a completed filesystem write. An acknowledged
+candidate is reflected in memory before deferred caller cancellation is reported;
+inspect schedule status before retrying. Internal save cancellation or a
+filesystem error after replacement can leave an uncertain disk outcome. These
+repairs do not promise that every failed
 request leaves the old file intact or that an alarm will fire during an outage.
 
 The pinned upstream AMI adapter has additional source-derived limits: synchronous
