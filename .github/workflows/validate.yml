@@ -79,6 +79,7 @@ jobs:
         run: bash scripts/smoke-containers.sh cisco-home-ci
       - name: Verify isolated L16 media and native call expiry
         run: |
+          umask 077
           .venv/bin/python -m tools.l16_lab asterisk \
             --image cisco-home-ci/asterisk:22.11.0 \
             --docker-socket /var/run/docker.sock \
