@@ -138,7 +138,11 @@ python3 tests/ami_runtime.py "$container" "$test_root/generated/ha-ami-secret.js
 python3 tests/gateway_ami_runtime.py "$container" "$test_root/generated/gateway-ami-secret.json"
 python3 scripts/test-alert-originate.py --image "$prefix/asterisk:22.11.0"
 python3 scripts/test-intercom-originate.py --image "$prefix/asterisk:22.11.0"
-docker exec "$container" asterisk -rx 'module show like app_audiosocket' | grep -E 'app_audiosocket.so.*Running' > /dev/null
+python3 scripts/test-radio-wideband.py --image "$prefix/asterisk:22.11.0"
+for module in chan_audiosocket codec_g722 codec_resample; do
+  docker exec "$container" asterisk -rx "module show like $module" |
+    grep -Eq "^[[:space:]]*$module[.]so[[:space:]].*[[:space:]][0-9]+[[:space:]]+Running([[:space:]]|$)"
+done
 docker exec "$container" asterisk -rx 'dialplan show 702@home' | grep -F 'AGI(radio.py,echo)' > /dev/null
 docker exec "$container" asterisk -rx 'dialplan show 640@home' | grep -F 'Wait(2)' > /dev/null
 docker exec "$container" asterisk -rx 'channel originate Local/799@radio-smoke application Wait 3' > /dev/null
@@ -151,6 +155,7 @@ import json, struct, wave
 from pathlib import Path
 receipt=json.loads(Path('/tmp/radio-fixture.json').read_text())
 assert receipt['calls']==1 and receipt['frames']>=50 and receipt['decoder_reaped'], receipt
+assert receipt['sample_rate']==16000 and receipt['frame_bytes']==640 and receipt['audio_kind']==0x12, receipt
 with wave.open('/tmp/radio-smoke.wav','rb') as recording:
     assert recording.getframerate()==8000 and recording.getnframes()>=8000
     data=recording.readframes(recording.getnframes())

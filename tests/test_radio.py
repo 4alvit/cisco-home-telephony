@@ -2,6 +2,7 @@ import copy
 import importlib.util
 import io
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -13,7 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import uuid
 
 ROOT = Path(__file__).parents[1]
@@ -183,7 +184,38 @@ class RadioIsolation(unittest.TestCase):
         args = r.ffmpeg_args(r.catalog()["echo"])
         self.assertEqual(args[args.index("-i") + 1], "pipe:0")
         self.assertEqual(args[args.index("-protocol_whitelist") + 1], "pipe")
+        self.assertEqual(args[args.index("-ar") + 1], "16000")
+        self.assertEqual(args[args.index("-ac") + 1], "1")
+        self.assertEqual(args[args.index("-c:a") + 1], "pcm_s16le")
         self.assertNotIn("https", " ".join(args))
+
+    def test_agi_uses_wideband_channel_driver_and_returns_after_worker_hangup(self):
+        token = uuid.UUID("00000000-0000-4000-8000-000000000001")
+        listener = Mock()
+        listener.getsockname.return_value = ("127.0.0.1", 32123)
+        call = Mock(failed=False)
+        cfg = json.dumps({"enabled": True, "stations": ["echo"], "max_seconds": 30})
+        with patch.object(r.sys, "argv", ["radio.py", "echo"]), \
+                patch.object(r.sys, "stdin", io.StringIO("\n")), \
+                patch.object(r.Path, "read_text", return_value=cfg), \
+                patch.object(r, "catalog", return_value={"echo": {"format": "mp3"}}), \
+                patch.object(r, "acquire_slot", return_value=None), \
+                patch.object(r.socket, "socket", return_value=listener), \
+                patch.object(r.uuid, "uuid4", return_value=token), \
+                patch.object(r, "Call", return_value=call), \
+                patch.object(r.threading, "Thread") as worker, \
+                patch.object(r.signal, "signal"), patch.object(r.signal, "alarm"), \
+                patch.object(r, "command", return_value="200 result=0\n") as command:
+            self.assertEqual(r.main(), 0)
+        self.assertEqual([item.args[0] for item in command.call_args_list], [
+            f"EXEC Dial AudioSocket/127.0.0.1:32123/{token}/c(slin16),5,g",
+            'SET VARIABLE RADIOSTATUS "ok"',
+        ])
+        worker.return_value.start.assert_called_once_with()
+        worker.return_value.join.assert_called_once_with(timeout=3)
+        listener.bind.assert_called_once_with(("127.0.0.1", 0))
+        listener.close.assert_called_once_with()
+        self.assertTrue(call.close.called)
 
     def test_slot_limit_releases_after_call(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -209,30 +241,65 @@ class RadioIsolation(unittest.TestCase):
             popen.assert_not_called()
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg required for real decoder test")
-    def test_real_mp3_decode_is_paced_and_hangup_reaps_process(self):
-        audio = subprocess.check_output(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
-                                         "-f", "mp3", "pipe:1"], stderr=subprocess.DEVNULL, timeout=10)
+    def test_real_mp3_and_aac_preserve_wideband_audio_and_reap_on_hangup_or_hash(self):
         class Http:
             def close(self):
                 pass
-        token = uuid.uuid4()
-        call = r.Call(r.catalog()["echo"], 4, token, opener=lambda _s: (Http(), io.BytesIO(audio)))
-        listener = socket.socket(); listener.bind(("127.0.0.1", 0)); listener.listen(1); listener.settimeout(1)
-        thread = threading.Thread(target=call.serve, args=(listener,)); thread.start()
-        with socket.create_connection(listener.getsockname(), timeout=3) as conn:
-            conn.sendall(b"\x01\x00\x10" + token.bytes)
-            samples = []
-            start = time.monotonic()
-            for _ in range(25):
-                kind, data = r.receive_frame(conn)
-                self.assertEqual(kind, 0x10); self.assertEqual(len(data), 320)
-                samples.extend(struct.unpack("<160h", data))
-            self.assertGreater(time.monotonic() - start, .35)
-            self.assertGreater(max(abs(x) for x in samples), 100)
-            conn.sendall(b"\x00\x00\x00")
-        thread.join(3); listener.close()
-        self.assertFalse(thread.is_alive())
-        self.assertIsNotNone(call.proc.poll())
+
+        def amplitude(samples, frequency):
+            phase = 2 * math.pi * frequency / 16000
+            real = sum(sample * math.cos(phase * index) for index, sample in enumerate(samples))
+            imaginary = sum(sample * math.sin(phase * index) for index, sample in enumerate(samples))
+            return 2 * math.hypot(real, imaginary) / len(samples)
+
+        for station, encoding, end_frame in (
+                ("echo", "mp3", b"\x00\x00\x00"),
+                ("deti-toddlers", "adts", b"\x03\x00\x01#")):
+            with self.subTest(station=station):
+                # A 5 kHz tone cannot survive the former 8 kHz source path.
+                audio = subprocess.check_output([
+                    "ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                    "aevalsrc=0.2*sin(2*PI*1000*t)+0.2*sin(2*PI*5000*t):s=48000:d=4",
+                    "-f", encoding, "pipe:1"], stderr=subprocess.DEVNULL, timeout=10)
+                token = uuid.uuid4()
+                call = r.Call(r.catalog()[station], 4, token,
+                              opener=lambda _s: (Http(), io.BytesIO(audio)))
+                listener = socket.socket()
+                listener.bind(("127.0.0.1", 0))
+                listener.listen(1)
+                listener.settimeout(1)
+                thread = threading.Thread(target=call.serve, args=(listener,))
+                thread.start()
+                try:
+                    with socket.create_connection(listener.getsockname(), timeout=3) as conn:
+                        conn.sendall(b"\x01\x00\x10" + token.bytes)
+                        # G.711 or G.722 callers arrive at the worker translated
+                        # to slin16; their input is accepted and discarded.
+                        conn.sendall(b"\x12\x02\x80" + bytes(640))
+                        samples = []
+                        start = time.monotonic()
+                        for _ in range(25):
+                            kind, data = r.receive_frame(conn)
+                            self.assertEqual(kind, 0x12)
+                            self.assertEqual(len(data), 640)
+                            samples.extend(struct.unpack("<320h", data))
+                        self.assertGreater(time.monotonic() - start, .35)
+                        steady = samples[1600:]
+                        self.assertGreater(amplitude(steady, 1000), 500)
+                        self.assertGreater(amplitude(steady, 5000), 500)
+                        conn.sendall(end_frame)
+                        # Leave the socket open until the worker exits: this
+                        # proves '#' itself cancels rather than client EOF.
+                        thread.join(3)
+                        self.assertFalse(thread.is_alive())
+                finally:
+                    call.close()
+                    listener.close()
+                    thread.join(3)
+                self.assertFalse(thread.is_alive())
+                self.assertTrue(call.stop.is_set())
+                self.assertIsNotNone(call.proc)
+                self.assertIsNotNone(call.proc.poll())
 
 
 if __name__ == "__main__":

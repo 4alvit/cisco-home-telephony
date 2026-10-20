@@ -108,12 +108,13 @@ The `alarms.duration_seconds` setting controls only the legacy/manual 640 tone.
 It does not set the duration of a scheduled alert. The new alert context is
 generated for an enabled gateway and verified phone inventory.
 
-Build the image containing Python, FFmpeg, `app_audiosocket`, `res_audiosocket`
-and `res_agi`. Reusing an old image while changing only `site.json` is not
+Build the image containing Python, FFmpeg, `chan_audiosocket`, `res_audiosocket`,
+`codec_g722`, `codec_resample` and `res_agi`. Reusing an old image while changing only `site.json` is not
 sufficient. Deploy its verified architecture-specific digest using the
 [k3s runbook](k3s-deployment.md), after checking that all calls are idle.
 Readiness checks require the radio worker, FFmpeg and running AudioSocket
-application when radio is enabled.
+channel driver when radio is enabled. See [wideband audio](audio-quality.md)
+for the 16 kHz worker, phone codec configuration and verification.
 
 Use the same private output directory that contains the existing secrets:
 
@@ -227,16 +228,21 @@ each playlist and segment URL; playlists are capped at 64 KiB, segments at
 features are rejected. Both adapters impose a total byte ceiling. There is
 one decoder per call, with bounded threading and no unbounded audio queue.
 
-PCM is mono, signed 16-bit little-endian, 8 kHz, paced in 20 ms frames with a
-0.5 volume multiplier. Asterisk converts this to the phone's negotiated
-G.711 codec. Incoming microphone frames are discarded; they are never sent
+The current source produces mono, signed 16-bit little-endian PCM at **16 kHz**,
+paced in 20 ms / 640-byte frames with a 0.5 volume multiplier. The worker uses
+`Dial(AudioSocket/.../c(slin16))` so the channel stays wideband; the older
+`AudioSocket()` application forces 8 kHz. Asterisk converts the stream to the
+phone's negotiated **G.722**, with G.711 fallback for a narrowband caller.
+The dated live results above describe the previous 8 kHz worker, not proof
+that an installed system already has this upgrade.
+Incoming microphone frames are discarded; they are never sent
 to the station or recorded. Network operations time out after eight seconds;
 initial audio has a 15-second startup bound. A channel-bound watchdog provides
 a final bound if an operation stalls. Hangup, `#`, time limit or failure closes
 the AudioSocket and terminates/reaps FFmpeg. There is no background fetch
 between calls.
 
-This uses Asterisk's documented [AudioSocket application](https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/Dialplan_Applications/AudioSocket/),
+This uses Asterisk's [AudioSocket channel driver](https://github.com/asterisk/asterisk/blob/22.11.0/channels/chan_audiosocket.c),
 [AudioSocket framing](https://docs.asterisk.org/Configuration/Channel-Drivers/AudioSocket/)
 and [AGI application](https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/Dialplan_Applications/AGI/),
 plus FFmpeg's [protocol whitelist and pipe protocol](https://ffmpeg.org/ffmpeg-protocols.html).

@@ -261,8 +261,8 @@ def render_core(site, configs):
         probe["timeoutSeconds"] = 5
         probe["exec"]["command"][2] += (
             "; test -x /var/lib/asterisk/agi-bin/radio.py; command -v ffmpeg >/dev/null"
-            "; asterisk -rx 'module show like app_audiosocket'"
-            " | grep -Eq '^[[:space:]]*app_audiosocket[.]so[[:space:]].*[[:space:]][0-9]+[[:space:]]+Running([[:space:]]|$)'"
+            "; asterisk -rx 'module show like chan_audiosocket'"
+            " | grep -Eq '^[[:space:]]*chan_audiosocket[.]so[[:space:]].*[[:space:]][0-9]+[[:space:]]+Running([[:space:]]|$)'"
         )
     if site.get("phone_services", {}).get("enabled"):
         probe = spec["containers"][0]["readinessProbe"]

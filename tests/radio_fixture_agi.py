@@ -15,9 +15,12 @@ class Source:
         pass
 
 class FixtureCall(radio.Call):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, station, seconds, token, **kwargs):
         data = Path("/var/lib/asterisk/radio-fixture.mp3").read_bytes()
-        super().__init__(*args, **kwargs, opener=lambda _station: (Source(), io.BytesIO(data)))
+        # Fixture-only upper bound: smoke tests can observe normal completion
+        # without waiting for the production minimum station time limit.
+        super().__init__(station, min(seconds, 3), token, **kwargs,
+                         opener=lambda _station: (Source(), io.BytesIO(data)))
         instances.append(self)
 
 radio.Call = FixtureCall
@@ -28,4 +31,7 @@ finally:
         "calls": len(instances),
         "frames": sum(x.frames for x in instances),
         "decoder_reaped": all(x.proc is not None and x.proc.poll() is not None for x in instances),
+        "sample_rate": radio.SAMPLE_RATE,
+        "frame_bytes": radio.FRAME_BYTES,
+        "audio_kind": radio.AUDIO_KIND,
     }))

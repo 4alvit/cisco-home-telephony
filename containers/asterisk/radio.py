@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Per-call AGI radio: curated HTTP audio -> FFmpeg pipe -> local AudioSocket.
+"""Per-call AGI radio: curated HTTP audio -> 16 kHz PCM -> AudioSocket channel.
 
 No daemon, recording, arbitrary URL argument, shell command or idle fetching.
 Only the AudioSocket UUID for this AGI call can start a network fetch.
+The channel driver preserves wideband PCM; the AudioSocket dialplan application
+would force the call back to 8 kHz. Asterisk transcodes for narrowband callers.
 """
 import contextlib
 import fcntl
@@ -28,7 +30,11 @@ CATALOG = Path(__file__).with_name("radio-catalog.json")
 IO_TIMEOUT = 8
 START_TIMEOUT = 15
 MAX_REDIRECTS = 3
-FRAME_BYTES = 320  # 20 ms, 8 kHz, signed 16-bit little-endian mono.
+SAMPLE_RATE = 16000
+FRAME_SECONDS = .02
+FRAME_SAMPLES = SAMPLE_RATE // 50
+FRAME_BYTES = FRAME_SAMPLES * 2  # 640 bytes: 20 ms, signed 16-bit LE mono.
+AUDIO_KIND = 0x12  # AudioSocket signed linear PCM at 16 kHz (slin16).
 USER_AGENT = "HomeTelephony/1.0"
 GPM_CHANNELS = {327, 95, 93}
 GPM_API_LIMIT = 65536
@@ -243,7 +249,7 @@ def ffmpeg_args(station):
         raise ValueError("unsupported stream encoding")
     return ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
             "-protocol_whitelist", "pipe", "-threads", "1", "-filter_threads", "1",
-            "-probesize", "32768", "-analyzeduration", "0", "-f", station["format"], "-i", "pipe:0", "-vn", "-ac", "1", "-ar", "8000",
+            "-probesize", "32768", "-analyzeduration", "0", "-f", station["format"], "-i", "pipe:0", "-vn", "-ac", "1", "-ar", str(SAMPLE_RATE),
             "-af", "volume=0.5", "-c:a", "pcm_s16le", "-f", "s16le", "pipe:1"]
 
 
@@ -265,7 +271,7 @@ def receive_frame(conn):
 
 
 def send_audio(conn, data):
-    conn.sendall(struct.pack("!BH", 0x10, len(data)) + data)
+    conn.sendall(struct.pack("!BH", AUDIO_KIND, len(data)) + data)
 
 
 def acquire_slot(directory, count):
@@ -346,7 +352,7 @@ class Call:
                 kind, data = receive_frame(conn)
                 if kind == 0 or kind == 0xff or (kind == 3 and data == b"#"):
                     break
-                if kind not in (0x10, 3):
+                if kind not in (0x10, AUDIO_KIND, 3):
                     raise ValueError("unexpected AudioSocket message")
                 # Caller audio is deliberately discarded, never stored or transmitted.
         except (OSError, EOFError, ValueError):
@@ -393,7 +399,8 @@ class Call:
                         send_audio(conn, pending[:FRAME_BYTES])
                         del pending[:FRAME_BYTES]
                         self.frames += 1
-                        next_frame = max(next_frame + .02, time.monotonic() - .02)
+                        next_frame = max(next_frame + FRAME_SECONDS,
+                                         time.monotonic() - FRAME_SECONDS)
                 # The AGI caller plays a finite local failure tone after AudioSocket returns.
                 with contextlib.suppress(OSError):
                     conn.sendall(b"\x00\x00\x00")
@@ -441,7 +448,11 @@ def main():
         thread = threading.Thread(target=call.serve, args=(listener,), daemon=True)
         thread.start()
         signal.alarm(cfg["max_seconds"] + START_TIMEOUT + 10)
-        command(f"EXEC AudioSocket {token},127.0.0.1:{listener.getsockname()[1]}")
+        # Dial's channel codec option prevents the app_audiosocket 8 kHz
+        # conversion. The local leg answers immediately; g returns to AGI
+        # after worker termination so RADIOSTATUS/failure handling still runs.
+        command(f"EXEC Dial AudioSocket/127.0.0.1:{listener.getsockname()[1]}"
+                f"/{token}/c(slin16),5,g")
         call.close()
         thread.join(timeout=3)
         command('SET VARIABLE RADIOSTATUS "' + ("failed" if call.failed else "ok") + '"')

@@ -22,6 +22,9 @@ RUN curl -fL --retry 3 "https://downloads.asterisk.org/pub/telephony/asterisk/as
     && make -j2 \
     && make install DESTDIR=/stage
 RUN test -f /stage/usr/lib/asterisk/modules/app_audiosocket.so \
+    && test -f /stage/usr/lib/asterisk/modules/chan_audiosocket.so \
+    && test -f /stage/usr/lib/asterisk/modules/codec_g722.so \
+    && test -f /stage/usr/lib/asterisk/modules/codec_resample.so \
     && test -f /stage/usr/lib/asterisk/modules/app_signal.so \
     && test -f /stage/usr/lib/asterisk/modules/res_audiosocket.so \
     && test -f /stage/usr/lib/asterisk/modules/res_agi.so \

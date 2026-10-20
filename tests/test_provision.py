@@ -2,6 +2,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import re
 import stat
 import tempfile
 import unittest
@@ -60,6 +61,68 @@ class ProvisionTest(unittest.TestCase):
             self.assertEqual(x.findtext('.//displayName'),'Home Office Upstairs')
             (Path(tmp)/'secrets.json').write_text(json.dumps({'201':'a'*32}))
             with self.assertRaises(ValueError):p.generate(self.site,self.inventory,tmp)
+
+    def test_wideband_capability_and_local_preference_cover_both_lines_and_transports(self):
+        for transport in ('tcp', 'udp'):
+            with self.subTest(transport=transport), tempfile.TemporaryDirectory() as tmp:
+                inventory = copy.deepcopy(self.inventory)
+                phone = inventory['phones'][0]
+                phone.pop('extension')
+                phone.update(transport=transport, lines=[
+                    {'extension': '201', 'label': '201'},
+                    {'extension': '202', 'label': '202'}])
+                p.generate(self.site, inventory, tmp)
+                root = Path(tmp)
+                xml = ET.parse(root / 'tftp/SEP020000000001.cnf.xml')
+                self.assertEqual(xml.findtext('./vendorConfig/g722CodecSupport'), '2')
+                self.assertIsNone(xml.find('./sipProfile/g722CodecSupport'))
+                # Do not introduce an unverified G.722 spelling in SIP45 XML.
+                self.assertEqual(xml.findtext('./sipProfile/preferredCodec'), 'g711ulaw')
+                config = (root / 'asterisk/pjsip.conf').read_text()
+                endpoints = {
+                    name: body for name, body in re.findall(
+                        r'^\[([^]]+)\]\n(.*?)(?=^\[|\Z)', config, re.M | re.S)
+                    if 'type=endpoint\n' in body}
+                self.assertEqual(set(endpoints), {'201', '202'})
+                for body in endpoints.values():
+                    values = dict(line.split('=', 1) for line in body.splitlines() if '=' in line)
+                    self.assertEqual(values['allow'].split(','), ['g722', 'ulaw', 'alaw'])
+                    self.assertEqual(values['disallow'], 'all')
+                    self.assertEqual(values['incoming_call_offer_pref'], 'local')
+                    self.assertEqual(values['outgoing_call_offer_pref'], 'local_merge')
+                    self.assertEqual(values['transport'], 'transport-' + transport)
+                    self.assertEqual(values['direct_media'], 'no')
+                    self.assertNotIn('preferred_codec_only', values)
+                    self.assertFalse(any(key.startswith('codec_prefs_') for key in values))
+
+    def test_wideband_local_policy_does_not_change_external_or_assist_endpoints(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            credentials = root / 'credentials.json'
+            credentials.write_text(json.dumps({
+                'username': '17770000001', 'password': 'test_password_only_123'}))
+            credentials.chmod(0o600)
+            site = copy.deepcopy(self.site)
+            site['external_sip'] = {
+                'enabled': True, 'public_ipv4': '8.8.8.8',
+                'accounts': [{'provider': 'callcentric', 'enabled': True,
+                              'credentials_file': str(credentials)}]}
+            site['home_assistant'] = {
+                'enabled': True, 'ami_client_ipv4': '192.168.50.30',
+                'assist': {'enabled': True, 'host_ipv4': '192.168.50.30'}}
+            external = p.external_sip.generate(site)
+            p.generate(site, self.inventory, root / 'output')
+            config = (root / 'output/asterisk/pjsip.conf').read_text()
+            self.assertEqual(config.count(external['pjsip']), 1)
+            self.assertNotIn('g722', external['pjsip'])
+            self.assertNotIn('call_offer_pref', external['pjsip'])
+            self.assertIn('allow=ulaw,alaw\n', external['pjsip'])
+            assist = next(body for name, body in re.findall(
+                r'^\[([^]]+)\]\n(.*?)(?=^\[|\Z)', config, re.M | re.S)
+                if name == 'ha-assist')
+            self.assertIn('allow=opus\n', assist)
+            self.assertNotIn('g722', assist)
+            self.assertNotIn('call_offer_pref', assist)
 
     def test_removed_phone_profile_is_not_served(self):
         with tempfile.TemporaryDirectory() as tmp:

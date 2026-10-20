@@ -468,6 +468,8 @@ def phone_xml(phone, ip, ntp, passwords, management=None):
     sub(stack,"remotePartyID","true")
     for k,v in {"sipInviteRetx":6,"sipRetx":10,"timerRegisterExpires":300,"timerRegisterDelta":5,"timerInviteExpires":180,"timerKeepAliveExpires":120,"timerT1":500,"timerT2":4000}.items():
         sub(stack,k,v)
+    # Retain the known SIP45 preferredCodec token. G.722 is enabled below and
+    # preferred by Asterisk's local offer policy, without guessing a new token.
     for k,v in {"enableVad":"false","natEnabled":"false","voipControlPort":5060,"preferredCodec":"g711ulaw","dtmfAvtPayload":101,"dtmfOutofBand":"avt","dtmfDbLevel":3,"phoneLabel":phone["label"].replace(" ","_")[:12],"stutterMsgWaiting":0,"callStats":"false","silentPeriodBetweenCallWaitingBursts":10,"disableLocalSpeedDialConfig":"false","startMediaPort":16384,"stopMediaPort":16482}.items():
         sub(profile,k,v)
     sip_lines = sub(profile,"sipLines")
@@ -488,6 +490,9 @@ def phone_xml(phone, ip, ntp, passwords, management=None):
     sub(vendor,"webAccess",0 if phone.get("web_access",False) else 1)
     sub(vendor,"sshAccess",0 if phone.get("ssh_enabled",False) else 1)
     sub(vendor,"settingsAccess",1)
+    # Cisco service-phone reference: 0=default, 1=disabled, 2=enabled.
+    # https://www.cisco.com/c/en/us/td/docs/voice_ip_comm/cucme/command/reference/cme_cr/cme_s1ht.html
+    sub(vendor,"g722CodecSupport",2)
     sub(d,"deviceSecurityMode",1)
     sub(d,"transportLayerProtocol",2 if phone.get("transport","tcp")=="udp" else 1)
     sub(d,"certHash","")
@@ -574,12 +579,17 @@ def generate(site, inventory, out, *, pbx_only=False):
         for line in phone_lines(p):
             ext, label = line["extension"], p.get("room", line["label"])
             pw=passwords[ext]
+            # Asterisk 22 uses *_call_offer_pref; codec_prefs_* is reserved.
+            # Keep both G.711 variants for peers without G.722.
+            # https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/Module_Configuration/res_pjsip/#incoming_call_offer_pref
             pjsip.append(f'''[{ext}]
 type=endpoint
 transport=transport-{transport}
 context=home
 disallow=all
-allow=ulaw,alaw
+allow=g722,ulaw,alaw
+incoming_call_offer_pref=local
+outgoing_call_offer_pref=local_merge
 auth=auth-{ext}
 aors={ext}
 direct_media=no
