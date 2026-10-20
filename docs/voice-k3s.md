@@ -242,6 +242,29 @@ which never finishes also does not reach the finished-Job TTL. Avoid broad
 namespace deletion or selectors that could match the PBX's resources.
 [Kubernetes finished-Job cleanup](https://kubernetes.io/docs/concepts/workloads/controllers/ttlafterfinished/).
 
+## Troubleshoot the control-plane path first
+
+An API timeout from the operator's laptop does not prove the cluster is down.
+During rollout, an accepted VPN subnet route intercepted the laptop's API
+traffic while a LAN node could still reach the same server. Compare the actual
+route and a request from a known local node before changing the deployment.
+A temporary loopback-only SSH forward can isolate that routing problem while
+retaining the existing client credentials, CA verification and the API server's
+original TLS name. Do not disable certificate verification or expose the tunnel
+to other hosts. Keep the exact addresses and temporary kubeconfig private.
+
+Check API readiness separately from authenticated reads and running workloads.
+In the observed cluster, pod listing worked while the `etcd-readiness` check
+failed. Logs identified a Kine/SQLite datastore and CPU contention, so the
+check's name alone was insufficient to identify the storage backend. The
+control-plane host had a long runnable queue and high CPU pressure while a
+backup compression process competed for CPU; disk space was not exhausted.
+Inspect process ownership and CPU, memory and I/O pressure before restarting
+services. A bounded change to a verified background process's priority is
+different from stopping its backup; record the original priority and a guarded
+restore procedure. Schedule model preparation and recognition away from a
+CPU-starved control-plane node.
+
 ## Local validation
 
 Run the renderer's synthetic tests without cluster access:

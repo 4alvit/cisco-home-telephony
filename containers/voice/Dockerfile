@@ -14,9 +14,9 @@ RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
     && apt-get -o Acquire::Retries=3 update \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd --gid 10001 voice \
+    && groupadd --gid 10001 cisco-voice \
     && useradd --uid 10001 --gid 10001 --no-create-home \
-       --home-dir /nonexistent --shell /usr/sbin/nologin voice \
+       --home-dir /nonexistent --shell /usr/sbin/nologin cisco-voice \
     && mkdir -p /run/voice/.local /workspace
 
 COPY containers/voice/requirements.lock /opt/voice/requirements.lock

@@ -256,17 +256,24 @@ directly; for compressed TTS use the embedding API with `FFmpegDecoder` supplied
 to `build_service`. Live headless replay results and synthesized audio are kept
 under `.local`; they do not establish physical-phone acceptance.
 
-A private compact conversation candidate completed one live synthetic replay in
-23.98 seconds from activation through reply decoding into an unpaced memory
-sink, within its 30-second deadline. The decoded reply was 1.2 seconds long;
-physical playback latency was not measured. This baseline uses a short prompt,
+A separate Ollama integration entry, compact conversation agent and Assist
+pipeline were created for the private candidate. Two live synthetic replays
+completed in 23.98 and 15.80 seconds from activation through reply decoding into
+an unpaced memory sink, both within the 30-second deadline. Each returned the
+requested phrase as a 1.2-second reply. This baseline uses a short prompt,
 2,048-token context, history of one and no language-model home-control tools;
 built-in local intents run first. It retains cloud STT pending local-STT
 integration. A 500-frame input queue provides a bounded ten-second startup
 buffer because the original two-second queue overflowed before HA accepted
-audio on the first attempt. One passing request does not establish a general
-latency guarantee. Existing conversation settings and the preferred pipeline
-were preserved; the candidate config remains disabled.
+audio on the first attempt. These two results do not establish a general
+latency guarantee. All prior integration entries and pipelines, including the
+preferred pipeline, were preserved; the candidate config remains disabled.
+
+A subsequent bounded receive-only phone session transmitted the saved reply
+as 60 RTP frames, with the microphone disabled. Receive Stop was confirmed and
+the watchdog finished with zero errors. The operator subsequently confirmed
+hearing this reply. This separately verifies pipeline output and audible phone output; it does not establish a complete acoustic
+microphone-to-answer turn or an audible-response latency measurement.
 
 ## Saved local-STT audit and candidate
 
@@ -276,16 +283,21 @@ Whisper STT entity, but show it as **unavailable** and its config entry as
 by a local conversation agent and local Silero speech. A later speech-settings
 snapshot selected the Silero default voice (Baya). These are saved observations,
 not current service health or proof that a dedicated `localSTT` service works.
-No Home Assistant configuration was changed by this work.
+That historical audit was read-only and changed no Home Assistant configuration.
+The later compact conversation candidate described above created separate
+resources while preserving the existing configuration and preferred pipeline.
 The wider saved deployment audit also found cloud-STT preparation and an
 uninstalled HACS local-STT listing, but no successful local transcription or
 healthy dedicated `localSTT` deployment. Private evidence paths remain outside
 this public guide.
 
-The concrete candidate below creates a separate pipeline only after the parent
-verifies each provider. It is a **WebSocket payload**, not `configuration.yaml`,
-and is not applied by this package. Start with HA's built-in conversation engine
-to isolate STT/TTS before qualifying the existing local conversation agent:
+The payload below is an unapplied example for isolating local STT/TTS with HA's
+built-in conversation engine. It creates a separate pipeline only after each
+provider is verified. It is a **WebSocket payload**, not `configuration.yaml`,
+and is not the compact conversation candidate already measured above. Once
+local STT is ready, clone the compact candidate into another pipeline with the
+verified STT entity and benchmark clean and G.711 synthetic speech before
+selecting it for phone use:
 
 ```json
 {

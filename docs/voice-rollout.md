@@ -66,6 +66,16 @@ The display now distinguishes initial model preparation from readiness. The
 frozen frontend needs 1.28 seconds of incoming history before it can classify;
 showing “Listening” immediately could lose a short phrase spoken at startup.
 
+A separate compact HA conversation profile completed two synthetic requests
+in **23.98 seconds** and **15.80 seconds**, including reply retrieval and
+decoding. It preserves the original preferred profile and combines cloud STT
+with a local conversation model and local Silero Baya speech. Its generated
+1.2-second reply was sent to the physical phone in **60 RTP frames**;
+the operator confirmed hearing the reply, and receive Stop and supervisor
+completion were confirmed. That playback test did
+not activate the microphone. These are separate wake, pipeline and output
+checks; a complete spoken-command-to-answer room test remains unverified.
+
 ## Install and prepare
 
 Use the [voice CLI installation guide](voice-cli-install.md) for a local
