@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="840" viewBox="0 0 1160 840" role="img" aria-labelledby="title desc">
+  <title id="title">Offline wake evaluation and evidence boundaries</title>
+  <desc id="desc">A private WAV corpus and verified frozen model feed the existing detector. Positive labels support matched detections and misses, negative labels support false accepts per scored hour, and unlabeled clips support observations only. Reports preserve domain separation and provenance. Real-room acceptance needs additional labeled evidence.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8 Z" fill="#526174"/></marker>
+    <style>
+      text { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #17283c; }
+      .title { font-size: 28px; font-weight: 700; }
+      .heading { font-size: 20px; font-weight: 650; }
+      .body { font-size: 16px; }
+      .small { font-size: 14px; fill: #44566d; }
+      .box { fill: #fff; stroke: #b2c0d1; stroke-width: 1.5; }
+      .flow { fill: none; stroke: #526174; stroke-width: 2; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect width="1160" height="840" rx="18" fill="#f3f6fa"/>
+  <text x="40" y="49" class="title">Measure the detector. Keep the evidence boundaries.</text>
+  <text x="40" y="78" class="body">Local files only · No recording, phone activation, HA calls, or model downloads</text>
+
+  <rect x="40" y="108" width="520" height="130" rx="12" class="box"/>
+  <text x="60" y="140" class="heading">Private corpus</text>
+  <text x="60" y="169" class="body">16 kHz, mono PCM16 WAV + explicit labels and time windows</text>
+  <text x="60" y="194" class="body">Keep synthetic, noise, TV, music, and speech domains distinct</text>
+  <text x="60" y="218" class="small">Unlabeled audio can be inspected; it cannot establish accuracy.</text>
+
+  <rect x="600" y="108" width="520" height="130" rx="12" class="box"/>
+  <text x="620" y="140" class="heading">Frozen model and frontend</text>
+  <text x="620" y="169" class="body">Verify all three ONNX hashes and the bundle threshold</text>
+  <text x="620" y="194" class="body">Record frontend source, constants, runtime, and input hashes</text>
+  <text x="620" y="218" class="small">No replacement preprocessing or threshold calibration</text>
+
+  <path d="M300 238 V261 H480 V280" class="flow"/>
+  <path d="M860 238 V261 H680 V280" class="flow"/>
+  <rect x="190" y="280" width="780" height="132" rx="12" fill="#e0f3ee" stroke="#439c86" stroke-width="1.5"/>
+  <text x="214" y="314" class="heading">Reuse the existing streaming detector</text>
+  <text x="214" y="343" class="body">Reset per clip → feed exact 80 ms hops → collect scores and activations</text>
+  <text x="214" y="369" class="body">First score at 1.28 s · preserve the 19-hop refractory interval</text>
+  <text x="214" y="394" class="small">Report warm-up and incomplete tail; never hide them with padding.</text>
+
+  <path d="M580 412 V435 H215 V460" class="flow"/>
+  <path d="M580 412 V460" class="flow"/>
+  <path d="M580 412 V435 H945 V460" class="flow"/>
+  <rect x="40" y="460" width="350" height="145" rx="12" class="box"/>
+  <text x="60" y="492" class="heading">Positive, timed labels</text>
+  <text x="60" y="522" class="body">One event ↔ at most one activation</text>
+  <text x="60" y="548" class="body">Matched / missed events and timing</text>
+  <text x="60" y="575" class="small">Incomplete windows are not silently</text>
+  <text x="60" y="594" class="small">counted as misses.</text>
+
+  <rect x="405" y="460" width="350" height="145" rx="12" class="box"/>
+  <text x="425" y="492" class="heading">Explicit negative labels</text>
+  <text x="425" y="522" class="body">False activations / scored hours</text>
+  <text x="425" y="548" class="body">Show exposure and event counts</text>
+  <text x="425" y="575" class="small">Retain per-domain results. Zero observed</text>
+  <text x="425" y="594" class="small">events is not proof of zero future risk.</text>
+
+  <rect x="770" y="460" width="350" height="145" rx="12" class="box"/>
+  <text x="790" y="492" class="heading">Unlabeled clips</text>
+  <text x="790" y="522" class="body">Activation times and scores only</text>
+  <text x="790" y="548" class="body">No true / false outcome or accuracy</text>
+  <text x="790" y="575" class="small">A triggered classifier alone cannot</text>
+  <text x="790" y="594" class="small">verify which phrase caused it.</text>
+
+  <path d="M215 605 V630 H480 V653" class="flow"/>
+  <path d="M580 605 V653" class="flow"/>
+  <path d="M945 605 V630 H680 V653" class="flow"/>
+  <rect x="190" y="653" width="780" height="82" rx="12" class="box"/>
+  <text x="214" y="686" class="heading">Private, reproducible report</text>
+  <text x="214" y="713" class="body">Clip results + domain metrics + coverage + exact model and data provenance</text>
+
+  <text x="40" y="779" class="heading">Real-room acceptance is a later, separately labeled evaluation.</text>
+  <text x="40" y="809" class="body">Include speakers, distances, noise, TV, music, and the phone codec path. Hearing a reply is a different check.</text>
+</svg>

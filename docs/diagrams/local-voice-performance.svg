@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="970" viewBox="0 0 1320 970" role="img" aria-labelledby="title desc">
+<title id="title">Local voice latency: seven saved synthetic trials</title>
+<desc id="desc">Stacked timelines from activation to final cleanup. Six repeated short responses take 17.07 to 21.27 seconds. One distinct longer response takes 27.10 seconds, including 3.91 seconds of audio fetch. Speech recognition includes overlapping input and endpointing. No physical phone or acoustic delay is measured.</desc>
+<style>text{font-family:Arial,Helvetica,sans-serif;fill:#eaf0fa}.muted{fill:#aebed3}.small{font-size:16px}.label{font-size:18px}.number{font-size:32px;font-weight:700}.heading{font-size:34px;font-weight:700}</style>
+<rect width="1320" height="970" fill="#101c30"/>
+<text class="heading" x="48" y="61">Where the local voice turn spends its time</text>
+<text class="label muted" x="48" y="94">Saved synthetic replays • local STT + conversation + TTS • silent, paced output</text>
+
+<rect x="48" y="126" width="394" height="126" rx="14" fill="#1a2b45"/><text x="70" y="169" class="number">19.19 s</text><text x="70" y="202" class="label">Median complete turn</text><text x="70" y="228" class="small muted">Six repeated responses</text>
+<rect x="463" y="126" width="394" height="126" rx="14" fill="#1a2b45"/><text x="485" y="169" class="number">17.70 s</text><text x="485" y="202" class="label">Median first PCM callback</text><text x="485" y="228" class="small muted">Before first block delivery</text>
+<rect x="878" y="126" width="394" height="126" rx="14" fill="#1a2b45"/><text x="900" y="169" class="number">27.10 s</text><text x="900" y="202" class="label">Distinct-response complete turn</text><text x="900" y="228" class="small muted">Includes 3.91 s audio fetch</text>
+<rect x="48" y="284" width="15" height="15" rx="3" fill="#47d6bf"/><text x="72" y="298" class="small">STT incl. input / endpointing</text>
+<rect x="360" y="284" width="15" height="15" rx="3" fill="#f4c95d"/><text x="384" y="298" class="small">Conversation</text>
+<rect x="560" y="284" width="15" height="15" rx="3" fill="#ff8d7b"/><text x="584" y="298" class="small">Audio fetch</text>
+<rect x="750" y="284" width="15" height="15" rx="3" fill="#76aaff"/><text x="774" y="298" class="small">Paced output</text>
+<rect x="974" y="284" width="15" height="15" rx="3" fill="#7f91aa"/><text x="998" y="298" class="small">Other elapsed time</text>
+<line x1="225.0" y1="331" x2="225.0" y2="776" stroke="#34445c" stroke-dasharray="4 5"/><text x="225.0" y="321" text-anchor="middle" class="small muted">0 s</text>
+<line x1="384.0" y1="331" x2="384.0" y2="776" stroke="#34445c" stroke-dasharray="4 5"/><text x="384.0" y="321" text-anchor="middle" class="small muted">5 s</text>
+<line x1="543.0" y1="331" x2="543.0" y2="776" stroke="#34445c" stroke-dasharray="4 5"/><text x="543.0" y="321" text-anchor="middle" class="small muted">10 s</text>
+<line x1="702.0" y1="331" x2="702.0" y2="776" stroke="#34445c" stroke-dasharray="4 5"/><text x="702.0" y="321" text-anchor="middle" class="small muted">15 s</text>
+<line x1="861.0" y1="331" x2="861.0" y2="776" stroke="#34445c" stroke-dasharray="4 5"/><text x="861.0" y="321" text-anchor="middle" class="small muted">20 s</text>
+<line x1="1020.0" y1="331" x2="1020.0" y2="776" stroke="#34445c" stroke-dasharray="4 5"/><text x="1020.0" y="321" text-anchor="middle" class="small muted">25 s</text>
+<line x1="1179.0" y1="331" x2="1179.0" y2="776" stroke="#34445c" stroke-dasharray="4 5"/><text x="1179.0" y="321" text-anchor="middle" class="small muted">30 s</text>
+<text x="48" y="372" class="label">1 · clean PCM</text>
+<rect x="225.0000" y="346" width="15.3895" height="36" fill="#7f91aa"/>
+<rect x="240.3895" y="346" width="304.5690" height="36" fill="#47d6bf"/>
+<rect x="544.9584" y="346" width="0.0146" height="36" fill="#7f91aa"/>
+<rect x="544.9730" y="346" width="202.4970" height="36" fill="#f4c95d"/>
+<rect x="747.4701" y="346" width="0.0159" height="36" fill="#7f91aa"/>
+<rect x="747.4859" y="346" width="0.0158" height="36" fill="#7f91aa"/>
+<rect x="747.5017" y="346" width="0.0156" height="36" fill="#7f91aa"/>
+<rect x="747.5173" y="346" width="1.6263" height="36" fill="#7f91aa"/>
+<rect x="749.1436" y="346" width="3.0959" height="36" fill="#ff8d7b"/>
+<rect x="752.2395" y="346" width="1.6755" height="36" fill="#7f91aa"/>
+<rect x="753.9150" y="346" width="47.2599" height="36" fill="#76aaff"/>
+<rect x="801.1749" y="346" width="0.0326" height="36" fill="#7f91aa"/>
+<text x="811.21" y="371" class="label">18.12</text>
+<text x="48" y="431" class="label">1 · G.711 μ-law</text>
+<rect x="225.0000" y="405" width="9.7445" height="36" fill="#7f91aa"/>
+<rect x="234.7445" y="405" width="283.1819" height="36" fill="#47d6bf"/>
+<rect x="517.9265" y="405" width="0.1942" height="36" fill="#7f91aa"/>
+<rect x="518.1206" y="405" width="175.3960" height="36" fill="#f4c95d"/>
+<rect x="693.5167" y="405" width="0.0153" height="36" fill="#7f91aa"/>
+<rect x="693.5320" y="405" width="0.0141" height="36" fill="#7f91aa"/>
+<rect x="693.5460" y="405" width="0.0180" height="36" fill="#7f91aa"/>
+<rect x="693.5641" y="405" width="18.6349" height="36" fill="#7f91aa"/>
+<rect x="712.1990" y="405" width="6.4483" height="36" fill="#ff8d7b"/>
+<rect x="718.6472" y="405" width="1.7342" height="36" fill="#7f91aa"/>
+<rect x="720.3814" y="405" width="47.3239" height="36" fill="#76aaff"/>
+<rect x="767.7054" y="405" width="0.0308" height="36" fill="#7f91aa"/>
+<text x="777.74" y="430" class="label">17.07</text>
+<text x="48" y="490" class="label">1 · G.711 A-law</text>
+<rect x="225.0000" y="464" width="9.9877" height="36" fill="#7f91aa"/>
+<rect x="234.9877" y="464" width="321.9076" height="36" fill="#47d6bf"/>
+<rect x="556.8953" y="464" width="0.0659" height="36" fill="#7f91aa"/>
+<rect x="556.9612" y="464" width="177.2599" height="36" fill="#f4c95d"/>
+<rect x="734.2212" y="464" width="0.0150" height="36" fill="#7f91aa"/>
+<rect x="734.2362" y="464" width="0.0093" height="36" fill="#7f91aa"/>
+<rect x="734.2454" y="464" width="0.0106" height="36" fill="#7f91aa"/>
+<rect x="734.2560" y="464" width="3.9391" height="36" fill="#7f91aa"/>
+<rect x="738.1952" y="464" width="2.4556" height="36" fill="#ff8d7b"/>
+<rect x="740.6508" y="464" width="1.8665" height="36" fill="#7f91aa"/>
+<rect x="742.5174" y="464" width="47.3085" height="36" fill="#76aaff"/>
+<rect x="789.8258" y="464" width="0.0339" height="36" fill="#7f91aa"/>
+<text x="799.86" y="489" class="label">17.76</text>
+<text x="48" y="549" class="label">2 · clean PCM</text>
+<rect x="225.0000" y="523" width="54.3793" height="36" fill="#7f91aa"/>
+<rect x="279.3793" y="523" width="319.6952" height="36" fill="#47d6bf"/>
+<rect x="599.0745" y="523" width="0.0970" height="36" fill="#7f91aa"/>
+<rect x="599.1715" y="523" width="220.0518" height="36" fill="#f4c95d"/>
+<rect x="819.2233" y="523" width="0.0124" height="36" fill="#7f91aa"/>
+<rect x="819.2356" y="523" width="0.0121" height="36" fill="#7f91aa"/>
+<rect x="819.2477" y="523" width="0.0143" height="36" fill="#7f91aa"/>
+<rect x="819.2620" y="523" width="3.2120" height="36" fill="#7f91aa"/>
+<rect x="822.4740" y="523" width="4.4625" height="36" fill="#ff8d7b"/>
+<rect x="826.9365" y="523" width="1.8822" height="36" fill="#7f91aa"/>
+<rect x="828.8187" y="523" width="47.2344" height="36" fill="#76aaff"/>
+<rect x="876.0530" y="523" width="0.0621" height="36" fill="#7f91aa"/>
+<text x="886.12" y="548" class="label">20.48</text>
+<text x="48" y="608" class="label">2 · G.711 μ-law</text>
+<rect x="225.0000" y="582" width="71.5041" height="36" fill="#7f91aa"/>
+<rect x="296.5041" y="582" width="305.4623" height="36" fill="#47d6bf"/>
+<rect x="601.9665" y="582" width="0.0363" height="36" fill="#7f91aa"/>
+<rect x="602.0028" y="582" width="209.8569" height="36" fill="#f4c95d"/>
+<rect x="811.8598" y="582" width="0.0113" height="36" fill="#7f91aa"/>
+<rect x="811.8710" y="582" width="0.0080" height="36" fill="#7f91aa"/>
+<rect x="811.8790" y="582" width="0.0162" height="36" fill="#7f91aa"/>
+<rect x="811.8952" y="582" width="29.1710" height="36" fill="#7f91aa"/>
+<rect x="841.0662" y="582" width="11.5636" height="36" fill="#ff8d7b"/>
+<rect x="852.6298" y="582" width="1.6539" height="36" fill="#7f91aa"/>
+<rect x="854.2837" y="582" width="47.2100" height="36" fill="#76aaff"/>
+<rect x="901.4937" y="582" width="0.0234" height="36" fill="#7f91aa"/>
+<text x="911.52" y="607" class="label">21.27</text>
+<text x="48" y="667" class="label">2 · G.711 A-law</text>
+<rect x="225.0000" y="641" width="3.6884" height="36" fill="#7f91aa"/>
+<rect x="228.6884" y="641" width="368.5871" height="36" fill="#47d6bf"/>
+<rect x="597.2755" y="641" width="0.0801" height="36" fill="#7f91aa"/>
+<rect x="597.3556" y="641" width="207.4615" height="36" fill="#f4c95d"/>
+<rect x="804.8171" y="641" width="0.0092" height="36" fill="#7f91aa"/>
+<rect x="804.8263" y="641" width="0.0079" height="36" fill="#7f91aa"/>
+<rect x="804.8342" y="641" width="0.0103" height="36" fill="#7f91aa"/>
+<rect x="804.8445" y="641" width="9.8713" height="36" fill="#7f91aa"/>
+<rect x="814.7158" y="641" width="3.4489" height="36" fill="#ff8d7b"/>
+<rect x="818.1647" y="641" width="3.7681" height="36" fill="#7f91aa"/>
+<rect x="821.9328" y="641" width="47.1309" height="36" fill="#76aaff"/>
+<rect x="869.0637" y="641" width="0.0221" height="36" fill="#7f91aa"/>
+<text x="879.09" y="666" class="label">20.25</text>
+<text x="48" y="726" class="label">Distinct response</text>
+<rect x="225.0000" y="700" width="29.8696" height="36" fill="#7f91aa"/>
+<rect x="254.8696" y="700" width="364.2381" height="36" fill="#47d6bf"/>
+<rect x="619.1077" y="700" width="0.0870" height="36" fill="#7f91aa"/>
+<rect x="619.1947" y="700" width="252.6085" height="36" fill="#f4c95d"/>
+<rect x="871.8032" y="700" width="0.0179" height="36" fill="#7f91aa"/>
+<rect x="871.8211" y="700" width="0.0143" height="36" fill="#7f91aa"/>
+<rect x="871.8353" y="700" width="0.0149" height="36" fill="#7f91aa"/>
+<rect x="871.8503" y="700" width="2.2775" height="36" fill="#7f91aa"/>
+<rect x="874.1277" y="700" width="124.3505" height="36" fill="#ff8d7b"/>
+<rect x="998.4782" y="700" width="1.7433" height="36" fill="#7f91aa"/>
+<rect x="1000.2214" y="700" width="86.4642" height="36" fill="#76aaff"/>
+<rect x="1086.6856" y="700" width="0.0322" height="36" fill="#7f91aa"/>
+<text x="1096.72" y="725" class="label">27.10</text>
+<rect x="48" y="803" width="1224" height="124" rx="14" fill="#1a2b45"/>
+<text x="70" y="837" class="label">Recognition and conversation account for 84.7% of the six repeated trials’ total elapsed time.</text>
+<text x="70" y="866" class="small muted">Input pacing overlaps setup/STT. Fetch position within post-close work is schematic; its duration is measured.</text>
+<text x="70" y="894" class="small muted">No phone, microphone, acoustic latency, cold-start guarantee or tail-latency estimate. The distinct reply is longer.</text>
+<text x="48" y="950" class="small muted">Observed October 19, 2026 (local date) • Per-trial segments add exactly; medians are not additive.</text>
+</svg>

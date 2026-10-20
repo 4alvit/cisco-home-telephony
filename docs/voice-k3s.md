@@ -1,5 +1,9 @@
 # Suspended voice-session pilot on k3s
 
+For persistent CLI, phone-menu and Home Assistant controls, use the
+[voice gateway deployment guide](voice-gateway-deployment.md). This page covers
+the separate, finite attended-session Job and its image packaging.
+
 `scripts/render_voice_job.py` prepares a private Kubernetes manifest for one
 attended, manually activated voice session. Rendering is offline: it reads
 local inputs and writes a manifest without contacting Kubernetes, Home

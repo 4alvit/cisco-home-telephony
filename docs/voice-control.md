@@ -303,6 +303,20 @@ gateway CLI or the phone's Voice menu for Stop in that case.
 
 ## Validation and acceptance
 
+The deployed manual pilot passed image/configuration checks, authenticated
+directory checks, and status → Start dry-run → status through both line aliases.
+Its existing phone preferences survived the gateway replacement; both aliases
+remained idle with no microphone activation. The deployed XML renderer also
+passed menu and directory checks. Rendering XML does not prove that a handset
+fetched or displayed it. An optional administrator-source HTTP rejection check
+timed out, so no particular HTTP rejection status was verified by that probe.
+These results do not establish physical full-turn or wake-phrase accuracy.
+
+See the [deployment guide](voice-gateway-deployment.md),
+[wake evaluation guide](wake-qualification.md) and
+[response-stage measurements](local-voice-performance.md) for reproducible
+installation and further qualification.
+
 Registry validation and a Start dry run are preparatory checks. They do not
 prove device readiness, audio quality, a working HA pipeline or physical Stop.
 Do not run a live Start during installation or automated smoke tests.

@@ -40,6 +40,11 @@ conversion to MPP is not required.
 - **Control bounded voice sessions:** [gateway, CLI and phone menu setup](docs/voice-control.md).
   These optional controls require the matching voice runtime and private registry;
   updating a client alone does not enable capture.
+- **Deploy the voice gateway:** [installation, upgrade and rollback](docs/voice-gateway-deployment.md)
+  preserve the existing gateway configuration and persistent state.
+- **Measure voice quality:** [wake detection evaluation](docs/wake-qualification.md)
+  separates labeled accuracy from unlabeled activations;
+  [latency analysis](docs/local-voice-performance.md) measures each response stage.
 - **Evaluate a voice assistant or video:** the [7945G software feasibility study](docs/native-app-feasibility.md)
   compares stock XML/RTP, signed Java applications and firmware work, with
   effort estimates and explicit limits on native video.
