@@ -118,7 +118,7 @@ def perform(payload):
                 message = data.get('message')
                 if isinstance(message, str) and message in HA_ERRORS:
                     reason = HA_ERRORS[message]
-        except (ValueError, TypeError, OSError):
+        except (ValueError, TypeError, OSError, RecursionError, http.client.HTTPException):
             pass
         finally:
             exc.close()
