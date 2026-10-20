@@ -510,13 +510,38 @@ class HAClient:
 
     @staticmethod
     def _raise_server_error(data):
-        code = data.get("code") if isinstance(data, dict) else None
-        # Error text is deliberately discarded; accept only short token codes.
-        if not isinstance(code, str) or len(code) > 80 or not all(c.isascii() and (c.isalnum() or c in "_-") for c in code):
+        approved_codes = frozenset((
+            "wake-engine-missing",
+            "wake-provider-missing",
+            "wake-stream-failed",
+            "wake-word-timeout",
+            "stt-provider-missing",
+            "stt-provider-unsupported-metadata",
+            "stt-stream-failed",
+            "stt-no-text-recognized",
+            "cloud-auth-failed",
+            "intent-agent-not-found",
+            "intent-not-supported",
+            "intent-failed",
+            "tts-not-supported",
+            "duplicate_wake_up_detected",
+            "timeout",
+            "pipeline-not-found",
+            "not_found",
+            "validation-error",
+            "wake_word_detection_aborted",
+        ))
+        code = "server-error"
+        try:
+            raw_code = data.get("code") if isinstance(data, dict) else None
+            # Only exact, approved protocol codes may cross the display boundary.
+            if isinstance(raw_code, str) and raw_code in approved_codes:
+                code = raw_code
+        except Exception:
             code = "server-error"
         if code == "timeout":
             raise AssistTimeout()
-        raise AssistError(code or "server-error")
+        raise AssistError(code)
 
     async def fetch_audio(self, url: str) -> AudioPayload:
         """Fetch a same-origin TTS result with byte, time and redirect limits.
