@@ -7,13 +7,13 @@ enables G.722 in generated local-phone configuration and preserves 16 kHz
 audio through the radio worker. Both changes are necessary: a wideband SIP
 codec cannot restore frequencies already removed by an 8 kHz decoder.
 
-**Deployment and listening acceptance are separate.** These source changes
-do not establish that a phone has downloaded its new profile, negotiated
-G.722 or produced an audible improvement. A read-only installation check on
-2026-10-20 confirmed Asterisk 22.11.0, loaded G.722/resampling modules, an
-8 kHz deployed radio decoder and G.711-only local-phone configuration.
-There was no active 708 call to inspect; this was a baseline check, not a
-wideband call test. Keep private runtime evidence outside the public repository.
+**Codec negotiation and listening acceptance are separate.** Checks on
+2026-10-20 verified the digital radio path and G.722 negotiation on a
+corrected Cisco pilot call. Independent review of the latest single-phone
+pilot also verified outgoing RTP toward the phone with a 16 kHz backend.
+Audible quality remains unverified. This single-phone result does not
+establish application or physical acceptance across a fleet. Keep private
+runtime evidence outside the public repository.
 
 ## What was limiting the sound
 
@@ -88,9 +88,11 @@ The previous `local` policy retained several common codecs in the answer.
 A real-phone check found that the Cisco advertised G.722 but used mu-law
 when the answer still allowed it, despite G.722 being first. The
 `local_first` change removes those alternatives from an incoming-call answer.
-**Live acceptance of this correction is pending:** configuration generation
-and the earlier digital radio test do not establish that a corrected call
-uses G.722 or sounds better on the phone.
+A corrected Cisco pilot call received SDP answer payloads `9,101` (G.722
+and telephone events). Asterisk reported native G.722 with `slin16`
+read/write formats, and controlled Stop cleanup passed. This verifies the
+negotiation correction on that pilot. The separate packet-path evidence
+below does not establish audible quality.
 
 Do not substitute the similarly named `codec_prefs_incoming_offer` or other
 `codec_prefs_*` options: the Asterisk 22 reference marks them as reserved for
@@ -175,11 +177,12 @@ These are implementation notes, not deployed configuration.
 
 ## Verification and rollout
 
-The candidate worker was separately probed with the 708 source on 2026-10-20:
-it produced 201 frames at 16 kHz, with a measured PCM peak of 14,306, then
-stopped and reaped its decoder. This confirms that this worker probe returned
-audio and cleaned up. It does not establish preserved high-frequency content,
-G.722 negotiation, deployment to the PBX or audible improvement on a phone.
+[CI completed 1,350 tests with four skips](https://github.com/4alvit/cisco-home-telephony/actions/runs/39474980999).
+A separate isolated probe of the live 708 source produced its first PCM
+after 2.716 seconds and 615 frames
+over a 15-second run, with nonzero audio. That probe bypassed Asterisk's
+bridge: it confirms source decoding, not media delivery to a phone or
+audible improvement.
 
 For a digital bandwidth check, use a local Docker engine with a compatible
 Asterisk image already present:
@@ -203,15 +206,28 @@ container. A `PASS` result therefore verifies that source against the
 chosen Asterisk image; it does not prove that an existing published image
 already contains the changed worker.
 
-**Verified on 2026-10-20:** the isolated fixture passed using the installed
-Asterisk 22.11.0 / FFmpeg 5.1.9 image with the candidate worker injected.
-Loopback G.722 (RTP payload 9) delivered 151 packets decoded at 16 kHz;
-measured tone amplitudes were 3,181 at 1 kHz and 3,184 at 5 kHz. PCMU
-(payload 0) delivered 151 packets decoded at 8 kHz, with a 1 kHz amplitude
-of 3,147. Worker/PBX process reaping and outer container, task, network
-namespace and staging cleanup passed. No physical phones or remote radio
-sources were used. This verifies the digital path, not a new image build,
-production deployment or audible improvement on a phone.
+**Verified on 2026-10-20:** the isolated fixture passed in CI against
+Asterisk 22.11.0 with the current checkout's worker injected.
+All four cases passed: PBX-initiated G.722 and PCMU, plus phone-initiated
+mixed-codec and PCMU-only offers. The mixed offer
+`[0,8,18,102,9,116,101]` received answer `[9,101]`; RTP payload 9 decoded
+at 16 kHz and retained the 5 kHz test tone. G.711 fallback also passed.
+Worker/PBX process reaping and the fixture's owned-container cleanup
+passed. No physical phones or remote radio sources were used by this
+fixture. These results establish the isolated digital path.
+
+**Latest single-phone pilot, independently reviewed:** Asterisk reported
+native G.722 with `slin16` read/write formats. Transmit counters rose from
+104 to 407 and receive counters from 238 to 542, with zero reported loss.
+Network metadata recorded 774 observations on the negotiated PBX-to-phone
+RTP tuple and 959 in reverse; the final eight-second window contained 400
+in each direction. These are capture observations, not a count of unique
+packets delivered. Three additional outgoing observations used the adjacent
+control ports. One Dial operation and its controlled Stop completed, with
+no remaining PBX channels. This verifies sustained bidirectional transport
+activity at the capture point. It does not establish decoded audio content
+or audible quality at the phone, and this single-phone result does not
+establish physical acceptance across the fleet.
 
 For read-only test containers, keep writable mounts narrow: the first
 attempt failed before any calls because a `/var/lib/asterisk` tmpfs hid
