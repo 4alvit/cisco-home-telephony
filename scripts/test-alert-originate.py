@@ -182,6 +182,50 @@ def await_condition(predicate, seconds, description):
     raise RuntimeError('timeout: ' + description)
 
 
+def fixture_pjsip(content):
+    """Give the isolated peer a static contact and bounded qualification retry."""
+    needle = '[201]\ntype=aor\n'
+    need(content.count(needle) == 1, 'generated fixture AOR missing')
+    need(content.count('qualify_frequency=60\n') == 1, 'unexpected fixture qualification settings')
+    # The first OPTIONS can precede Phone.bind(). Only this disposable fixture
+    # retries quickly; never change production qualification to mask readiness.
+    return content.replace(needle, needle + 'contact=sip:201@127.0.0.2:5090\n').replace(
+        'qualify_frequency=60\n', 'qualify_frequency=1\n')
+
+
+def fixture_ready(docker, container):
+    """Application registration alone can precede dialplan/PJSIP loading."""
+    checks = (
+        ('core show application WaitForSignal', r'WaitForSignal\('),
+        ('dialplan show 201@cisco-alert', r'Dial\(PJSIP/201,,iU\(cisco-alert-answered\)\)'),
+        ('pjsip show endpoints', r'^\s*Endpoint:\s+201/'),
+    )
+    for command, pattern in checks:
+        response = subprocess.run(docker + ['exec', container, 'asterisk', '-rx', command],
+                                  capture_output=True, text=True, timeout=5)
+        if response.returncode != 0 or not re.search(pattern, response.stdout, re.M):
+            return False
+    return True
+
+
+def endpoint_ready(ami, phone):
+    need(phone.error is None, 'SIP fixture worker failed: ' + str(phone.error))
+    endpoints = ami.action('PJSIPShowEndpoints', complete='EndpointListComplete')
+    return any(frame.get('Event') == 'EndpointList' and frame.get('ObjectName') == '201'
+               and frame.get('DeviceState') == 'Not in use' for frame in endpoints)
+
+
+def failure_logs(docker, container):
+    """Keep bounded diagnostics from this fixture, without masking its failure."""
+    try:
+        result = subprocess.run(docker + ['logs', '--tail', '80', container],
+                                capture_output=True, text=True, timeout=5)
+        print('Isolated alert fixture log tail:\n' + (result.stdout + result.stderr)[-12000:],
+              file=sys.stderr)
+    except (OSError, subprocess.SubprocessError):
+        print('Isolated alert fixture logs unavailable.', file=sys.stderr)
+
+
 def test_inside():
     need({name for _,name in socket.if_nameindex()} == {'lo'}, 'fixture requires network-none namespace')
     secret = json.loads(Path('/etc/asterisk/alert-fixture-secret.json').read_text())
@@ -192,6 +236,9 @@ def test_inside():
         need(version == '22.11.0', 'fixture requires Asterisk22.11.0')
         result['asterisk_version'] = version
         need(not ami.channels(), 'fixture must start idle')
+        # Phone is now listening. Wait for its OPTIONS response to make the
+        # static contact available before the first asynchronous Originate.
+        await_condition(lambda: endpoint_ready(ami, phone), 8, 'synthetic alert endpoint ready')
 
         def start():
             alert = uuid.uuid4().hex
@@ -320,10 +367,7 @@ def main():
         provision.generate(site, inventory, root)
         folder = root/'asterisk'
         pjsip = folder/'pjsip.conf'
-        content = pjsip.read_text()
-        needle = '[201]\ntype=aor\n'
-        need(content.count(needle) == 1, 'generated fixture AOR missing')
-        pjsip.write_text(content.replace(needle, needle + 'contact=sip:201@127.0.0.2:5090\n'))
+        pjsip.write_text(fixture_pjsip(pjsip.read_text()))
         (folder/'alert-fixture-secret.json').write_bytes((root/'gateway-ami-secret.json').read_bytes())
         (folder/'alert-fixture.py').write_bytes(Path(__file__).read_bytes())
         try:
@@ -336,17 +380,18 @@ def main():
             subprocess.run(docker + ['cp',str(folder)+'/.',container+':/etc/asterisk/'],
                            capture_output=True, check=True, timeout=15)
             subprocess.run(docker + ['start',container],capture_output=True,check=True,timeout=15)
-            def ready():
-                output = subprocess.run(docker + ['exec',container,'asterisk','-rx','core show application WaitForSignal'],
-                                        capture_output=True,text=True,timeout=5)
-                return 'WaitForSignal(' in output.stdout
-            await_condition(ready, 25, 'Asterisk WaitForSignal readiness')
+            await_condition(lambda: fixture_ready(docker, container), 25,
+                            'generated alert dialplan, application and endpoint loaded')
             completed = subprocess.run(docker + ['exec',container,'python3','/etc/asterisk/alert-fixture.py','--inside'],
                                        capture_output=True,text=True,timeout=85)
             need(completed.returncode == 0, 'isolated alert regression failed: ' + completed.stdout[-3000:] + completed.stderr[-3000:])
             result = json.loads(completed.stdout)
             need(result.get('status') == 'PASS', 'isolated alert regression did not pass')
             print(json.dumps(result, sort_keys=True))
+        except Exception:
+            if container:
+                failure_logs(docker, container)
+            raise
         finally:
             if container:
                 subprocess.run(docker + ['rm','-f',container],capture_output=True,check=True,timeout=15)

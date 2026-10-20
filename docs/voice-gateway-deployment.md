@@ -67,10 +67,13 @@ file. Preserve applications, allowlists, services, softphones, phone metadata,
 API credentials and both lines of each physical phone.
 
 For an upgrade, save the current Deployment, its referenced Secrets and the
-gateway input privately, using the explicit context and namespace. For example,
-after setting the four variables to your reviewed values:
+gateway input privately, using the explicit context and namespace. Select the
+kubeconfig deliberately: an inherited `KUBECONFIG` can route a familiar context
+name to a different API endpoint. Set the path below and the context, namespace
+and Deployment variables to your reviewed values:
 
 ```sh
+export KUBECONFIG="/absolute/path/to/reviewed-kubeconfig"
 umask 077
 mkdir -p .local/voice-gateway
 kubectl --context "$KUBE_CONTEXT" -n "$NAMESPACE" \
