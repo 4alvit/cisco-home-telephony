@@ -136,6 +136,9 @@ the RTP timestamp clock is historically 8 kHz while the audio sampling rate
 is 16 kHz. Do not diagnose narrowband audio from that SDP label alone.
 [RFC 3551, G.722](https://www.rfc-editor.org/rfc/rfc3551.html#section-4.5.2).
 
+For Cisco's documented uncompressed capability and the remaining
+interoperability checks, see [Uncompressed audio](uncompressed-audio.md).
+
 ## File playback and music on hold are different paths
 
 Radio continues to use its bounded AudioSocket worker. No custom music-on-hold
