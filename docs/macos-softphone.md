@@ -113,7 +113,14 @@ Use the application bundle's actual executable name if it differs. Microphone
 access is required for speech; a public Linphone account is unnecessary for
 registration to this PBX.
 
-[Telephone](https://www.64characters.com/telephone/) is a small native macOS client. Its free tier supports ordinary calls; Telephone Pro is optional. The official [Mac App Store listing](https://apps.apple.com/us/app/telephone/id406825478) currently supplies version 1.6. The publisher added [Apple Silicon and the modern macOS interface](https://www.64characters.com/blog/) in that release. It supports SIP/TCP and [Opus, G.722, PCMA and PCMU](https://www.64characters.com/telephone/faq/). This configuration deliberately uses PCMU/PCMA to match the existing Cisco call path.
+[Telephone](https://www.64characters.com/telephone/) is a small native macOS client. Its free tier supports ordinary calls; Telephone Pro is optional. The official [Mac App Store listing](https://apps.apple.com/us/app/telephone/id406825478) currently supplies version 1.6. The publisher added [Apple Silicon and the modern macOS interface](https://www.64characters.com/blog/) in that release. It supports SIP/TCP and [Opus, G.722, PCMA and PCMU](https://www.64characters.com/telephone/faq/).
+
+The generated PBX profile permits G.722, PCMU and PCMA. An existing client
+may still be configured for G.711 only: generating the PBX configuration
+does not change the application's codec settings. Check those settings
+and the actual negotiated call codec using the
+[audio-quality guide](audio-quality.md); PBX-originated offers still allow
+G.711 and do not guarantee a wideband call.
 
 Install from the App Store. If the open-source `mas` command is already available, `mas get 406825478` acquires the free app; it may require the user's App Store session or macOS authorization. Do not enable Pro or change Apple account credentials to complete this setup. After installation, verify the application before entering a SIP secret:
 

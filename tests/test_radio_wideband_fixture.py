@@ -6,8 +6,9 @@ import json
 from pathlib import Path
 import signal
 import subprocess
+import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -168,6 +169,113 @@ class RadioWidebandOwnership(unittest.TestCase):
         self.assertEqual(docker.removals(), [["docker", "rm", "-f", docker.identity]])
         self.assertTrue(any("cleanup failed" in note
                             for note in getattr(caught.exception, "__notes__", [])))
+
+
+class IncomingRadioNegotiation(unittest.TestCase):
+    @staticmethod
+    def answer(payloads):
+        mappings = {0: "PCMU/8000", 8: "PCMA/8000", 9: "G722/8000",
+                    101: "telephone-event/8000", 102: "L16/16000"}
+        return ("v=0\r\nc=IN IP4 127.0.0.1\r\nm=audio 10000 RTP/AVP "
+                + " ".join(str(number) for number in payloads) + "\r\n"
+                + "".join(f"a=rtpmap:{number} {mappings[number]}\r\n" for number in payloads))
+
+    @staticmethod
+    def peer(codec="G722", payload=9):
+        peer = fixture.Phone.__new__(fixture.Phone)
+        peer.codec, peer.payload = codec, payload
+        peer.incoming, peer.mixed_offer = True, codec == "G722"
+        peer.call_id, peer.local_from = "fixture-call", "<sip:201@127.0.0.2>;tag=local"
+        peer.remote_to, peer.answer_payloads, peer.bye = None, None, False
+        peer.send_request, peer.reply = Mock(), Mock()
+        return peer
+
+    def test_actual_generated_policy_preserved_in_loopback_incoming_endpoint(self):
+        provision = fixture.module("incoming_fixture_provision", ROOT / "scripts/provision.py")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            provision.generate(
+                {"node_ipv4": "127.0.0.1", "lan_cidr": "127.0.0.0/8", "ntp_ipv4": "127.0.0.1"},
+                {"phones": [{"model": "CP-7945G", "verified": True, "mac": "020000000001",
+                             "label": "Fixture", "extension": "201", "transport": "udp",
+                             "firmware_load": "SIP45.9-4-2SR4-3S"}]}, root)
+            generated = (root / "asterisk/pjsip.conf").read_text()
+        configured = fixture.incoming_fixture_pjsip(generated)
+        original = generated.split("[201]\ntype=endpoint\n")[1].split("\n[", 1)[0]
+        endpoint = configured.split("[201]\ntype=endpoint\n")[1].split("\n[", 1)[0]
+        for key in ("allow", "disallow", "incoming_call_offer_pref", "outgoing_call_offer_pref"):
+            self.assertEqual([line for line in original.splitlines() if line.startswith(key + "=")],
+                             [line for line in endpoint.splitlines() if line.startswith(key + "=")])
+        self.assertIn("incoming_call_offer_pref=local_first\n", endpoint)
+        self.assertNotIn("\nauth=", "\n" + endpoint)
+        self.assertIn("context=radio-smoke\n", endpoint)
+        self.assertIn("identify_by=ip\n", endpoint)
+        self.assertIn("[radio-fixture-loopback]\ntype=identify\nendpoint=201\nmatch=127.0.0.2/32\n",
+                      configured)
+        # Even the old policy is copied unchanged; the live SDP/RTP oracle must
+        # expose its bug instead of this fixture silently correcting the input.
+        old = fixture.incoming_fixture_pjsip(
+            generated.replace("incoming_call_offer_pref=local_first\n",
+                              "incoming_call_offer_pref=local\n"))
+        self.assertIn("incoming_call_offer_pref=local\n", old)
+
+    def test_recorded_old_local_broad_answer_is_rejected(self):
+        # Sanitized actual failure: preference sorting alone left PCMU/PCMA
+        # in the answer, and the live call used PCMU instead of G.722.
+        with self.assertRaisesRegex(RuntimeError, "exactly one voice codec"):
+            fixture.selected_answer(self.answer([9, 0, 8, 101]), 9, "G722")
+
+    def test_g722_only_answer_and_pcmu_only_fallback_are_accepted(self):
+        self.assertEqual([9, 101], fixture.selected_answer(self.answer([9, 101]), 9, "G722"))
+        self.assertEqual([0], fixture.selected_answer(self.answer([0]), 0, "PCMU"))
+        for payloads in ([0, 101], [102, 9, 101], [9, 9, 101]):
+            with self.subTest(payloads=payloads), self.assertRaises(RuntimeError):
+                fixture.selected_answer(self.answer(payloads), 9, "G722")
+
+    def test_incoming_offer_matches_pcmu_first_cisco_order(self):
+        peer = self.peer()
+        peer.dial()
+        args = peer.send_request.call_args.args
+        self.assertEqual(("INVITE", "sip:799@127.0.0.1", "<sip:799@127.0.0.1>"), args[:3])
+        self.assertIn("m=audio 6000 RTP/AVP 0 8 18 102 9 116 101\r\n", args[3])
+        self.assertIn("a=rtpmap:102 L16/16000\r\n", args[3])
+        self.assertIn("a=fmtp:116 mode=20\r\n", args[3])
+        fallback = self.peer("PCMU", 0)
+        fallback.dial()
+        body = fallback.send_request.call_args.args[3]
+        self.assertIn("m=audio 6000 RTP/AVP 0\r\n", body)
+        self.assertNotIn("G722", body)
+
+    def test_incoming_answer_is_acked_and_only_its_bye_completes(self):
+        for contact in ("sip:127.0.0.1:5060", "sip:799@127.0.0.1:5060;transport=UDP"):
+            peer = self.peer()
+            message = (f"SIP/2.0 200 OK\r\nFrom: {peer.local_from}\r\n"
+                       "To: <sip:799@127.0.0.1>;tag=remote\r\nCall-ID: fixture-call\r\n"
+                       f"CSeq: 1 INVITE\r\nContact: <{contact}>\r\n\r\n"
+                       + self.answer([9, 101]))
+            peer.incoming_message(message, ("127.0.0.1", 5060))
+            peer.send_request.assert_called_once_with(
+                "ACK", contact, "<sip:799@127.0.0.1>;tag=remote")
+            self.assertEqual([9, 101], peer.answer_payloads)
+            bye = ("BYE sip:201@127.0.0.2 SIP/2.0\r\n"
+                   f"To: {peer.local_from}\r\nFrom: {peer.remote_to}\r\n"
+                   "Call-ID: fixture-call\r\nCSeq: 2 BYE\r\n\r\n")
+            with self.assertRaisesRegex(RuntimeError, "dialog changed"):
+                peer.incoming_message(bye.replace("fixture-call", "unrelated"), ("127.0.0.1", 5060))
+            self.assertFalse(peer.bye)
+            peer.incoming_message(bye, ("127.0.0.1", 5060))
+            self.assertTrue(peer.bye)
+
+    def test_bad_answer_is_acked_before_the_codec_oracle_fails(self):
+        peer = self.peer()
+        message = (f"SIP/2.0 200 OK\r\nFrom: {peer.local_from}\r\n"
+                   "To: <sip:799@127.0.0.1>;tag=remote\r\nCall-ID: fixture-call\r\n"
+                   "CSeq: 1 INVITE\r\nContact: <sip:127.0.0.1:5060>\r\n\r\n"
+                   + self.answer([9, 0, 8, 101]))
+        with self.assertRaisesRegex(RuntimeError, "exactly one voice codec"):
+            peer.incoming_message(message, ("127.0.0.1", 5060))
+        self.assertEqual("ACK", peer.send_request.call_args.args[0])
+        self.assertIsNone(peer.answer_payloads)
 
 
 if __name__ == "__main__":

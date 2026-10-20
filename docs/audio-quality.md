@@ -71,16 +71,26 @@ Generated Cisco and local softphone endpoints use:
 ```ini
 disallow=all
 allow=g722,ulaw,alaw
-incoming_call_offer_pref=local
+incoming_call_offer_pref=local_first
 outgoing_call_offer_pref=local_merge
 ```
 
-For incoming calls, `local` preserves the configured order among mutually
-supported codecs. For outgoing offers, `local_merge` offers the configured
-local list in its order. G.711 remains available for compatibility.
-The remote client must still advertise or accept G.722.
+For calls initiated by a phone, `local_first` selects only the first mutually
+supported codec in the configured order. The answer selects G.722 when the
+caller offers it, while retaining G.711 fallback for a caller that offers
+only a compatible G.711 codec. For calls initiated by Asterisk,
+`local_merge` still offers the configured local list in order; the receiving
+phone may select G.711. This policy does not force every call to use G.722.
 [Asterisk 22 endpoint options](https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/Module_Configuration/res_pjsip/#incoming_call_offer_pref),
 [exact 22.11.0 codec-selection implementation](https://github.com/asterisk/asterisk/blob/22.11.0/res/res_pjsip_session/pjsip_session_caps.c).
+
+The previous `local` policy retained several common codecs in the answer.
+A real-phone check found that the Cisco advertised G.722 but used mu-law
+when the answer still allowed it, despite G.722 being first. The
+`local_first` change removes those alternatives from an incoming-call answer.
+**Live acceptance of this correction is pending:** configuration generation
+and the earlier digital radio test do not establish that a corrected call
+uses G.722 or sounds better on the phone.
 
 Do not substitute the similarly named `codec_prefs_incoming_offer` or other
 `codec_prefs_*` options: the Asterisk 22 reference marks them as reserved for
@@ -183,7 +193,10 @@ disposable container with external networking disabled and uses only
 synthetic local audio and loopback SIP/RTP. It makes no calls to real phones
 and fetches no radio stream. It measures 1 kHz and 5 kHz tones through the
 real decoder, AudioSocket channel and G.722 leg, checks G.711 fallback,
-and checks call cleanup and decoder reaping.
+and checks call cleanup and decoder reaping. It tests calls initiated in
+both directions. A phone-originated, G.711-first mixed offer must receive
+a single G.722 voice codec in the answer; a G.711-only offer must still
+work. A G.722-first answer that also permits G.711 fails that regression.
 
 The fixture copies **the current checkout's radio worker** into that
 container. A `PASS` result therefore verifies that source against the
@@ -242,7 +255,9 @@ Keep gain constant for the first comparison. The worker's existing
 Increasing volume can mask a comparison or introduce distortion.
 
 If the call still selects G.711, check the applied phone profile, G.722
-advertisement and actual endpoint configuration. If it selects G.722 but
+advertisement and actual endpoint configuration. For a phone-initiated
+call, inspect the SDP answer as well: a G.722-first list that still includes
+G.711 is not the same as a single-codec G.722 answer. If it selects G.722 but
 still sounds narrowband, check for an old 8 kHz worker or another narrowband
 stage. If pitch or playback speed changes, inspect sample rate, frame length
 and pacing together. If sound breaks up, measure packet loss and jitter

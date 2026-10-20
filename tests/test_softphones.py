@@ -90,7 +90,7 @@ class SoftphoneTests(unittest.TestCase):
                 self.assertEqual(configs['pjsip.conf'].count(endpoint), 1)
                 self.assertEqual(values['allow'].split(','), ['g722', 'ulaw', 'alaw'])
                 self.assertEqual(values['disallow'], 'all')
-                self.assertEqual(values['incoming_call_offer_pref'], 'local')
+                self.assertEqual(values['incoming_call_offer_pref'], 'local_first')
                 self.assertEqual(values['outgoing_call_offer_pref'], 'local_merge')
                 self.assertEqual(values['transport'], 'transport-' + transport)
                 self.assertEqual(values['auth'], 'auth-softphone-209')
@@ -100,6 +100,8 @@ class SoftphoneTests(unittest.TestCase):
                 self.assertFalse(any(key.startswith('codec_prefs_') for key in values))
                 for old in (
                         endpoint.replace('allow=g722,ulaw,alaw', 'allow=ulaw,alaw'),
+                        endpoint.replace('incoming_call_offer_pref=local_first\n',
+                                         'incoming_call_offer_pref=local\n'),
                         endpoint.replace('outgoing_call_offer_pref=local_merge\n', '')):
                     with self.subTest(stale=old), self.assertRaisesRegex(
                             ValueError, 'softphone configuration differs'):

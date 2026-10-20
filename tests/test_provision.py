@@ -88,7 +88,7 @@ class ProvisionTest(unittest.TestCase):
                     values = dict(line.split('=', 1) for line in body.splitlines() if '=' in line)
                     self.assertEqual(values['allow'].split(','), ['g722', 'ulaw', 'alaw'])
                     self.assertEqual(values['disallow'], 'all')
-                    self.assertEqual(values['incoming_call_offer_pref'], 'local')
+                    self.assertEqual(values['incoming_call_offer_pref'], 'local_first')
                     self.assertEqual(values['outgoing_call_offer_pref'], 'local_merge')
                     self.assertEqual(values['transport'], 'transport-' + transport)
                     self.assertEqual(values['direct_media'], 'no')
