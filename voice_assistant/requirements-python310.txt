@@ -1,0 +1,2 @@
+# Optional asyncio.timeout compatibility for Python 3.10 only.
+async_timeout>=4,<6; python_version < "3.11"

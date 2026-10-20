@@ -1,0 +1,11 @@
+{
+  "gateway_config": ".local/phone-gateway.json",
+  "line": "201",
+  "bind_ipv4": "192.0.2.10",
+  "bind_port": 24576,
+  "phone_rtp_port": 24578,
+  "duration_seconds": 10,
+  "receive_idle_seconds": 3,
+  "volume": 20,
+  "expected_source_port": null
+}

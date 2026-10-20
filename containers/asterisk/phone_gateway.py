@@ -49,6 +49,13 @@ class Refused(Exception):
         self.reason, self.status = reason, status
 
 
+class PhoneCommandRejected(Refused):
+    """A validated device rejection, distinct from an ambiguous network result."""
+    def __init__(self, response_code):
+        self.response_code = response_code
+        super().__init__('phone_rejected_action', 502)
+
+
 def require(value, reason, status=409):
     if not value:
         raise Refused(reason, status)
@@ -243,6 +250,14 @@ def execute(phone, uri, priority=0):
     require(len(data) <= 65536 and b'<!' not in data, 'invalid_phone_response', 502)
     document = ET.fromstring(data)
     items = document.findall('ResponseItem')
+    code = None
+    if document.tag == 'CiscoIPPhoneError' and not len(document):
+        code = document.get('Number')
+    elif (document.tag == 'CiscoIPPhoneResponse' and len(items) == 1
+          and len(document) == 1 and items[0].get('URL') == uri):
+        code = items[0].get('Status')
+    if code in {'1', '2', '3', '4', '5', '6'}:
+        raise PhoneCommandRejected(int(code))
     require(document.tag == 'CiscoIPPhoneResponse' and len(items) == 1
             and items[0].get('Status') == '0' and items[0].get('URL') == uri,
             'phone_did_not_confirm_action', 502)

@@ -1,0 +1,8 @@
+{
+  "base_urls": {
+    "synthetic-phone-a": "http://display.example.invalid:18080/voice"
+  },
+  "refresh_seconds": 3,
+  "ttl_seconds": 120,
+  "max_sessions": 16
+}

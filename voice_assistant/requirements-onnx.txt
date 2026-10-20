@@ -1,0 +1,3 @@
+# Optional exact frozen ONNX frontend. No package downloads models at runtime.
+numpy>=1.26,<3
+onnxruntime>=1.23,<2

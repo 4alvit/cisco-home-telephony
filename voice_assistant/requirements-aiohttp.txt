@@ -1,0 +1,2 @@
+# Alternative optional live HA transport for hosts already using aiohttp.
+aiohttp>=3.12,<4

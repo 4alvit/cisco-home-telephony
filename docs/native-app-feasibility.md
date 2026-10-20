@@ -6,6 +6,10 @@ No microphone was activated, call placed, firmware uploaded or phone changed
 during this study. Existing deployment results are historical evidence, not a
 new live acceptance test.
 
+**Implementation follow-up:** the [stock-phone voice pilot](voice-rollout.md) now
+contains working modules and separately recorded physical RTP evidence. This
+original feasibility assessment remains the scope/effort reference.
+
 ## Decision
 
 Build the first voice experience with the **stock phone's XML/RTP interfaces

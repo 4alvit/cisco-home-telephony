@@ -27,6 +27,9 @@
   the proposed local voice path, native-code gates and video limitations.
   This is an assessment, not a deployed-feature diagram.
 
+- [voice-rollout.svg](voice-rollout.svg): the implemented bounded stock-RTP voice
+  path, the initial physical gate, and explicit native/video limits.
+
 Each file is a standalone SVG containing editable text and vector objects.
 There are no MAC addresses, passwords or delivery details. Diagram sources and
 rebuild instructions for the presentation figures are in the

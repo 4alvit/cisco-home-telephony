@@ -1,0 +1,24 @@
+{
+  "service": {
+    "enabled": false,
+    "rearm_after_turn": false,
+    "preroll_ms": 320,
+    "queue_frames": 100,
+    "max_utterance_seconds": 12,
+    "turn_timeout_seconds": 35,
+    "audio_idle_timeout_seconds": 2,
+    "duplicate_window_seconds": 2
+  },
+  "phones": {
+    "example-phone": false
+  },
+  "ha": {
+    "base_url": "http://home-assistant.invalid:8123",
+    "token_file": ".local/voice/ha-token.txt",
+    "pipeline_id": "replace-with-reviewed-local-pipeline-id"
+  },
+  "wake": {
+    "mode": "manual",
+    "bundle_file": ".local/voice/bundle.json"
+  }
+}

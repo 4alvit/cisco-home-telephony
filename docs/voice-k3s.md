@@ -1,0 +1,255 @@
+# Suspended voice-session pilot on k3s
+
+`scripts/render_voice_job.py` prepares a private Kubernetes manifest for one
+attended, manually activated voice session. Rendering is offline: it reads
+local inputs and writes a manifest without contacting Kubernetes, Home
+Assistant or a phone. The rendered Job starts **suspended**. Rendering or
+reviewing it does not activate a microphone.
+
+This is a packaging prototype for the [bounded session runner](../scripts/voice_session.py),
+[RTP transport](voice-transport.md) and [Assist adapter](local-voice-assistant.md).
+It is not an unattended voice service or a replacement for the existing
+Asterisk workload. The operator owns all cluster deployment and live
+phone actions.
+
+## What the manifest contains
+
+The renderer captures an explicit allowlist of 13 public Python files in a
+ConfigMap. It can also include a locally supplied pure-Python `websockets`
+15.0.1 wheel in `binaryData`. The private transport configuration, minimized
+gateway configuration, voice configuration and HA token go into a Secret,
+mounted as `/run/voice/.local/transport.json`, `gateway.json`, `voice.json`
+and `ha-token.txt`. The gateway copy retains the selected physical phone with
+both lines, its execution credentials, AMI credentials and required validation
+fields. Unused API fields contain inert values; the pilot does not launch a
+gateway server. Unrelated gateway API tokens, HA application credentials, room
+labels and other metadata are excluded. Model weights are not packaged; the
+initial runner requires manual activation and does not wait for a wake phrase.
+
+Public source files are projected under `/workspace`. The Secret has its own
+mount at `/run/voice/.local`, and the session runner uses `/run/voice` as its
+private workspace. This keeps Kubernetes' projected-file links inside the
+private directory accepted by the runtime path guard; the guard is not relaxed
+to permit private files elsewhere.
+
+The Job can use a dedicated immutable voice-runtime image through
+`--voice-image`. This overrides only the pilot's image; it does not modify the
+site configuration or the running PBX. Omitting the override retains the
+site's `asterisk_image` as a compatibility fallback for a runtime whose
+dependencies have been verified.
+
+The voice runtime must provide Python 3.11 or later, `aiohttp`, `websockets`
+15.x, Pillow and FFmpeg. The current TTS fetch path requires `aiohttp` even when
+the Assist WebSocket uses `websockets`. A read-only inspection of the existing
+PBX image found Python 3.11.2, Pillow 9.4 and FFmpeg 5.1.9, but neither
+`aiohttp` nor `websockets`. That image is not a runnable current voice runtime.
+Adding the optional WebSockets wheel alone does not supply the missing TTS
+dependency. Keep Python packages and their transitive dependencies in the
+runtime image rather than expanding the ConfigMap into a dependency archive.
+The pilot performs no runtime package installation.
+
+The workload uses these constraints:
+
+| Setting | Effect |
+| --- | --- |
+| `suspend: true` | The operator must explicitly release the reviewed Job. |
+| One completion and one parallel worker | Intended for one bounded manual session. |
+| `restartPolicy: Never`, `backoffLimit: 0` | No configured container restart or failed-Job retry. |
+| `activeDeadlineSeconds: 90` | Kubernetes bounds the active Job lifetime separately from the media deadline. |
+| `terminationGracePeriodSeconds: 45` | Allows graceful shutdown before Kubernetes can force termination. |
+| `ttlSecondsAfterFinished: 300` | Finished Jobs become eligible for cleanup after five minutes. |
+| Node pinning and `hostNetwork: true` | RTP uses the selected node's LAN address and ports. |
+| No service-account token mount | The voice process receives no Kubernetes API token. |
+| User/group 10001, read-only root filesystem, all capabilities dropped, `RuntimeDefault` seccomp | Limits container privileges and writes. |
+| Requests: 100m CPU, 128 MiB memory, 64 MiB ephemeral storage | Reserves resources for the pilot. |
+| Limits: 1000m CPU, 512 MiB memory, 256 MiB ephemeral storage | Sets the pilot's resource limits. |
+| `/tmp` backed by a 64 MiB `emptyDir` | Provides bounded writable temporary storage. |
+
+`hostNetwork` shares the node's network namespace. Before a live start, the
+operator must reserve the configured RTP and optional display ports and verify
+that the transport bind address belongs to that node. This manifest does not
+change the existing PBX, HA pipeline, phone provisioning or node firewall.
+The renderer requires the transport bind address, gateway bind address and AMI
+host to equal `site.node_ipv4`, with the gateway enabled and its AMI client set
+to that node. Its port checks detect configured collisions, not other live
+processes already using a node port.
+
+## Build and check the voice runtime
+
+The dedicated [Dockerfile](../containers/voice/Dockerfile) and
+[dependency lock](../containers/voice/requirements.lock) package the runtime
+dependencies independently of the PBX. From the repository root, on a host
+with Docker available:
+
+```sh
+bash scripts/build-voice-image.sh cisco-home-ci
+```
+
+The build script tags `PREFIX/voice:pilot`, runs the smoke check automatically,
+and never pushes it. Its default base is `python:3.12-slim-bookworm`, resolved
+to an immutable digest before building. `PYTHON_IMAGE` can select a reviewed
+official Python 3.11 or 3.12 `slim-bookworm@sha256:...` reference. The locked
+runtime supports those two Python versions on Linux amd64 and arm64;
+`BUILD_PLATFORM` defaults to `linux/amd64` and can select `linux/arm64`.
+The build context contains only approved public source and runtime files.
+Building can fetch base images, OS packages and locked Python packages;
+that build-time activity is separate from the offline renderer and the
+runtime's no-install policy.
+
+To smoke-test an already built local image separately:
+
+```sh
+bash scripts/smoke-voice-image.sh cisco-home-ci/voice:pilot
+```
+
+The smoke script runs `/opt/voice/smoke.py` with networking disabled, a read-only
+filesystem, a temporary filesystem, dropped capabilities and a non-root user.
+It uses the existing local image ID without pulling another image. Checks cover
+locked versions and imports, a Pillow round trip, synthetic FFmpeg decoding and
+session CLI validation. A passing report includes `image_smoke: "passed"`,
+`network_actions: 0` and `microphone_started: false`. It does not use phone or HA
+credentials. A passed smoke test is evidence of runtime dependencies and local
+processing, not live HA connectivity, phone compatibility or microphone Stop.
+The dedicated image has not yet been built or container-smoke-tested in this
+implementation environment; Docker is unavailable locally. The operator owns
+the CI build, smoke result, image transfer and digest verification.
+
+Before rendering for a live pilot, set `VOICE_IMAGE` to the verified immutable
+`repository@sha256:...` reference and ensure that exact image is available on
+the selected node. Availability can come from a registry or a reviewed CI
+image archive imported into the node's container runtime; registry publication
+is not required. A mutable `:pilot` tag is useful for the local smoke command
+but is rejected as the Job's image reference.
+
+## Private inputs and source snapshots
+
+Keep all configuration inputs, referenced gateway/token files and generated
+output inside the selected workspace's `.local` directory. Relative input and
+reference paths resolve from that workspace; absolute paths must still remain
+inside its `.local` directory. The transport configuration identifies one phone
+through either of its gateway lines. The voice configuration must enable only
+that physical phone's primary ID and use an explicit Assist pipeline. The
+renderer requires `service.enabled: true`, `wake.mode: "manual"` and
+`rearm_after_turn: false`. The rendered session still requires the RTP ownership
+and physical attendance conditions described in [voice transport](voice-transport.md).
+
+An HA token authorizes real Assist requests after the Job is released. Running
+the client on a local node does not make the selected STT, conversation or TTS
+providers local. Confirm the intended pipeline separately; packaging does not
+change its providers.
+
+The ConfigMap is a **snapshot**, not a live mount of the checkout. Regenerate the
+manifest whenever a captured source file, runtime image, dependency wheel or
+private input changes, then review the new resources before release. Render
+the deployment snapshot after the final transport, display and voice changes
+are in place, and validate that source version with the chosen runtime. Do not
+assume editing a local Python file updates a previously rendered or deployed
+Job.
+
+Treat the output manifest as a credential-bearing file. Secret values are
+encoded for Kubernetes, not encrypted by base64. Keep it out of Git, public
+reports and shared logs. Secret access and encryption at rest depend on the
+existing cluster configuration. [Kubernetes Secret guidance](https://kubernetes.io/docs/concepts/configuration/secret/).
+
+## Render locally
+
+From the repository root, prepare the private configuration files, set
+`VOICE_IMAGE` to the verified runtime digest described above, and run:
+
+```sh
+python3 scripts/render_voice_job.py \
+  --site .local/site.json \
+  --transport-config .local/phone-voice-transport.json \
+  --voice-config .local/local-voice-assistant.json \
+  --voice-image "$VOICE_IMAGE" \
+  --output .local/voice-job.json
+```
+
+The output's parent directory must already exist. The renderer creates a new
+mode-0600 file and refuses to overwrite it; choose a new private output name
+when regenerating a snapshot. Paths containing parent traversal or symlinks
+below the workspace are rejected.
+
+This creates Kubernetes JSON, also valid YAML. It does not apply resources,
+download dependencies or run a session. There is no renderer `--run` flag;
+every rendered Job is suspended. Optional arguments are:
+
+| Argument | Purpose |
+| --- | --- |
+| `--workspace ROOT` | Selects the repository working-tree root containing the captured sources and private inputs. |
+| `--voice-image IMAGE` | Uses a separate immutable `repository@sha256:...` voice runtime for this Job. |
+| `--websockets-wheel .local/dependencies/websockets-15.0.1-py3-none-any.whl` | Includes the local wheel after validation against the pinned official hash. |
+| `--display-port PORT` | Enables the optional phone status/Stop display server on a validated non-conflicting port. |
+| `--name phone-voice-pilot` | Selects a 1–32-character lowercase DNS-label base name beginning with a letter. |
+
+If the wheel is omitted, the image must already provide compatible
+`websockets` 15.x. Including the wheel adds it to `PYTHONPATH` for direct ZIP
+import; there is no package installation or writable dependency directory.
+This option remains compatible with older packaging, but supplies only
+`websockets`; the image must still supply `aiohttp`, Pillow and FFmpeg.
+The source allowlist and optional wheel are captured from local files at render
+time. Generated object names combine the base name and content hashes rather
+than private phone identities.
+
+## Review and explicit release
+
+The operator reviews the generated source snapshot, image digest, node,
+private configuration references, ports, duration and security settings before
+any deployment. Deployment must preserve `spec.suspend: true`. Only after the
+attendant is at the phone, both lines are idle, and the XML media path is
+reserved should the operator explicitly change that Job's `spec.suspend` to
+`false`.
+
+The manifest's startup arguments already contain the live-session, attendance,
+exclusive-media and microphone flags. No Pod is started while the new Job is
+suspended. Unsuspending is the live-action boundary: it authorizes the entire
+bounded microphone, Assist and reply-playback session. Do not put the manifest in a controller
+that automatically clears suspension or periodically recreates Jobs. Do not
+use suspend/resume as a retry mechanism; resuming restarts the Job deadline,
+and suspending a running Job terminates its Pods. A subsequent attempt requires
+another deliberate review and physical confirmation that the previous session
+has stopped. [Kubernetes Job suspension](https://kubernetes.io/docs/concepts/workloads/controllers/job/#suspending-a-job).
+
+Even with one completion, one parallel worker and no container restart,
+Kubernetes does not guarantee that the program starts exactly once. Treat an
+unexpected additional Pod or restart as a failed pilot, stop further starts,
+and inspect the physical phone before continuing. Do not expand this design
+into unattended operation without durable session ownership and duplicate-start
+handling. [Kubernetes Job failure semantics](https://kubernetes.io/docs/concepts/workloads/controllers/job/#handling-pod-and-container-failures).
+
+## Stop, evidence and cleanup
+
+The voice runner retains its shorter, at-most-30-second media deadline and
+independent watchdog. The 90-second Job deadline is additional process cleanup,
+not a promise that the phone stops streaming at that instant. Hard Pod
+termination, node failure or resource exhaustion can kill the runner and its
+watchdog together. **There is no hardware-enforced microphone lease.** The
+attendant must verify physical closure and use local phone controls if remote
+cleanup is uncertain.
+
+Keep the bounded runner's state, packet counters and cleanup result as private
+evidence. A completed Kubernetes Job does not by itself prove microphone
+closure, audible playback, acceptable transcription or successful call
+preemption. Conversely, terminating a Pod does not prove the phone has accepted
+an RTP Stop. This wrapper does not enable recordings or transcript logging.
+
+The Job TTL is not a complete credential-cleanup mechanism. It applies after
+the Job finishes and removes dependents through ownership relationships. The
+rendered ConfigMap and Secret have no Job owner reference, so they remain after
+Job cleanup. The operator must remove the exact pilot ConfigMap and Secret
+after collecting results and confirming no Pod uses them. A suspended Job
+which never finishes also does not reach the finished-Job TTL. Avoid broad
+namespace deletion or selectors that could match the PBX's resources.
+[Kubernetes finished-Job cleanup](https://kubernetes.io/docs/concepts/workloads/controllers/ttlafterfinished/).
+
+## Local validation
+
+Run the renderer's synthetic tests without cluster access:
+
+```sh
+python3 -m unittest discover -s tests -p 'test_render_voice_job.py'
+```
+
+These checks validate manifest construction and input rejection. Image runtime
+dependencies, cluster admission, node reachability, physical audio behavior,
+call priority and watchdog behavior under Pod failure remain acceptance gates.

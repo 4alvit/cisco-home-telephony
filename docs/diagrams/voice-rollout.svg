@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="810" viewBox="0 0 1240 810" role="img" aria-labelledby="title desc">
+<title id="title">Cisco 7945G local voice pilot</title>
+<desc id="desc">Stock Cisco XML and RTP interfaces connect a bounded voice controller to Home Assistant. Phone capture, playback and local wake detection have passed an attended physical pilot. Local speech recognition and a complete Assist turn remain separate validation gates.</desc>
+<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10Z" fill="#5c6c85"/></marker></defs>
+<rect width="1240" height="810" fill="#0c1424"/>
+<g font-family="Arial,Helvetica,sans-serif">
+<text x="48" y="66" fill="#f1f5ff" font-size="32" font-weight="700">Local voice on a stock Cisco 7945G</text>
+<text x="48" y="100" fill="#a9bbd7" font-size="18">A bounded, explicit session. Ordinary calls retain priority.</text>
+<rect x="48" y="132" width="1144" height="56" rx="14" fill="#153e36"/>
+<text x="70" y="167" fill="#baf4dc" font-size="19">RTP BASELINE OBSERVED · G.711 capture, audible playback and capture Stop verified</text>
+<rect x="48" y="227" width="282" height="233" rx="20" fill="#16334f" stroke="#4092c8"/>
+<text x="72" y="263" fill="#9cd8ff" font-size="14" letter-spacing="2">STOCK PHONE</text>
+<text x="72" y="298" fill="#fff" font-size="23" font-weight="700">Microphone + speaker</text>
+<text x="72" y="332" fill="#d6e9fa" font-size="17">G.711 μ-law · 8 kHz · 20 ms</text>
+<text x="72" y="362" fill="#d6e9fa" font-size="17">XML status + Stop softkey</text>
+<text x="72" y="392" fill="#d6e9fa" font-size="17">298 × 156 image area</text>
+<text x="72" y="432" fill="#7ec6f5" font-size="15">Firmware remains unchanged</text>
+<path d="M339 338H409" fill="none" stroke="#5c6c85" stroke-width="3" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+<rect x="424" y="227" width="350" height="233" rx="20" fill="#302855" stroke="#9477db"/>
+<text x="448" y="263" fill="#c9b3ff" font-size="14" letter-spacing="2">LOCAL CONTROLLER</text>
+<text x="448" y="298" fill="#fff" font-size="23" font-weight="700">Capture → wake → Assist</text>
+<text x="448" y="332" fill="#e0d8f8" font-size="17">Exact peer and stream checks</text>
+<text x="448" y="362" fill="#e0d8f8" font-size="17">8 kHz ↔ 16 kHz PCM bridge</text>
+<text x="448" y="392" fill="#e0d8f8" font-size="17">Per-phone state and cancellation</text>
+<text x="448" y="432" fill="#c9b3ff" font-size="15">Private ONNX wake: attended trial passed</text>
+<path d="M785 338H845" fill="none" stroke="#5c6c85" stroke-width="3" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+<rect x="860" y="227" width="332" height="233" rx="20" fill="#12433e" stroke="#48bca7"/>
+<text x="884" y="263" fill="#8de5d4" font-size="14" letter-spacing="2">HOME ASSISTANT</text>
+<text x="884" y="298" fill="#fff" font-size="23" font-weight="700">Selected voice pipeline</text>
+<text x="884" y="332" fill="#d2f0e9" font-size="17">Speech recognition</text>
+<text x="884" y="362" fill="#d2f0e9" font-size="17">Conversation + home controls</text>
+<text x="884" y="392" fill="#d2f0e9" font-size="17">Local Silero Baya speech</text>
+<text x="884" y="432" fill="#8de5d4" font-size="15">Local STT is a separate acceptance gate</text>
+<rect x="48" y="494" width="1144" height="128" rx="20" fill="#302c25" stroke="#bca16b"/>
+<text x="72" y="532" fill="#ffe0a8" font-size="20" font-weight="700">Every start has a stop path</text>
+<text x="72" y="567" fill="#f3e6d1" font-size="17">Explicit opt-in · check both lines · absolute deadline · RTP inactivity timeout · independent supervisor</text>
+<text x="72" y="598" fill="#cdbca0" font-size="16">No automatic restart. A process watchdog is not a hardware-enforced microphone lease.</text>
+<rect x="48" y="654" width="552" height="105" rx="18" fill="#19243a"/>
+<text x="72" y="690" fill="#f1f5ff" font-size="19" font-weight="700">Native app / modified firmware</text>
+<text x="72" y="721" fill="#a9bbd7" font-size="16">Offline extraction works. Build and signed deployment</text>
+<text x="72" y="745" fill="#a9bbd7" font-size="16">remain blocked.</text>
+<rect x="624" y="654" width="568" height="105" rx="18" fill="#19243a"/>
+<text x="648" y="690" fill="#f1f5ff" font-size="19" font-weight="700">Video → still images</text>
+<text x="648" y="721" fill="#a9bbd7" font-size="16">Offline conversion works. This is not native SIP video</text>
+<text x="648" y="745" fill="#a9bbd7" font-size="16">on the phone.</text>
+</g></svg>

@@ -1,0 +1,4 @@
+# Optional live HA transport. Python 3.10 also needs requirements-python310.txt.
+websockets>=15,<17
+# Live TTS fetch uses abortable async HTTP even with websockets transport.
+aiohttp>=3.12,<4
