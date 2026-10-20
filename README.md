@@ -57,6 +57,15 @@ conversion to MPP is not required.
   and explicit cleanup checks against a scripted HA peer.
   The [entrypoint check](docs/voice-entrypoint-acceptance.md) also exercises the
   normal configuration loaders and command startup with simulated device I/O.
+  The [reserved-wrapper check](docs/voice-reserved-acceptance.md) covers the
+  durable attempt marker, child process, replay rejection and cleanup.
+- **Preview a configured camera:** [bounded camera preview](docs/camera-preview.md)
+  adds an optional, automatically refreshed view to the phone applications.
+  Ordinary calls and voice sessions retain priority; pictures are not live video.
+- **Experiment with incoming video:** the [SIP video lab](docs/sip-video-bridge.md)
+  receives a synthetic loopback SIP/H.264 call and decodes phone-sized pictures.
+  This isolated prototype decodes after capture; it does not bridge phone audio
+  or deliver pictures to the handset.
 - **Understand the code and infrastructure:** the [maintainer map](docs/code-and-infrastructure-map.md)
   connects entry points, control and audio paths, persistent state, recovery,
   test coverage, failure-handling repairs and remaining limits.

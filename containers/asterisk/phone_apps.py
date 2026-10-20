@@ -117,6 +117,8 @@ class PhoneApps:
             'phone_unavailable': 'The phone is not registered. Try again after it reconnects.',
             'do_not_disturb': 'Do Not Disturb is on. Turn it off before calling.',
             'backend_unavailable': 'Home Assistant is not configured or is unavailable.',
+            'camera_preview_unavailable': 'Camera preview is disabled. Use Snapshot instead.',
+            'phone_focus_unavailable': 'Camera preview needs both phone lines to be idle and voice cleanup confirmed.',
             'line_does_not_own_schedule': 'This schedule belongs to the other line. Select that line first.',
             'ha_timer_replace_required': 'A timer already exists. Cancel it before starting a new one.',
             'ha_request_outcome_unknown': 'Home Assistant did not confirm the result. Check current status before trying again.',
@@ -303,6 +305,12 @@ class PhoneApps:
 
     def handle(self, phone_id, path, query):
         require(phone_id in self.gateway.phones, 'invalid_line', 404)
+        preview = getattr(self.gateway, 'camera_preview', None)
+        if path.startswith('/camera-preview/session/'):
+            require(preview is not None, 'camera_preview_unavailable', 503)
+            return preview.handle(
+                phone_id, path[len('/camera-preview'):], query,
+                context=self.gateway._phone_camera_context(phone_id), method='GET')
         require(isinstance(query, str) and len(query) <= 2048, 'invalid_query')
         try:
             pairs = [] if query == '' else parse_qsl(
@@ -322,6 +330,7 @@ class PhoneApps:
             '/home': {'line', 'page'}, '/entity': {'line', 'id'},
             '/entity-set': {'line', 'id', 'enabled'}, '/cameras': {'line', 'page'},
             '/camera': {'line', 'id'},
+            '/camera-preview': {'line', 'id'},
             '/voice': {'line'}, '/voice-start': {'line'}, '/voice-stop': {'line', 'session'},
         }
         require(path in route_fields, 'not_found', 404)
@@ -512,7 +521,7 @@ class PhoneApps:
                     ('Turn off', url('/entity-set', id=entity['id'], enabled='0')),
                     ('Refresh', url('/entity', id=entity['id']))], 'State: ' + str(entity['state']))
             return self.text(phone_id, line, entity['label'], str(entity['state']) + ' ' + (entity.get('unit') or ''))
-        if path in ('/cameras', '/camera'):
+        if path in ('/cameras', '/camera', '/camera-preview'):
             require(self.backend is not None, 'backend_unavailable', 503)
             cameras = self.backend.cameras(phone_id)
             if path == '/cameras':
@@ -520,12 +529,20 @@ class PhoneApps:
                     (item['label'], url('/camera', id=item['id'])) for item in cameras], path, page)
             found = [item for item in cameras if item['id'] == params.get('id')]
             require(len(found) == 1, 'unknown_camera', 404)
+            if path == '/camera-preview':
+                require(preview is not None, 'camera_preview_unavailable', 503)
+                context = self.gateway._phone_camera_context(phone_id)
+                ref = preview.start(phone_id, found[0]['id'], line=line, context=context)
+                return preview.handle(phone_id, '/session/' + ref.session_id,
+                                      context=context, method='GET')
             image = self.backend.camera(phone_id, found[0]['id'])
             image_url = self.gateway.resource(self.gateway.phones[phone_id], image, 'image/png')
             root = ET.Element('CiscoIPPhoneImageFile')
             child(root, 'Title', found[0]['label']); child(root, 'Prompt', 'Snapshot; not live video')
             child(root, 'LocationX', '-1'); child(root, 'LocationY', '-1'); child(root, 'URL', image_url)
             self.softkey(root, 'Refresh', url('/camera', id=found[0]['id']), 1)
+            if preview is not None:
+                self.softkey(root, 'Preview', url('/camera-preview', id=found[0]['id']), 2)
             self.navigation(root, phone_id, line)
             return xml(root)
         if path == '/apply':

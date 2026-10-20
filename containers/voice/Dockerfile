@@ -27,7 +27,7 @@ RUN python3 -m pip --isolated install --no-cache-dir --disable-pip-version-check
     && python3 -m pip check
 
 COPY scripts/voice_session.py /workspace/scripts/
-COPY containers/asterisk/phone_voice_transport.py containers/asterisk/phone_voice_controller.py containers/asterisk/phone_voice_control.py containers/asterisk/phone_voice_display.py containers/asterisk/phone_gateway.py containers/asterisk/phone_apps.py containers/asterisk/phone_apps_ha.py /workspace/containers/asterisk/
+COPY containers/asterisk/phone_voice_transport.py containers/asterisk/phone_voice_controller.py containers/asterisk/phone_voice_control.py containers/asterisk/phone_voice_display.py containers/asterisk/phone_camera_preview.py containers/asterisk/phone_gateway.py containers/asterisk/phone_apps.py containers/asterisk/phone_apps_ha.py /workspace/containers/asterisk/
 COPY voice_assistant/__init__.py voice_assistant/config.py voice_assistant/audio.py voice_assistant/service.py voice_assistant/ha.py voice_assistant/pipeline.py voice_assistant/playback.py /workspace/voice_assistant/
 COPY containers/voice/smoke.py /opt/voice/smoke.py
 COPY containers/voice/stage_private.py /opt/voice/stage_private.py

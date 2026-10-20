@@ -83,6 +83,21 @@ def room_name(value):
     return value
 
 
+def camera_preview_options(value):
+    """Validate the optional, bounded camera UI without enabling it by default."""
+    require(isinstance(value, dict) and not set(value) - {
+        'enabled', 'refresh_seconds', 'ttl_seconds', 'stale_seconds'},
+        'bad_camera_preview', 400)
+    result = {'enabled': False, 'refresh_seconds': 3, 'ttl_seconds': 60,
+              'stale_seconds': 10, **value}
+    require(type(result['enabled']) is bool, 'bad_camera_preview', 400)
+    for key, low, high in (('refresh_seconds', 2, 5), ('ttl_seconds', 5, 120),
+                           ('stale_seconds', result['refresh_seconds'], 30)):
+        require(type(result[key]) is int and low <= result[key] <= high,
+                'bad_camera_preview', 400)
+    return result
+
+
 def validate(config):
     require(config.get('persistent_enabled') is True, 'explicit_persistent_mode_required', 400)
     private_ip(config['bind_ipv4'])
@@ -147,8 +162,13 @@ def validate(config):
             'bad_service_kind', 400)
         service_numbers.add(number)
     applications = config.get('applications', {})
-    require(isinstance(applications, dict) and not set(applications) - {'enabled', 'home_assistant'}
+    require(isinstance(applications, dict) and not set(applications) - {
+                'enabled', 'home_assistant', 'camera_preview'}
             and type(applications.get('enabled', False)) is bool, 'bad_applications', 400)
+    preview = camera_preview_options(applications.get('camera_preview', {}))
+    require(not preview['enabled'] or
+            applications.get('enabled') is True and 'home_assistant' in applications,
+            'camera_preview_requires_home_assistant', 400)
     if 'home_assistant' in applications:
         require(applications.get('enabled') is True, 'applications_disabled', 400)
         app_module('phone_apps_ha').validate_config(applications['home_assistant'])
@@ -349,11 +369,68 @@ class Gateway:
         self._voice_shutdown_reservations = ExitStack()
         self._voice_shutdown_phones = set()
         self.apps = None
+        self.camera_preview = None
+        self._camera_contexts = {phone_id: object() for phone_id in self.phones}
         if config.get('applications', {}).get('enabled'):
             backend_config = config['applications'].get('home_assistant')
             backend = (app_module('phone_apps_ha').HomeAssistantApps(backend_config)
                        if backend_config else None)
             self.apps = app_module('phone_apps').PhoneApps(self, backend)
+            preview = camera_preview_options(config['applications'].get('camera_preview', {}))
+            if preview.pop('enabled'):
+                module = app_module('phone_camera_preview')
+                bases = {phone_id: self.apps.url(phone_id, '/camera-preview')
+                         for phone_id in self.phones}
+                self.camera_preview = module.CameraPreviewController(
+                    backend, {phone_id: tuple(phone['lines'])
+                              for phone_id, phone in self.phones.items()}, bases,
+                    authorize=self._camera_authorize, observe=self._camera_observe, **preview)
+
+    def _phone_camera_context(self, phone_id):
+        """Only the source-checked phone listener may obtain this private proof."""
+        require(phone_id in self._camera_contexts, 'unknown_phone', 404)
+        return self._camera_contexts[phone_id]
+
+    def _camera_authorize(self, phone_id, action, context):
+        return (action in ('start', 'read', 'stop', 'update')
+                and phone_id in self._camera_contexts
+                and context is self._camera_contexts[phone_id]
+                and not self.stopped.is_set())
+
+    def _camera_observe(self, phone_id, context):
+        """Read both lines and probe the shared lease; never control the phone."""
+        module = app_module('phone_camera_preview')
+        started = time.monotonic()
+        phone = self.phones.get(phone_id)
+        unknown = module.PhoneObservation(
+            started, {line: 'unknown' for line in phone['lines']} if phone else {},
+            'unknown')
+        if (not self._camera_authorize(phone_id, 'read', context)
+                or self.voice is None):
+            return unknown
+        try:
+            with ExitStack() as reservation:
+                # The reservation observes external owners, including the
+                # pre-journal flock window that voice.status alone cannot see.
+                # Do not hold the gateway lock across network I/O. This scope
+                # ends before the caller fetches any camera image from HA.
+                with self.lock:
+                    reservation.enter_context(self.reserve_phone_controls(phone))
+                    alert_pending = any(row['phone'] == phone_id and row['state'] != 'ended'
+                                        for row in self.alerts())
+                with AMI(self.config['ami']) as ami:
+                    endpoints, channels = ami.snapshot()
+                owned = own_channels(phone, channels)
+                lines = {line: ('idle' if endpoints.get(line) == 'Not in use' else 'busy')
+                         for line in phone['lines']}
+                if owned or alert_pending:
+                    lines = {line: 'busy' for line in phone['lines']}
+                # The held reservation checked the locked journal and excludes
+                # external owners. It covers the full physical inventory;
+                # voice.status only covers phones with manual Start profiles.
+                return module.PhoneObservation(started, lines, 'idle')
+        except Exception:
+            return unknown
 
     def attach_voice(self, path, workspace):
         require(self.voice is None, 'voice_control_already_attached', 409)
@@ -933,6 +1010,11 @@ class Gateway:
 
     def background(self):
         while not self.stopped.wait(2):
+            if self.camera_preview is not None:
+                try:
+                    self.camera_preview.cleanup()
+                except Exception:
+                    pass  # Preview maintenance cannot disable call handling.
             try:
                 with self.lock, AMI(self.config['ami']) as ami:
                     status = ami.action('CoreStatus')[0]
@@ -997,13 +1079,22 @@ class Handler(BaseHTTPRequestHandler):
         super().setup()
         self.connection.settimeout(12)
 
-    def reply(self, status, data, content_type='application/json'):
+    def reply(self, status, data, content_type='application/json', headers=None):
         if not isinstance(data, bytes):
             data = json.dumps(data).encode()
+        extra = {'Cache-Control': 'no-store'}
+        for name, value in (headers or {}).items():
+            require(name in ('Refresh', 'Cache-Control', 'Pragma', 'Expires')
+                    and isinstance(value, str) and len(value) <= 512
+                    and value.isascii() and not any(ord(char) < 32 or ord(char) == 127
+                                                   for char in value),
+                    'invalid_display_header', 503)
+            extra[name] = value
         self.send_response(status)
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(data)))
-        self.send_header('Cache-Control', 'no-store')
+        for name, value in extra.items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(data)
 
@@ -1040,14 +1131,42 @@ class Handler(BaseHTTPRequestHandler):
             apps_path = phone.get('apps_path')
             if gateway.apps and apps_path and (target.path == apps_path or target.path.startswith(apps_path + '/')):
                 require(self.command == 'GET' and len(self.path) <= 4096 and not self.body(0), 'bad_app_request', 400)
+                app_route = target.path[len(apps_path):] or '/'
                 # HA schedule calls read gateway state in a separate request.
                 # Do not hold the gateway lock while invoking the application.
                 try:
-                    data, content_type = gateway.apps.handle(phone['id'], target.path[len(apps_path):] or '/', target.query)
+                    result = gateway.apps.handle(
+                        phone['id'], app_route, target.query)
+                    if (getattr(gateway, 'camera_preview', None) is not None
+                            and isinstance(result, app_module('phone_camera_preview').DisplayResponse)):
+                        require(result.content_type in ('text/xml; charset=utf-8', 'image/png')
+                                and isinstance(result.body, bytes)
+                                and type(result.status) is int
+                                and result.status in (200, 204, 400, 403, 404, 409, 413, 429, 503),
+                                'invalid_display_response', 503)
+                        if not result.allow_present:
+                            return self.reply(204, b'', result.content_type)
+                        refresh = result.headers.get('Refresh')
+                        if refresh is not None:
+                            prefix = (f'http://{gateway.config["bind_ipv4"]}:{phone["port"]}'
+                                      + apps_path + '/camera-preview/session/')
+                            require(re.fullmatch(r'[2-5]; url=' + re.escape(prefix)
+                                                 + r'[0-9a-f]{32}(?:/text)?', refresh),
+                                    'invalid_display_refresh', 503)
+                        return self.reply(result.status, result.body,
+                                          result.content_type, result.headers)
+                    data, content_type = result
                 except Exception as error:
                     # Return a native error page, without disclosing exceptions,
                     # HA response bodies, credentials or callback URLs.
                     data, content_type = gateway.apps.error(getattr(error, 'reason', 'operation_failed'))
+                    if (getattr(gateway, 'camera_preview', None) is not None
+                            and (app_route == '/camera-preview'
+                                 or app_route.startswith('/camera-preview/'))
+                            and isinstance(error, app_module('phone_camera_preview').DisplayError)
+                            and type(error.status) is int
+                            and error.status in (400, 403, 404, 405, 409, 413, 429, 503)):
+                        return self.reply(error.status, data, content_type)
                 return self.reply(200, data, content_type)
             require(self.command == 'GET' and not target.query and not self.body(0), 'not_found', 404)
             # Separate resource lock would deadlock an Execute call awaiting its
@@ -1146,6 +1265,11 @@ def main():
             except Exception:
                 uncertain = True
         gateway.stopped.set()
+        if gateway.camera_preview is not None:
+            try:
+                gateway.camera_preview.close()
+            except Exception:
+                print('Camera preview shutdown incomplete.', file=sys.stderr)
         try:
             # ExitStack runs every close even if one fails. Quiescent-phone
             # fences remain held through the final authentication listener.

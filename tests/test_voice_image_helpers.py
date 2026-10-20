@@ -157,6 +157,8 @@ class VoiceImageHelperTests(unittest.TestCase):
                     copied[source] = fields[-1]
         self.assertEqual(set(copied), expected - {"containers/voice/Dockerfile"})
         self.assertEqual(copied[CONTROL_SOURCE], "/workspace/containers/asterisk/")
+        self.assertEqual(copied["containers/asterisk/phone_camera_preview.py"],
+                         "/workspace/containers/asterisk/")
         self.assertEqual(copied["containers/voice/stage_private.py"], "/opt/voice/stage_private.py")
         for relative, info in snapshot["files"].items():
             self.assertEqual(info["sha256"], hashlib.sha256((self.repo / relative).read_bytes()).hexdigest())

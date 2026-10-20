@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="720" viewBox="0 0 1100 720" role="img" aria-labelledby="title desc">
+  <title id="title">SIP video: executable loopback proof</title>
+  <desc id="desc">A synthetic caller negotiates SIP over loopback, sends real H264 RTP, and obtains bounded PNG images after capture. Audio bridging and the Cisco display remain separate future work.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 L9 5 L0 10Z" fill="#8bb9d1"/></marker>
+    <style>text{font-family:system-ui,Arial,sans-serif;fill:#e8f2fa}.h{font-size:24px;font-weight:700}.s{font-size:17px}.small{font-size:15px;fill:#b6ccdc}.label{font-size:16px;font-weight:650}.line{fill:none;stroke:#8bb9d1;stroke-width:3;marker-end:url(#arrow)}</style>
+  </defs>
+  <rect width="1100" height="720" rx="24" fill="#0b1728"/>
+  <text x="40" y="54" class="h">SIP video → phone-sized pictures</text>
+  <text x="40" y="86" class="s">Executable lab • real UDP and real decoding • all sockets on 127.0.0.1</text>
+  <rect x="40" y="120" width="310" height="190" rx="18" fill="#113d4d" stroke="#40d2c0" stroke-width="2"/>
+  <text x="62" y="156" class="h">Synthetic caller</text>
+  <text x="62" y="189" class="s">FFmpeg: 3 changing H.264 frames</text>
+  <text x="62" y="219" class="s">640 × 360 baseline source</text>
+  <text x="62" y="249" class="s">Single NAL + FU-A packetization</text>
+  <text x="62" y="282" class="small">No camera, microphone or telephone</text>
+  <rect x="450" y="120" width="600" height="190" rx="18" fill="#162d52" stroke="#6e9cff" stroke-width="2"/>
+  <text x="474" y="156" class="h">Bounded SIP responder</text>
+  <text x="474" y="189" class="s">INVITE / SDP → 100 / 180 / 200 → ACK</text>
+  <text x="474" y="219" class="s">One receive-only H.264 stream; audio port = 0</text>
+  <text x="474" y="249" class="s">BYE cleanup • CANCEL / 487 • ACK timeout</text>
+  <text x="474" y="282" class="small">Narrow lab protocol subset, not a production SIP stack</text>
+  <path d="M350 170 H438" class="line"/>
+  <text x="373" y="158" class="label">SIP</text>
+  <rect x="40" y="380" width="310" height="176" rx="18" fill="#173c39" stroke="#64cf92" stroke-width="2"/>
+  <text x="62" y="416" class="h">RTP + H.264 checks</text>
+  <text x="62" y="449" class="s">Peer, payload, sequence, SSRC</text>
+  <text x="62" y="479" class="s">SPS geometry before decode</text>
+  <text x="62" y="509" class="s">Finite time, packets and bytes</text>
+  <text x="62" y="539" class="small">Invalid or incomplete capture → reject</text>
+  <path d="M185 310 V368" class="line"/>
+  <text x="201" y="352" class="label">Real RTP</text>
+  <rect x="405" y="380" width="280" height="176" rx="18" fill="#3c2c51" stroke="#c69afa" stroke-width="2"/>
+  <text x="427" y="416" class="h">Real FFmpeg decode</text>
+  <text x="427" y="449" class="s">H.264 stdin → PNG stdout</text>
+  <text x="427" y="479" class="s">After finite capture / hangup</text>
+  <text x="427" y="509" class="s">Timeout and output cap</text>
+  <text x="427" y="539" class="small">No network input in the decoder</text>
+  <path d="M350 466 H393" class="line"/>
+  <rect x="740" y="380" width="310" height="176" rx="18" fill="#46361d" stroke="#e7ba69" stroke-width="2"/>
+  <text x="762" y="416" class="h">Verified output</text>
+  <text x="762" y="449" class="s">3 distinct 298 × 156 RGB PNGs</text>
+  <text x="762" y="479" class="s">Private files + hashes + receipts</text>
+  <text x="762" y="509" class="s">Cleanup checked before rescue</text>
+  <text x="762" y="539" class="small">Pictures are not synchronized video</text>
+  <path d="M685 466 H728" class="line"/>
+  <rect x="40" y="594" width="1010" height="88" rx="16" fill="#182332" stroke="#53687d" stroke-dasharray="7 6"/>
+  <text x="62" y="627" class="label">Still to build and qualify</text>
+  <text x="62" y="657" class="s">External SIP peer • audio-only Asterisk leg • live frame slot • phone screen ownership + delivery</text>
+</svg>

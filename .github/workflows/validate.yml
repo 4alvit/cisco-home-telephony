@@ -46,7 +46,7 @@ jobs:
       - name: Python and shell checks
         run: |
           .venv/bin/python -m unittest discover -s tests -v
-          .venv/bin/python -m compileall -q scripts voice_assistant containers/asterisk tools/firmware_lab
+          .venv/bin/python -m compileall -q scripts voice_assistant containers/asterisk tools/firmware_lab tools/sip_video
           for script in scripts/*.sh; do bash -n "$script"; done
       - name: Build and smoke-test the isolated voice runtime
         run: bash scripts/build-voice-image.sh cisco-home-ci

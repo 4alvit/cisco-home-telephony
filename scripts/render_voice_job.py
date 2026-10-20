@@ -20,6 +20,7 @@ SOURCE_FILES = (
     'containers/asterisk/phone_voice_transport.py',
     'containers/asterisk/phone_voice_controller.py',
     'containers/asterisk/phone_voice_display.py',
+    'containers/asterisk/phone_camera_preview.py',
     'containers/asterisk/phone_gateway.py',
     'containers/asterisk/phone_apps.py',
     'containers/asterisk/phone_apps_ha.py',

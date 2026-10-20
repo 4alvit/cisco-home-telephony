@@ -218,6 +218,10 @@ sampling interval is not a measured phone refresh rate.
 
 ### Concrete SIP bridge design and remaining work
 
+The [SIP video lab](sip-video-bridge.md) now implements a finite synthetic
+loopback SIP/RTP-to-PNG path, including real H.264 decoding after capture.
+It does not implement the two-leg bridge below or deliver pictures to a phone.
+
 A separate **server-side PJSIP application** is the concrete path for a source
 that exposes only SIP video:
 

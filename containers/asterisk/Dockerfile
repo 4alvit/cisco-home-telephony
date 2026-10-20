@@ -53,7 +53,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=build /stage/ /
 COPY radio.py phone_services.py radio-catalog.json /var/lib/asterisk/agi-bin/
 COPY phone_gateway.py /usr/local/lib/cisco-phone-gateway.py
-COPY phone_apps.py phone_apps_ha.py /usr/local/lib/
+COPY phone_apps.py phone_apps_ha.py phone_camera_preview.py phone_voice_display.py /usr/local/lib/
 RUN chmod 0555 /var/lib/asterisk/agi-bin/radio.py /var/lib/asterisk/agi-bin/phone_services.py \
     && chmod 0444 /var/lib/asterisk/agi-bin/radio-catalog.json
 RUN mkdir -p /run/asterisk /var/lib/asterisk/db /var/spool/asterisk /var/log/asterisk \

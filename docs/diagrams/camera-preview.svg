@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="880" viewBox="0 0 1120 880" role="img" aria-labelledby="title desc">
+  <title id="title">Cisco camera preview: explicit start, idle checks and bounded still images</title>
+  <desc id="desc">Manual Snapshot remains available. An explicit Preview action requires fresh idle state across both phone lines and an available voice reservation. The gateway serializes Home Assistant image requests and stores one 298 by 156 PNG per session. Page refresh is scheduled every 2 to 5 seconds within an absolute lifetime. Acquired time is not camera capture time. Calls take priority, and Stop or expiry ends the preview without phone audio commands.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 10 5 0 10Z" fill="#64748b"/>
+    </marker>
+    <style>
+      text { font-family: Arial, Helvetica, sans-serif; }
+      .title { font-size: 29px; font-weight: 700; fill: #f8fafc; }
+      .subtitle { font-size: 16px; fill: #cbd5e1; }
+      .section { font-size: 19px; font-weight: 700; fill: #0f172a; }
+      .label { font-size: 18px; font-weight: 700; fill: #0f172a; }
+      .body { font-size: 15px; fill: #334155; }
+      .small { font-size: 13px; fill: #475569; }
+      .pill { font-size: 13px; font-weight: 700; fill: #0f766e; }
+      .flow { stroke: #64748b; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect width="1120" height="880" rx="20" fill="#f1f5f9"/>
+  <path d="M20 0H1100Q1120 0 1120 20V116H0V20Q0 0 20 0" fill="#0f172a"/>
+  <text x="34" y="46" class="title">Camera preview, with the phone in control</text>
+  <text x="34" y="78" class="subtitle">Cisco XML still images · explicit opt-in · no native firmware modification · no SIP video</text>
+
+  <rect x="34" y="137" width="278" height="32" rx="16" fill="#ccfbf1"/>
+  <text x="50" y="158" class="pill">Manual Snapshot remains unchanged</text>
+  <text x="34" y="205" class="section">1. Start only when the user chooses Preview</text>
+  <g transform="translate(34 224)">
+    <rect width="236" height="160" rx="14" fill="#dbeafe" stroke="#93c5fd"/>
+    <text x="18" y="32" class="label">Phone Services</text>
+    <text x="18" y="63" class="body">Camera Snapshot</text>
+    <text x="18" y="88" class="body">Choose a camera</text>
+    <text x="18" y="113" class="body">Press Preview explicitly</text>
+    <text x="18" y="140" class="small">Opening Snapshot does not start it</text>
+  </g>
+  <path d="M278 304H298" class="flow" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <g transform="translate(306 224)">
+    <rect width="236" height="160" rx="14" fill="#fef3c7" stroke="#fbbf24"/>
+    <text x="18" y="32" class="label">Fresh idle checks</text>
+    <text x="18" y="63" class="body">Both lines idle; no calls</text>
+    <text x="18" y="88" class="body">No unsettled ringing alerts</text>
+    <text x="18" y="113" class="body">Voice reservation available</text>
+    <text x="18" y="140" class="small">Unknown or assistant-owned: yield</text>
+  </g>
+  <path d="M550 304H570" class="flow" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <g transform="translate(578 224)">
+    <rect width="236" height="160" rx="14" fill="#e0e7ff" stroke="#a5b4fc"/>
+    <text x="18" y="32" class="label">Home Assistant</text>
+    <text x="18" y="63" class="body">Allowlisted camera only</text>
+    <text x="18" y="88" class="body">One acquisition at a time</text>
+    <text x="18" y="113" class="body">Bounded request, up to 8s</text>
+    <text x="18" y="140" class="small">No parallel queue for a slow source</text>
+  </g>
+  <path d="M822 304H842" class="flow" stroke="#64748b" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <g transform="translate(850 224)">
+    <rect width="236" height="160" rx="14" fill="#ccfbf1" stroke="#5eead4"/>
+    <text x="18" y="32" class="label">One current image</text>
+    <text x="18" y="63" class="body">298 × 156 RGB PNG</text>
+    <text x="18" y="88" class="body">Aspect ratio preserved</text>
+    <text x="18" y="113" class="body">Memory only; no history</text>
+    <text x="18" y="140" class="small">Recheck idle before presentation</text>
+  </g>
+
+  <text x="34" y="432" class="section">2. Refresh within fixed limits</text>
+  <g transform="translate(34 451)">
+    <rect width="510" height="154" rx="14" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="20" y="32" class="label">Phone pulls the page and cached PNG</text>
+    <text x="20" y="64" class="body">Refresh schedule: 2–5 seconds · default 3 seconds</text>
+    <text x="20" y="90" class="body">Absolute lifetime: 5–120 seconds · default 60 seconds</text>
+    <text x="20" y="116" class="body">Requests do not extend the lifetime or queue new sessions</text>
+    <text x="20" y="140" class="small">This interval is not a guaranteed frame rate or delivery latency</text>
+  </g>
+  <g transform="translate(566 451)">
+    <rect width="520" height="154" rx="14" fill="#fff7ed" stroke="#fdba74"/>
+    <text x="20" y="32" class="label">Acquired time ≠ camera capture time</text>
+    <text x="20" y="64" class="body">UTC label: when the gateway acquired the image</text>
+    <text x="20" y="90" class="body">Camera capture time unavailable; HA may return a cache</text>
+    <text x="20" y="116" class="body">Expiry uses monotonic acquisition age, not the wall clock</text>
+    <text x="20" y="140" class="small">Matching image bytes prove neither freshness nor staleness</text>
+  </g>
+
+  <text x="34" y="653" class="section">3. Yield or stop without controlling phone audio</text>
+  <g transform="translate(34 672)">
+    <rect width="510" height="130" rx="14" fill="#fee2e2" stroke="#fca5a5"/>
+    <text x="20" y="32" class="label">Calls and existing activity take priority</text>
+    <text x="20" y="63" class="body">Busy, unknown, expired, stopped or failed: no refresh</text>
+    <text x="20" y="89" class="body">No queued page after a call; a new Preview is explicit</text>
+    <text x="20" y="114" class="small">No call, hangup, microphone, speaker-key or RTP action</text>
+  </g>
+  <g transform="translate(566 672)">
+    <rect width="520" height="130" rx="14" fill="#ede9fe" stroke="#c4b5fd"/>
+    <text x="20" y="32" class="label">Press Stop, then Exit</text>
+    <text x="20" y="63" class="body">Stop ends the matching preview session</text>
+    <text x="20" y="89" class="body">Expiry cannot erase a page already on a disconnected phone</text>
+    <text x="20" y="114" class="small">Use Exit to dismiss; a visible old picture is not proof of activity</text>
+  </g>
+  <text x="34" y="844" class="small">Source feature and acceptance design. Offline XML/PNG demonstration is not deployment or physical-phone acceptance.</text>
+</svg>

@@ -3,6 +3,7 @@ import http.client
 import importlib.util
 from pathlib import Path
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
@@ -451,7 +452,66 @@ class PhoneAppsTests(unittest.TestCase):
         self.assertEqual(root.find('URL').text, 'http://192.168.50.10:18080/content/opaque')
         self.assertEqual(self.gateway.resources, [('201', b'PNG test fixture', 'image/png')])
         self.assertEqual(self.backend.calls, [('camera', '201', 'door')])
+        self.assertNotIn('Preview', [item.findtext('Name') for item in root.findall('SoftKeyItem')])
         with self.assertRaises(apps.AppError): self.get('/camera', 'id=camera.arbitrary')
+
+    def preview(self):
+        proof = object()
+        calls = []
+        response = object()
+        def start(phone, camera, **options):
+            calls.append(('start', phone, camera, options))
+            return SimpleNamespace(session_id='a' * 32)
+        def handle(phone, path, query='', **options):
+            calls.append(('handle', phone, path, query, options))
+            return response
+        self.gateway.camera_preview = SimpleNamespace(start=start, handle=handle)
+        self.gateway._phone_camera_context = lambda _phone: proof
+        return proof, calls, response
+
+    def test_preview_is_explicit_and_preserves_snapshot_and_selected_line(self):
+        proof, calls, response = self.preview()
+        root = self.get('/camera', 'id=door&line=202')
+        self.assertEqual(self.backend.calls, [('camera', '201', 'door')])
+        self.assertEqual(calls, [])
+        link = next(item.findtext('URL') for item in root.findall('SoftKeyItem')
+                    if item.findtext('Name') == 'Preview')
+        target = urlsplit(link)
+        self.assertEqual(parse_qs(target.query), {'line': ['202'], 'id': ['door']})
+        result = self.app.handle('201', '/camera-preview', target.query)
+        self.assertIs(result, response)
+        self.assertEqual(calls[0], ('start', '201', 'door', {'line': '202', 'context': proof}))
+        self.assertEqual(calls[1], ('handle', '201', '/session/' + 'a' * 32, '',
+                                  {'context': proof, 'method': 'GET'}))
+        self.assertFalse(self.gateway.calls)
+        self.assertEqual(len(self.backend.calls), 1)
+
+    def test_preview_start_requires_allowed_camera_and_physical_line(self):
+        _, calls, _ = self.preview()
+        for query in ('id=door&line=204', 'id=camera.arbitrary', 'id=http://example.invalid',
+                      'id=door&id=door', 'id=door&url=http://example.invalid'):
+            with self.subTest(query=query), self.assertRaises(apps.AppError):
+                self.app.handle('201', '/camera-preview', query)
+        self.assertFalse(calls)
+        self.assertFalse(self.backend.calls)
+
+    def test_preview_sessions_delegate_strict_query_and_phone_binding_to_controller(self):
+        proof, calls, response = self.preview()
+        result = self.app.handle('201', '/camera-preview/session/' + 'b' * 32 + '/image', 'v=3')
+        self.assertIs(result, response)
+        self.assertEqual(calls, [('handle', '201', '/session/' + 'b' * 32 + '/image', 'v=3',
+                                 {'context': proof, 'method': 'GET'})])
+        self.assertFalse(self.backend.calls)
+        with self.assertRaises(apps.AppError):
+            self.app.handle('299', '/camera-preview/session/' + 'b' * 32, '')
+
+    def test_disabled_preview_has_no_start_or_session_route(self):
+        for path, query in (('/camera-preview', 'id=door'),
+                            ('/camera-preview/session/' + 'b' * 32, '')):
+            with self.subTest(path=path), self.assertRaises(apps.AppError) as caught:
+                self.app.handle('201', path, query)
+            self.assertEqual(caught.exception.reason, 'camera_preview_unavailable')
+        self.assertFalse(self.backend.calls)
 
     def test_error_never_reflects_unknown_backend_details(self):
         root = ET.fromstring(self.app.error('secret=http://private/token')[0])
