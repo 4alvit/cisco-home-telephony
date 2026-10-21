@@ -16,6 +16,11 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+if __package__:
+    from .test_phone_voice_control import no_media_report
+else:
+    from test_phone_voice_control import no_media_report
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
@@ -365,7 +370,6 @@ class ReservationTests(unittest.TestCase):
         self.assertFalse(result["turn_success"])
 
     def test_validated_never_started_cleanup_releases_but_command_stays_failed(self):
-        from test_phone_voice_control import no_media_report
         wake = self.manager()
         started = self.start(wake)
         value = no_media_report(started['session_id'],
@@ -391,7 +395,6 @@ class ReservationTests(unittest.TestCase):
         self.assertEqual(code, 1)
 
     def test_unbound_never_started_claim_cannot_make_wrapper_cleanup_successful(self):
-        from test_phone_voice_control import no_media_report
         wake = self.manager()
         started = self.start(wake)
         value = no_media_report(started['session_id'], '0' * 64)
