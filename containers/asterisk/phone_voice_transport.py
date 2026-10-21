@@ -759,8 +759,10 @@ def load_pilot_config(path):
     with Path(path).open() as source:
         config = json.load(source)
     allowed = {'gateway_config', 'line', 'bind_ipv4', 'bind_port', 'phone_rtp_port',
-               'duration_seconds', 'receive_idle_seconds', 'volume', 'expected_source_port'}
+               'duration_seconds', 'receive_idle_seconds', 'volume', 'expected_source_port',
+               'media_transport'}
     _require(isinstance(config, dict) and not set(config) - allowed, 'invalid_pilot_config')
+    _require(config.get('media_transport', 'xml_rtp') == 'xml_rtp', 'xml_rtp_transport_required')
     _require(isinstance(config.get('gateway_config'), str), 'gateway_config_required')
     _ipv4(config['bind_ipv4'])
     _port(config['bind_port'])

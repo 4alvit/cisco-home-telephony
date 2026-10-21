@@ -1,0 +1,10 @@
+{
+  "gateway_config": ".local/gateway.json",
+  "line": "201",
+  "bind_ipv4": "192.168.50.10",
+  "bind_port": 24576,
+  "phone_rtp_port": 24578,
+  "duration_seconds": 300,
+  "receive_idle_seconds": 3,
+  "media_transport": "sip_audiosocket"
+}
