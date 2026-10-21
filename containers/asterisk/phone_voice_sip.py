@@ -213,8 +213,10 @@ class Sink:
                 if generation != self.generation:
                     raise asyncio.CancelledError
                 self.guard()
-                await self.wire.write_pcm(pcm)
+                # Reserve the wire slot before drain can be cancelled after
+                # dispatch; the next idle frame must still respect pacing.
                 self.next_frame = self.clock() + .02
+                await self.wire.write_pcm(pcm)
         finally:
             self.pending_tts -= 1
 
@@ -229,9 +231,9 @@ class Sink:
                 if self.pending_tts or self.clock() < self.next_frame:
                     continue
                 self.guard()
+                self.next_frame = self.clock() + .02
                 await self.wire.write_pcm(SILENCE_PCM)
                 self.silence_frames += 1
-                self.next_frame = self.clock() + .02
 
     async def stop(self, phone):
         if phone != self.grant.phone:

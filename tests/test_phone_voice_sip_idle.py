@@ -217,6 +217,71 @@ class IdleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(wire.frames_sent, 8)
         self.assertEqual(session.sink.silence_frames, 2)
 
+    async def test_cancelled_tts_drain_still_reserves_twenty_ms_before_idle(self):
+        now = [100.0]
+        reader, writer, pbx, wire, session = self.setup_session(clock=lambda: now[0])
+        dispatch_times = []
+        original_write = writer.write
+
+        def write(data):
+            dispatch_times.append(now[0])
+            original_write(data)
+
+        writer.write = write
+        pump_acquired = asyncio.Event()
+        tts_task = [None]
+
+        class ObservedLock(asyncio.Lock):
+            async def acquire(self):
+                acquired = await super().acquire()
+                if asyncio.current_task() is not tts_task[0]:
+                    pump_acquired.set()
+                return acquired
+
+        session.sink.lock = ObservedLock()
+        reader.feed_data(packet(1, TOKEN.bytes))
+        task = self.launch(session)
+        await writer.wait_frames(1)
+        async with asyncio.timeout(1):
+            while session.sink.lock.locked():
+                await asyncio.sleep(0)
+
+        # Dispatch TTS at the next slot, then cancel while its drain is still
+        # pending. The session and its idle pump remain running throughout.
+        now[0] += .02
+        writer.drain_entered.clear()
+        writer.drain_release.clear()
+        tts_task[0] = asyncio.create_task(session.sink.write_pcm('demo', FRAME, 16000))
+        self.tasks.append(tts_task[0])
+        await asyncio.wait_for(writer.drain_entered.wait(), 1)
+        self.assertEqual(writer.data, [SILENCE, packet(0x12, FRAME)])
+        tts_at = dispatch_times[-1]
+        now[0] = tts_at + .001
+        pump_acquired.clear()
+        tts_task[0].cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await tts_task[0]
+        writer.drain_release.set()
+
+        # Observe an actual pump pass at +1ms, rather than infer that it ran
+        # from elapsed wall time. It must decline this too-early wire slot.
+        await asyncio.wait_for(pump_acquired.wait(), 1)
+        self.assertEqual(writer.data, [SILENCE, packet(0x12, FRAME)])
+        self.assertFalse(task.done())
+        self.assertFalse(session.stop_requested.is_set())
+        self.assertEqual(session.sink.pending_tts, 0)
+        now[0] = tts_at + .02000001
+        await writer.wait_frames(3)
+        self.assertEqual(writer.data, [SILENCE, packet(0x12, FRAME), SILENCE])
+        self.assertGreaterEqual(dispatch_times[2] - dispatch_times[1], .02)
+        self.assertFalse(task.done())
+        session.request_stop()
+        result = await self.finish(task)
+        self.assertEqual(result.reason, 'explicit_stop')
+        self.assertEqual(wire.frames_sent, 2)
+        self.assertEqual(session.sink.silence_frames, 2)
+        self.assertEqual(pbx.hangups, [CALL])
+
     async def test_stop_preemption_staleness_and_expiry_prevent_next_idle_write(self):
         for change, expected in (('stop', 'explicit_stop'), ('preempt', 'call_changed'),
                                  ('stale', 'unknown'), ('expiry', 'lease_expired')):
