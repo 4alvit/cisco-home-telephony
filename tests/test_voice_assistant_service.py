@@ -136,20 +136,137 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([e.state for e in self.events][-4:], ["listening", "thinking", "speaking", "stopped"])
 
     async def test_model_warmup_announces_ready_once_after_full_history(self):
-        service = self.make(factory=lambda _: WarmingTrigger())
+        now = [100.0]
+        service = self.make(factory=lambda _: WarmingTrigger(), settings=ServiceSettings(
+            enabled=True, duplicate_window_seconds=2))
+        service._clock = lambda: now[0]
         stream = await service.listen("alpha")
         self.assertEqual(service.status("alpha").state, "armed")
         self.assertEqual(service.status("alpha").reason, "model_warmup")
-        for _ in range(63):
+        for index in range(63):
+            now[0] = 100.0 + (index + 1) * .02
             self.assertTrue(service.feed_pcm("alpha", stream, bytes(640)))
         self.assertEqual(service.status("alpha").reason, "model_warmup")
+        now[0] = 101.28
         self.assertTrue(service.feed_pcm("alpha", stream, bytes(640)))
+        # Fresh listening has no previous-turn cooldown to wait out.
         self.assertEqual(service.status("alpha").reason, "wake_ready")
         for _ in range(12):
             self.assertTrue(service.feed_pcm("alpha", stream, bytes(640)))
         self.assertEqual([event.reason for event in self.events if event.state == "armed"],
                          ["model_warmup", "wake_ready"])
         self.assertEqual(self.assist.calls, [])
+
+    async def test_rearm_wake_ready_waits_for_duplicate_window(self):
+        now = [100.0]
+        service = self.make(factory=lambda _: WarmingTrigger(), settings=ServiceSettings(
+            enabled=True, rearm_after_turn=True, duplicate_window_seconds=2))
+        service._clock = lambda: now[0]
+        stream = await service.listen("alpha")
+        for _ in range(64):
+            service.feed_pcm("alpha", stream, bytes(640))
+        service.feed_pcm("alpha", stream, FRAME)
+        service.end_utterance("alpha", stream)
+        await service.wait_idle("alpha")
+        self.assertEqual(len(self.assist.calls), 1)
+        self.assertEqual(service._quiet_until, 102.0)
+        rearmed_at = len(self.events)
+
+        for index in range(64):
+            now[0] = 100.0 + (index + 1) * .02
+            service.feed_pcm("alpha", stream, bytes(640))
+        self.assertTrue(service._sessions["alpha"].detector.ready)
+        self.assertEqual(service.status("alpha").reason, "model_warmup")
+        now[0] = 101.999
+        service.feed_pcm("alpha", stream, bytes(640))
+        self.assertFalse(any(event.reason == "wake_ready" for event in self.events[rearmed_at:]))
+
+        now[0] = 102.0
+        service.feed_pcm("alpha", stream, bytes(640))
+        self.assertEqual(service.status("alpha").reason, "wake_ready")
+        self.assertEqual([event.reason for event in self.events[rearmed_at:]], ["wake_ready"])
+        service.feed_pcm("alpha", stream, FRAME)
+        self.assertEqual(service.status("alpha").state, "listening")
+        await service.stop("alpha")
+        self.assertEqual(service.status("alpha").state, "stopped")
+        self.assertEqual(service.status("alpha").reason, "user_stop")
+        self.assertFalse(service.feed_pcm("alpha", stream, FRAME))
+
+    async def test_previous_owner_cooldown_suppresses_ready_and_trigger(self):
+        now = [100.0]
+        service = self.make(factory=lambda _: WarmingTrigger(), settings=ServiceSettings(
+            enabled=True, duplicate_window_seconds=2))
+        service._clock = lambda: now[0]
+        previous = await service.activate("alpha")
+        service.end_utterance("alpha", previous)
+        await service.wait_idle("alpha")
+        stream = await service.listen("beta")
+        for index in range(64):
+            now[0] = 100.0 + (index + 1) * .02
+            service.feed_pcm("beta", stream, bytes(640))
+        self.assertTrue(service._sessions["beta"].detector.ready)
+        self.assertEqual(service.status("beta").reason, "model_warmup")
+        service.feed_pcm("beta", stream, FRAME)
+        self.assertEqual(service.status("beta").state, "armed")
+        self.assertFalse(service._sessions["beta"].detector.ready)
+        self.assertEqual(len(self.assist.calls), 1)
+        self.assertFalse(any(event.phone_id == "beta" and event.reason == "wake_ready"
+                             for event in self.events))
+
+    async def test_active_owner_suppresses_other_wake_ready(self):
+        service = self.make(factory=lambda _: WarmingTrigger())
+        await service.activate("alpha")
+        stream = await service.listen("beta")
+        for _ in range(64):
+            service.feed_pcm("beta", stream, bytes(640))
+        self.assertTrue(service._sessions["beta"].detector.ready)
+        self.assertEqual(service.status("beta").reason, "model_warmup")
+        service.feed_pcm("beta", stream, FRAME)
+        self.assertEqual(service.status("beta").state, "armed")
+        self.assertEqual(service._owner, "alpha")
+        self.assertFalse(any(event.phone_id == "beta" and event.reason == "wake_ready"
+                             for event in self.events))
+
+    async def test_new_owner_immediately_refreshes_other_ready_streams(self):
+        for mode in ("manual", "wake"):
+            with self.subTest(mode=mode):
+                service = self.make(factory=lambda _: WarmingTrigger(),
+                                    phones={"alpha": True, "beta": True, "inactive": True})
+                events = self.events
+                beta_stream = await service.listen("beta")
+                beta = service._sessions["beta"]
+                for _ in range(64):
+                    service.feed_pcm("beta", beta_stream, bytes(640))
+                self.assertEqual(service.status("beta").reason, "wake_ready")
+                resets = beta.detector.resets
+
+                if mode == "manual":
+                    await service.activate("alpha")
+                else:
+                    alpha_stream = await service.listen("alpha")
+                    for _ in range(64):
+                        service.feed_pcm("alpha", alpha_stream, bytes(640))
+                    service.feed_pcm("alpha", alpha_stream, FRAME)
+
+                # No beta audio arrives between owner acquisition and this
+                # observation: its previously published Ready must be revoked.
+                self.assertEqual(service._owner, "alpha")
+                self.assertEqual(service.status("beta").reason, "model_warmup")
+                self.assertEqual([(event.phone_id, event.state) for event in events[-2:]],
+                                 [("beta", "armed"), ("alpha", "listening")])
+                self.assertEqual(beta.stream_id, beta_stream)
+                self.assertTrue(beta.detector.ready)
+                self.assertEqual(beta.detector.frames, 64)
+                self.assertEqual(beta.detector.resets, resets)
+                self.assertEqual([event.reason for event in events
+                                  if event.phone_id == "beta" and event.state == "armed"],
+                                 ["model_warmup", "wake_ready", "model_warmup"])
+                count = len(events)
+                service.feed_pcm("beta", beta_stream, bytes(640))
+                self.assertEqual(len(events), count)
+                self.assertEqual(beta.detector.frames, 65)
+                self.assertEqual(service.status("inactive").state, "stopped")
+                self.assertFalse(any(event.phone_id == "inactive" for event in events))
 
     async def test_new_stream_restarts_warmup_and_rejects_stale_progress(self):
         service = self.make(factory=lambda _: WarmingTrigger())
