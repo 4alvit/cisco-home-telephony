@@ -137,6 +137,10 @@ IDs and credentials private. Selecting this profile need not change HA defaults.
 
 - **Running but not ready:** inspect `phase` and `phase_reason`. Missing optional
   fields or `model_warmup` do not establish readiness; check the matching runtime.
+- **Packets visible but receive-idle timeout:** compare the application's
+  accepted frames with source-rejection counters. A startup source-port change
+  can conflict with first-packet pinning; use the
+  [RTP source-port diagnostic](voice-rtp-source-port.md).
 - **Slow or missing reply:** inspect the phase/error and pipeline. Each turn has
   its own timeout; increasing the session does not extend it. Instant replies
   are not promised.

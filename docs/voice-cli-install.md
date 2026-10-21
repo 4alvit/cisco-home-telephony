@@ -226,7 +226,9 @@ In `.local/phone-voice-transport.json`:
   most 300 seconds including setup, wake waiting, requests and playback.
   `receive_idle_seconds` permits at most 10 seconds without accepted microphone audio. Start playback volume low.
   Leave `expected_source_port` null unless a specific source port has been
-  established for this phone.
+  established for this phone. `null` pins the first valid packet's source for
+  the session; it does not follow later port changes. See the
+  [source-port diagnostic and fresh-session procedure](voice-rtp-source-port.md).
 
 Relative `gateway_config` paths resolve from the caller's current directory,
 not from the transport JSON's directory. Running elsewhere therefore requires
