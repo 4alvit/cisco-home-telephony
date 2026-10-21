@@ -303,10 +303,17 @@ the phone before starting media. A busy, ringing, unavailable or uncertain
 phone is not an invitation to retry until it happens to start.
 
 The gateway serializes voice Start with its other phone mutations. While a
-voice session owns the phone, direct dial, speaker-key, remote-answer and
-display changes are refused with `voice_phone_busy`; the same rule covers both
-lines and both phones in an intercom request. Unresolved voice ownership also
-blocks these conflicting operations.
+finite voice session owns the phone, direct dial, speaker-key, remote-answer
+and display changes are refused with `voice_phone_busy`; the same rule covers
+both lines and both phones in an intercom request.
+
+In hands-free mode, ordinary call controls first retire the supervised session
+and retain the usual reservations and fresh admission checks. Intercom does
+this for both phones. Automatic resumption requires a positively observed
+ordinary call to finish and fresh idle checks to pass. An explicit speaker-key
+command disables hands-free intent instead of scheduling resumption. Display
+changes still require an unreserved phone, and unresolved ownership blocks
+conflicting operations.
 
 While voice control is attached, each direct command for any gateway handset
 holds the same per-device file lock used by the standalone wake runner until

@@ -379,14 +379,20 @@ do not edit the mounted projection or the staged files in a running Pod.
 [Immutable Secret behavior](https://kubernetes.io/docs/concepts/configuration/secret/#immutable-secrets)
 keeps each Pod's staged input coherent.
 
-To roll back, finish active sessions and retain their state, then apply the
-reviewed baseline Deployment and its exact Secret references using the same
-ownership process. Keep one replica and `Recreate`; allow the generated shutdown budget
-of shutdown grace for the voice-capable Pod being replaced. A plain
+To roll back, Disable hands-free on each affected phone, then confirm cleanup
+and channel absence for its exact owned assistant session. Retain persistent
+state and ownership journals. Apply the reviewed baseline Deployment with its
+recorded immutable image and exact Secret references using the same ownership
+process. Keep one replica and `Recreate`; allow the generated shutdown grace
+for the voice-capable Pod being replaced. A plain
 `kubectl set image` is insufficient because command, mounts and init staging
 also changed. Do not automatically restore an old database backup during an
 image rollback: it would discard legitimate newer preferences and operations.
 Restore data only under a separate, stopped and reviewed recovery procedure.
+
+When returning to an earlier SIP release, retain that baseline's saved SIP
+profile and site overlay. Reverting to XML/RTP is a separate transport change,
+not a required step in a gateway version rollback.
 
 After the rollback window and confirmed session cleanup, remove only obsolete
 generated Secrets that no current or retained rollback Pod template references.

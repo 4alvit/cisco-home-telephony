@@ -274,9 +274,13 @@ may preserve intent; uncertain ownership must fault without starting audio.
   and manager journal. Do not blindly redial or clear ownership.
 
 For rollback, Disable hands-free, stop any exact owned session and confirm its
-cleanup and channel absence. Restore the saved private XML/RTP profile and prior image, and disable the private `sip_voice`
-site overlay. There is no firmware, persistent auto-answer or public routing
-change to undo.
+cleanup and channel absence. Follow the [gateway rollback procedure](voice-gateway-deployment.md#upgrade-rollback-and-cleanup)
+to restore the reviewed baseline Deployment, immutable image, private profile
+and exact Secret references while preserving persistent state and ownership
+journals. For an earlier SIP release, retain its saved SIP profile and private
+`sip_voice` site overlay. Restore the saved XML/RTP profile and disable that
+overlay only when deliberately reverting the transport to XML/RTP. There is
+no firmware, persistent auto-answer or public routing change to undo.
 
 References: [AudioSocket protocol](https://docs.asterisk.org/Configuration/Channel-Drivers/AudioSocket/),
 [Dial pre-dial subroutines](https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/Dialplan_Applications/Dial/),
