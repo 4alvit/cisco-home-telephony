@@ -49,7 +49,8 @@ SCHEDULE_PATH = '/api/services/cisco_phone_control/schedule?return_response'
 
 def gateway_url(value):
     """Plain HTTP is deliberately restricted to a configured private IPv4 host."""
-    if not isinstance(value, str) or len(value) > 256 or any(c.isspace() for c in value):
+    if (not isinstance(value, str) or len(value) > 256 or any(c.isspace() for c in value)
+            or '?' in value or '#' in value):
         raise ValueError('invalid_gateway_url')
     url = parse.urlsplit(value)
     if (url.scheme not in ('http', 'https') or url.username or url.password

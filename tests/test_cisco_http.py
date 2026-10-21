@@ -185,6 +185,75 @@ class HTTPErrorBoundaryTests(unittest.TestCase):
     def test_unhashable_reason_uses_fixed_fallback(self):
         self.assert_error("home_assistant", b'{"reason":[]}', 400, "ha_service_http_error")
 
+    def test_gateway_url_rejects_delimiters_and_invalid_origins(self):
+        for suffix in ('?', '#', '/?', '/#', '?key=value', '#section'):
+            with self.subTest(suffix=suffix), self.assertRaisesRegex(ValueError, '^invalid_gateway_url$'):
+                worker.gateway_url('http://192.168.50.10' + suffix)
+        invalid = ('http://example.invalid', 'http://8.8.8.8',
+                   'http://user:pass@192.168.50.10', 'http://192.168.50.10/other',
+                   'http://192.168.50.10:0', 'http://192.168.50.10:65536',
+                   'http://192.168.50.10:not-a-port')
+        for url in invalid:
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                worker.gateway_url(url)
+
+    def test_perform_rejects_empty_base_markers_before_request(self):
+        for api in ('gateway', 'home_assistant'):
+            for suffix in ('?', '#', '/?', '/#'):
+                with self.subTest(api=api, suffix=suffix):
+                    payload = {'url': 'http://192.168.50.10' + suffix, 'token': TOKEN,
+                               'api': api, 'timeout': 5,
+                               'path': worker.SCHEDULE_PATH if api == 'home_assistant' else '/v1/phones',
+                               'body': {} if api == 'home_assistant' else None}
+                    stdout, stderr = io.StringIO(), io.StringIO()
+                    with patch.object(worker.request, 'Request', wraps=worker.request.Request) as request, \
+                            patch.object(worker.request, 'build_opener') as factory, \
+                            contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                        # A buggy baseline may proceed: keep that path entirely offline.
+                        response = factory.return_value.open.return_value.__enter__.return_value
+                        response.status = 200
+                        response.read.return_value = b'{"service_response":{}}' if api == 'home_assistant' else b'{}'
+                        try:
+                            result = worker.perform(payload)
+                        finally:
+                            self.assert_no_external_calls()
+                            self.assertFalse(bool(stdout.getvalue() or stderr.getvalue()), 'worker printed output')
+                            self.assertEqual((request.call_count, factory.call_count,
+                                              factory.return_value.open.call_count), (0, 0, 0))
+                    self.assertEqual(result, {'ok': False, 'reason': 'invalid_gateway_response_or_request'})
+
+    def test_valid_private_origins_preserve_request_routes(self):
+        cases = (('http://10.23.45.67', 'gateway'), ('https://10.23.45.67:1', 'home_assistant'),
+                 ('http://172.16.5.6:65535', 'gateway'), ('https://172.31.5.6', 'home_assistant'),
+                 ('http://192.168.50.10:8080', 'home_assistant'), ('https://192.168.50.10:443', 'gateway'))
+        for base, api in cases:
+            for suffix in ('', '/'):
+                with self.subTest(base=base, api=api, root_slash=bool(suffix)):
+                    self.assertEqual(worker.gateway_url(base + suffix), base)
+                    path = worker.SCHEDULE_PATH if api == 'home_assistant' else '/v1/phones'
+                    payload = {'url': base + suffix, 'token': TOKEN, 'api': api,
+                               'timeout': 5, 'path': path, 'body': {} if api == 'home_assistant' else None}
+                    stdout, stderr = io.StringIO(), io.StringIO()
+                    with patch.object(worker.request, 'Request', wraps=worker.request.Request) as request, \
+                            patch.object(worker.request, 'build_opener') as factory, \
+                            contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                        response = factory.return_value.open.return_value.__enter__.return_value
+                        response.status = 200
+                        body = {'synthetic': True}
+                        response.read.return_value = json.dumps(
+                            {'service_response': body} if api == 'home_assistant' else body).encode()
+                        try:
+                            result = worker.perform(payload)
+                        finally:
+                            self.assert_no_external_calls()
+                            self.assertFalse(bool(stdout.getvalue() or stderr.getvalue()), 'worker printed output')
+                        self.assertEqual(result, {'ok': True, 'data': body})
+                        self.assertEqual((request.call_count, factory.call_count,
+                                          factory.return_value.open.call_count), (1, 1, 1))
+                        actual_request = factory.return_value.open.call_args.args[0]
+                        self.assertEqual(actual_request.full_url, base + path)
+                        self.assertEqual(actual_request.selector, path)
+
 
 if __name__ == "__main__":
     unittest.main()
