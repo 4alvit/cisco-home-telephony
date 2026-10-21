@@ -32,17 +32,28 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 MAX_CONFIG = 256 * 1024
 MAX_REPORT = 16 * 1024
+MAX_SESSION_SECONDS = 300
+MAX_TURNS = 10000
 STOP_GRACE_SECONDS = 45.0
 RUNNER_COMPLETION_MARGIN_SECONDS = 7.0
 UNCERTAIN_CLEANUP_SECONDS = 55.0
 EXTERNAL_OWNER_GRACE_SECONDS = (
-    30 + STOP_GRACE_SECONDS + RUNNER_COMPLETION_MARGIN_SECONDS + UNCERTAIN_CLEANUP_SECONDS + 8)
+    MAX_SESSION_SECONDS + STOP_GRACE_SECONDS + RUNNER_COMPLETION_MARGIN_SECONDS + UNCERTAIN_CLEANUP_SECONDS + 8)
 REPORT_GRACE_SECONDS = 2.0
 STATES = frozenset(('idle', 'starting', 'running', 'stopping', 'stopped',
                     'cancelled', 'failed', 'recovery_required', 'external_owner'))
 PUBLIC_ERRORS = frozenset(('voice_state_unavailable', 'voice_owner_unavailable',
                           'voice_start_failed', 'voice_start_uncertain', 'voice_signal_failed',
                           'voice_session_failed', 'voice_stop_unconfirmed'))
+PHASES = frozenset(('preparing', 'armed', 'listening', 'thinking', 'speaking', 'stopped', 'error'))
+PHASE_REASONS = frozenset(('model_warmup', 'wake_ready', 'new_session', 'turn_complete',
+                          'user_stop', 'explicit_stop', 'display_stop', 'shutdown',
+                          'lease_expired', 'session_finished', 'transport_stopped',
+                          'receive_idle_timeout', 'voice_session_failed', 'turn_timeout',
+                          'turn_failed', 'audio_backpressure', 'wake_inference_failed',
+                          'playback_stop_failed', 'speech_start', 'end_of_speech',
+                          'no_speech', 'utterance_limit', 'audio_not_received', 'turn_cancelled',
+                          'duplicate_activation', 'call', 'start_failed', 'assistant_error'))
 
 
 def _safe_status(value):
@@ -59,12 +70,33 @@ def _safe_status(value):
     for key in ('active', 'stop_requested', 'stop_confirmed'):
         _require(type(value.get(key)) is bool, 'invalid_voice_response', 502)
     remaining = value.get('remaining_seconds')
-    _require(type(remaining) in (int, float) and math.isfinite(remaining) and 0 <= remaining <= 30,
+    _require(type(remaining) in (int, float) and 0 <= remaining <= MAX_SESSION_SECONDS
+             and math.isfinite(remaining),
              'invalid_voice_response', 502)
     result = {key: value[key] for key in ('schema_version', 'phone', 'line', 'session_id', 'state',
               'active', 'remaining_seconds', 'stop_requested', 'stop_confirmed')}
     error = value.get('error')
     result['error'] = error if error is None or error in PUBLIC_ERRORS else 'voice_state_unavailable'
+    if 'phase' in value:
+        phase = value['phase']
+        _require(phase is None or type(phase) is str and phase in PHASES,
+                 'invalid_voice_response', 502)
+        result['phase'] = phase
+    if 'phase_reason' in value:
+        reason = value['phase_reason']
+        result['phase_reason'] = reason if type(reason) is str and reason in PHASE_REASONS else None
+    if 'turns_completed' in value:
+        count = value['turns_completed']
+        _require(type(count) is int and 0 <= count <= MAX_TURNS, 'invalid_voice_response', 502)
+        result['turns_completed'] = count
+    if 'mode' in value:
+        _require(value['mode'] in ('manual', 'wake'), 'invalid_voice_response', 502)
+        result['mode'] = value['mode']
+    if 'session_seconds' in value:
+        duration = value['session_seconds']
+        _require(type(duration) in (int, float) and 0 < duration <= MAX_SESSION_SECONDS
+                 and math.isfinite(duration), 'invalid_voice_response', 502)
+        result['session_seconds'] = duration
     return result
 
 
@@ -153,6 +185,8 @@ class Profile:
     bind_ipv4: str = field(repr=False)
     bind_port: int
     display_port: int | None = None
+    mode: str = 'manual'
+    rearm_after_turn: bool = False
 
 
 @dataclass(frozen=True)
@@ -184,9 +218,8 @@ def _inputs(transport_path, voice_path, workspace):
     phone = selected[0]
     voice = validate_voice(_json(_private_path(voice_path, workspace)))
     settings = settings_type(**voice['service'])
-    _require(settings.enabled and not settings.rearm_after_turn, 'single_voice_turn_required')
+    _require(settings.enabled, 'voice_control_disabled')
     _require(voice['phones'] == {phone['id']: True}, 'one_selected_phone_required')
-    _require(voice['wake']['mode'] == 'manual', 'manual_voice_mode_required')
     token = _read(_private_path(voice['ha']['token_file'], workspace), 8192).decode('ascii').strip()
     _require(token and all(33 <= ord(c) <= 126 for c in token), 'invalid_voice_token')
     return config, gateway, phone, voice, token
@@ -230,7 +263,9 @@ def load_control_config(path, workspace=ROOT):
                 display_endpoints.add((config['bind_ipv4'], port))
             profiles.append(Profile(phone['id'], tuple(phone['lines']), phone['device'], phone['ipv4'],
                                     transport_path, voice_path, float(config['duration_seconds']),
-                                    config['bind_ipv4'], config['bind_port'], port))
+                                    config['bind_ipv4'], config['bind_port'], port,
+                                    'wake' if _voice['wake']['mode'] == 'onnx' else 'manual',
+                                    _voice['service'].get('rearm_after_turn', False)))
             rtp_endpoints.add(endpoint)
             identities.add(phone['device']); addresses.add(phone['ipv4']); lines.update(phone['lines'])
         return ControlConfig(workspace, state, python, ffmpeg, tuple(profiles), data['enabled'])
@@ -316,6 +351,9 @@ class _Session:
     killed: bool = False
     spawn_attempted: bool = False
     error: str | None = None
+    phase: str | None = 'preparing'
+    phase_reason: str | None = None
+    turns_completed: int = 0
 
 
 class VoiceControl:
@@ -329,7 +367,8 @@ class VoiceControl:
         _require(isinstance(config, ControlConfig) and callable(authorize))
         _require(1 <= len(config.profiles) <= 32 and type(config.enabled) is bool)
         _require(all(isinstance(p, Profile) and type(p.duration) in (int, float)
-                     and math.isfinite(p.duration) and 0 < p.duration <= 30
+                     and math.isfinite(p.duration) and 0 < p.duration <= MAX_SESSION_SECONDS
+                     and p.mode in ('manual', 'wake') and type(p.rearm_after_turn) is bool
                      and p.lines and p.phone_id == p.lines[0] for p in config.profiles))
         all_lines = [line for p in config.profiles for line in p.lines]
         _require(len(all_lines) == len(set(all_lines))
@@ -488,24 +527,50 @@ class VoiceControl:
             if fd is not None:
                 os.close(fd)
 
+    def _progress(self, s):
+        if s.directory is None or s.state not in ('starting', 'running', 'stopping'):
+            return
+        try:
+            value = json.loads(_read(s.directory / 'progress.json', 2048))
+            _require(isinstance(value, dict) and type(value.get('schema_version')) is int
+                     and value['schema_version'] == 1)
+            phase, count = value.get('phase'), value.get('turns_completed')
+            _require(type(phase) is str and phase in PHASES
+                     and type(count) is int and 0 <= count <= MAX_TURNS)
+            stamp = value.get('updated_at')
+            _require(type(stamp) in (int, float) and math.isfinite(stamp) and stamp > 0)
+            reason = value.get('reason')
+            s.phase, s.phase_reason = phase, reason if type(reason) is str and reason in PHASE_REASONS else None
+            s.turns_completed = max(s.turns_completed, count)
+        except (ControlError, ValueError, TypeError, OverflowError, RecursionError):
+            # Progress is advisory; a missing update cannot block exact-session Stop.
+            pass
+
     def _view(self, s):
+        self._progress(s)
         remaining = 0 if s.started is None else max(0, s.profile.duration - (self.clock() - s.started))
         return {'schema_version': 1, 'phone': s.profile.phone_id, 'line': s.line,
                 'session_id': s.session_id, 'state': s.state,
                 'active': s.state in ('starting', 'running', 'stopping'),
                 'remaining_seconds': round(remaining, 1), 'stop_requested': s.stop_requested,
-                'stop_confirmed': s.stop_confirmed, 'error': s.error}
+                'stop_confirmed': s.stop_confirmed, 'error': s.error,
+                'phase': s.phase, 'phase_reason': s.phase_reason,
+                'turns_completed': s.turns_completed, 'mode': s.profile.mode,
+                'session_seconds': s.profile.duration}
 
     @staticmethod
-    def _check_profile(p, config, phone):
+    def _check_profile(p, config, phone, voice):
         _require((phone['id'], tuple(phone['lines']), phone['device'], phone['ipv4'],
                   float(config['duration_seconds']), config['bind_ipv4'], config['bind_port'])
                  == (p.phone_id, p.lines, p.device, p.ipv4, p.duration, p.bind_ipv4, p.bind_port),
                  'voice_profile_changed')
+        _require(('wake' if voice['wake']['mode'] == 'onnx' else 'manual') == p.mode
+                 and voice['service'].get('rearm_after_turn', False) == p.rearm_after_turn,
+                 'voice_profile_changed')
 
     def _prepare(self, p, s):
         config, gateway, phone, voice, token = _inputs(p.transport_config, p.voice_config, self.config.workspace)
-        self._check_profile(p, config, phone)
+        self._check_profile(p, config, phone, voice)
         directory = self.config.state_directory / ('run-' + s.session_id)
         directory.mkdir(mode=0o700)
         s.directory = directory
@@ -528,6 +593,7 @@ class VoiceControl:
         argv = [self.config.python_executable, str(ROOT / 'scripts/voice_session.py'),
                 '--transport-config', str(directory / 'transport.json'),
                 '--voice-config', str(directory / 'voice.json'), '--workspace', str(self.config.workspace),
+                '--status-file', str(directory / 'progress.json'),
                 '--ffmpeg', self.config.ffmpeg_executable,
                 '--run', '--attended', '--exclusive-media', '--enable-microphone']
         if p.display_port is not None:
@@ -550,7 +616,7 @@ class VoiceControl:
             # no-actions schema expected by every dry-run client.
             if dry_run:
                 latest = _inputs(p.transport_config, p.voice_config, self.config.workspace)
-                self._check_profile(p, latest[0], latest[2])
+                self._check_profile(p, latest[0], latest[2], latest[3])
                 return {'schema_version': 1, 'phone': p.phone_id, 'line': target,
                         'valid': True, 'network_actions': 0, 'microphone_started': False,
                         'duration_seconds': p.duration}
@@ -615,6 +681,7 @@ class VoiceControl:
 
     def _no_launch(self, s, state, error):
         s.state, s.error = state, error
+        s.phase = 'error' if error else 'stopped'
         self._write(s)
         self._release(s)
 
@@ -649,12 +716,14 @@ class VoiceControl:
                 # current audio state. Only this manager can signal its child.
                 if prior.get('reserved') is not False:
                     prior.update(state='recovery_required', active=False,
-                                 stop_confirmed=False, error='voice_owner_unavailable')
-                return {key: prior[key] for key in ('schema_version', 'phone', 'line', 'session_id',
-                        'state', 'active', 'remaining_seconds', 'stop_requested', 'stop_confirmed', 'error')}
+                                 stop_confirmed=False, error='voice_owner_unavailable',
+                                 phase=None, phase_reason=None)
+                return _safe_status(prior)
             return {'schema_version': 1, 'phone': p.phone_id, 'line': target, 'session_id': None,
                     'state': 'idle', 'active': False, 'remaining_seconds': 0,
-                    'stop_requested': False, 'stop_confirmed': False, 'error': None}
+                    'stop_requested': False, 'stop_confirmed': False, 'error': None,
+                    'phase': None, 'phase_reason': None, 'turns_completed': 0,
+                    'mode': p.mode, 'session_seconds': p.duration}
 
     def _request_stop(self, s):
         if s.state not in ('starting', 'running', 'stopping'):
@@ -683,10 +752,14 @@ class VoiceControl:
 
     def _finish(self, s, raw):
         confirmed, clean, reason = False, False, 'voice_result_unavailable'
+        self._progress(s)
         try:
             _require(type(raw) is bytes and len(raw) <= MAX_REPORT and not s.handle.overflow)
             report = json.loads(raw)
             result = report.get('result')
+            count = report.get('turns_completed')
+            if type(count) is int and 0 <= count <= MAX_TURNS:
+                s.turns_completed = max(s.turns_completed, count)
             confirmed = (report.get('watchdog_armed') is True and report.get('watchdog_finished') is True
                          and type(report.get('watchdog_stop_errors')) is int
                          and report['watchdog_stop_errors'] == 0
@@ -695,17 +768,21 @@ class VoiceControl:
             clean = report.get('cleanup_errors') == []
             completed = (isinstance(result, dict)
                          and result.get('reason') in ('turn_complete', 'explicit_stop',
-                                                     'display_stop', 'shutdown'))
+                                                     'display_stop', 'shutdown', 'lease_expired'))
+            if isinstance(result, dict) and result.get('reason') in PHASE_REASONS:
+                s.phase_reason = result['reason']
             reason = 'voice_session_failed' if report.get('error') or not completed else None
         except Exception:
             pass
         s.stop_confirmed = bool(confirmed and not s.killed)
         if s.stop_confirmed and clean:
             s.state, s.error = ('failed', reason) if reason else ('stopped', None)
+            s.phase = 'error' if reason else 'stopped'
             self._write(s)
             self._release(s)
         else:
             s.state, s.error = 'recovery_required', 'voice_stop_unconfirmed'
+            s.phase = 'error'
             self._write(s)
             # The durable reservation now blocks every manager, even after
             # this process exits. Keep snapshots for private investigation.
@@ -817,7 +894,8 @@ def main(argv=None):
                          and type(value.get('schema_version')) is int and value['schema_version'] == 1
                          and value.get('valid') is True and value.get('microphone_started') is False
                          and type(value.get('network_actions')) is int and value['network_actions'] == 0
-                         and type(duration) in (int, float) and math.isfinite(duration) and 0 < duration <= 30
+                         and type(duration) in (int, float) and math.isfinite(duration)
+                         and 0 < duration <= MAX_SESSION_SECONDS
                          and isinstance(value.get('phone'), str)
                          and re.fullmatch(r'2[0-9]{2}', value['phone']) and value.get('line') == args.line,
                          'invalid_voice_response', 502)

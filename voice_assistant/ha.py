@@ -466,8 +466,9 @@ class HAClient:
                     if type(handler) is not int or not 0 <= handler <= 255:
                         raise AssistError("invalid-binary-handler")
                     sender = asyncio.create_task(self._send_audio(ws, audio, handler))
-                elif kind == "stt-end":
-                    transcript = (data.get("stt_output") or {}).get("text", "")
+                elif kind in ("stt-vad-end", "stt-end"):
+                    if kind == "stt-end":
+                        transcript = (data.get("stt_output") or {}).get("text", "")
                     if sender is not None:
                         sender.cancel()
                         await asyncio.gather(sender, return_exceptions=True)

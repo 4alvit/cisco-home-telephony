@@ -50,8 +50,14 @@ def validate_config(data: dict[str, Any]) -> dict[str, Any]:
             for key, value in data["phones"].items()):
         raise ValueError("phones must map opaque IDs to explicit booleans")
     ha = data["ha"]
-    if not isinstance(ha, dict) or set(ha) != {"base_url", "token_file", "pipeline_id"}:
+    required_ha = {"base_url", "token_file", "pipeline_id"}
+    if (not isinstance(ha, dict) or not required_ha <= set(ha)
+            or not set(ha) <= required_ha | {"device_id"}):
         raise ValueError("ha requires base_url, token_file and explicit pipeline_id")
+    if "device_id" in ha and (type(ha["device_id"]) is not str
+            or not 1 <= len(ha["device_id"]) <= 128
+            or any(char.isspace() for char in ha["device_id"])):
+        raise ValueError("device_id must be a nonempty opaque ID without whitespace")
     parsed = urlsplit(ha["base_url"])
     if (parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or
             parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/")):
@@ -83,6 +89,7 @@ def build_service(config: dict[str, Any], workspace: Path, sink: Any, *,
     if not token:
         raise ValueError("empty Home Assistant token")
     client = HAClient(config["ha"]["base_url"], token, pipeline_id=config["ha"]["pipeline_id"],
+                      device_id=config["ha"].get("device_id"),
                       timeout=settings.turn_timeout_seconds,
                       max_input_bytes=math.ceil(settings.max_utterance_seconds * 50) * 640,
                       connect=connect)

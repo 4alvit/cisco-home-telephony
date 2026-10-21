@@ -10,6 +10,8 @@ import secrets
 import time
 from typing import Any, AsyncIterator, Callable, Protocol
 
+from .audio import UtteranceEndpoint
+
 
 FRAME_BYTES = 640  # 20 ms, signed little-endian int16, mono, 16 kHz
 REPLY_TEXT_LIMIT = 1000
@@ -56,9 +58,12 @@ class ServiceSettings:
     turn_timeout_seconds: float = 35.0
     audio_idle_timeout_seconds: float = 2.0
     duplicate_window_seconds: float = 2.0
+    local_endpointing: bool = False
+    # Starting point only: tune against the telephone's microphone/noise floor.
+    speech_rms_threshold: float = 0.01
 
     def __post_init__(self) -> None:
-        for name in ("enabled", "rearm_after_turn"):
+        for name in ("enabled", "rearm_after_turn", "local_endpointing"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} must be a boolean")
         if type(self.preroll_ms) is not int or not 0 <= self.preroll_ms <= 2000 or self.preroll_ms % 20:
@@ -68,7 +73,8 @@ class ServiceSettings:
         for name, low, high in (("max_utterance_seconds", .1, 60),
                                 ("turn_timeout_seconds", .1, 180),
                                 ("audio_idle_timeout_seconds", .05, 10),
-                                ("duplicate_window_seconds", 0, 30)):
+                                ("duplicate_window_seconds", 0, 30),
+                                ("speech_rms_threshold", .000001, 1)):
             value = getattr(self, name)
             if type(value) not in (float, int) or not math.isfinite(value) or not low <= value <= high:
                 raise ValueError(f"{name} outside allowed range")
@@ -98,6 +104,8 @@ class _Session:
     error: str | None = None
     reason: str | None = None
     revision: int = 0
+    wake_detection: bool = False
+    endpoint: UtteranceEndpoint | None = None
     lifecycle_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
@@ -189,6 +197,7 @@ class AssistantService:
             item.detector.reset()
             item.error = None
             item.stream_id = secrets.token_urlsafe(18)
+            item.wake_detection = wake_detection
             if wake_detection:
                 self._emit_armed(phone_id)
             else:
@@ -218,6 +227,7 @@ class AssistantService:
             item.preroll.clear()
             item.queue = None
             item.task = None
+            item.endpoint = None
             if self._owner == phone_id:
                 self._owner = None
                 self._quiet_until = self._clock() + self.settings.duplicate_window_seconds
@@ -262,6 +272,9 @@ class AssistantService:
                 return False
             item.queue.put_nowait(pcm)
             item.captured_frames += 1
+            if item.endpoint is not None:
+                item.endpoint.observe(pcm, self._clock())
+                self._check_endpoint(phone_id, stream_id)
             if item.captured_frames * .02 >= self.settings.max_utterance_seconds:
                 self.end_utterance(phone_id, stream_id)
             return True
@@ -297,6 +310,8 @@ class AssistantService:
         item.preroll.clear()
         item.input_closed = False
         item.error = None
+        item.endpoint = (UtteranceEndpoint(self._clock(), self.settings.speech_rms_threshold)
+                         if self.settings.local_endpointing else None)
         if item.captured_frames * .02 >= self.settings.max_utterance_seconds:
             self.end_utterance(phone_id, stream_id)
         self._emit(phone_id, "listening")
@@ -311,6 +326,7 @@ class AssistantService:
         self._owner = None
         self._quiet_until = self._clock() + self.settings.duplicate_window_seconds
         item.queue = None
+        item.endpoint = None
         item.preroll.clear()
         item.detector.reset()
         item.stream_id = None
@@ -325,14 +341,50 @@ class AssistantService:
         item.queue.put_nowait(None)  # one slot is reserved by feed_pcm
         return True
 
+    def _check_endpoint(self, phone_id: str, stream_id: str) -> None:
+        item = self._sessions[phone_id]
+        if (item.stream_id != stream_id or item.state != "listening"
+                or item.input_closed or item.endpoint is None):
+            return
+        decision = item.endpoint.decision(self._clock())
+        if decision == "end_of_speech":
+            self.end_utterance(phone_id, stream_id)
+            self._emit(phone_id, "thinking")
+        elif decision is not None:
+            # No speech is not an invitation to execute an intent or rearm.
+            item.error = decision
+            item.stream_id = None
+            if item.task is not None:
+                item.task.cancel()
+
+    async def _watch_capture(self, phone_id: str, stream_id: str) -> None:
+        item = self._sessions[phone_id]
+        while item.stream_id == stream_id and item.state == "listening" and not item.input_closed:
+            self._check_endpoint(phone_id, stream_id)
+            await asyncio.sleep(.05)
+
     async def _audio(self, item: _Session) -> AsyncIterator[bytes]:
         assert item.queue is not None
         while True:
+            pending = asyncio.create_task(item.queue.get())
             try:
-                frame = await asyncio.wait_for(item.queue.get(), self.settings.audio_idle_timeout_seconds)
-            except asyncio.TimeoutError:
-                item.input_closed = True
-                return
+                # The local clocks distinguish absent first audio, a silent
+                # user, and a short command. Do not let the old idle timer
+                # cut those grace periods short before HA VAD has engaged.
+                local_wait = item.endpoint is not None and not item.endpoint.ha_vad_started
+                timeout = .1 if local_wait else self.settings.audio_idle_timeout_seconds
+                # Unlike wait_for, wait does not absorb cancellation when a
+                # queued frame becomes ready at the same moment as Stop.
+                done, _ = await asyncio.wait((pending,), timeout=timeout)
+                if not done:
+                    if local_wait:
+                        continue
+                    item.input_closed = True
+                    return
+                frame = pending.result()
+            finally:
+                pending.cancel()
+                await asyncio.gather(pending, return_exceptions=True)
             if frame is None:
                 return
             yield frame
@@ -343,8 +395,10 @@ class AssistantService:
         async def event(message: dict[str, Any]) -> None:
             if item.stream_id != stream_id:
                 return
-            if message.get("type") in ("stt-end", "intent-start", "tts-start"):
-                item.input_closed = True
+            if message.get("type") == "stt-vad-start" and item.endpoint is not None:
+                item.endpoint.ha_vad_started = True
+            if message.get("type") in ("stt-vad-end", "stt-end", "intent-start", "tts-start"):
+                self.end_utterance(phone_id, stream_id)
                 self._emit(phone_id, "thinking")
 
         async def turn() -> None:
@@ -377,8 +431,12 @@ class AssistantService:
                 return
             await self.playback.play(phone_id, result)
 
+        watcher = (asyncio.create_task(self._watch_capture(phone_id, stream_id))
+                   if item.endpoint is not None else None)
+        completed = False
         try:
             await asyncio.wait_for(turn(), self.settings.turn_timeout_seconds)
+            completed = True
         except asyncio.CancelledError:
             pass
         except asyncio.TimeoutError:
@@ -387,11 +445,15 @@ class AssistantService:
             # Provider exceptions can contain URLs, credentials or transcript text.
             item.error = "turn_failed"
         finally:
+            if watcher is not None:
+                watcher.cancel()
+                await asyncio.gather(watcher, return_exceptions=True)
             try:
                 await self.playback.stop(phone_id)
             except Exception:
                 item.error = item.error or "playback_stop_failed"
             item.queue = None
+            item.endpoint = None
             item.preroll.clear()
             item.detector.reset()
             self._owner = None
@@ -404,11 +466,12 @@ class AssistantService:
             if item.error:
                 item.stream_id = None
                 self._emit(phone_id, "error", item.error)
-            elif item.stream_id == stream_id and self.settings.rearm_after_turn:
+            elif (completed and item.stream_id == stream_id and item.wake_detection
+                  and self.settings.rearm_after_turn):
                 self._emit_armed(phone_id)
             else:
                 item.stream_id = None
-                self._emit(phone_id, "stopped", "turn_complete")
+                self._emit(phone_id, "stopped", "turn_complete" if completed else "turn_cancelled")
 
     async def wait_idle(self, phone_id: str) -> None:
         task = self._sessions[phone_id].task

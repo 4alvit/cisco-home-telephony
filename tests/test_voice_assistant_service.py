@@ -11,6 +11,7 @@ import unittest
 import wave
 
 from voice_assistant.config import NeverWake, build_service, load_config, private_path, validate_config
+from voice_assistant.audio import UtteranceEndpoint, pcm_rms
 from voice_assistant.ha import AudioPayload, HAClient
 from voice_assistant.playback import FFmpegDecoder, PCMOutput, WavePlayback, decode_wave
 from voice_assistant.service import AssistantService, ServiceSettings
@@ -18,6 +19,7 @@ from voice_assistant.simulation import SimulatedHASocket
 
 
 FRAME = b"\x01\x00" * 320
+SPEECH = b"\x00\x20" * 320
 
 
 class Trigger:
@@ -604,6 +606,164 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(service.status("alpha").state, "armed")
         self.assertTrue(service.feed_pcm("alpha", stream, bytes(640)))
 
+    async def test_local_endpoint_keeps_pcm_and_waits_for_both_echo_clocks(self):
+        now = [100.0]
+        service = self.make(settings=ServiceSettings(
+            enabled=True, local_endpointing=True, preroll_ms=0, duplicate_window_seconds=0))
+        service._clock = lambda: now[0]
+        stream = await service.activate("alpha")
+        service.feed_pcm("alpha", stream, SPEECH)
+        now[0] = 102.49
+        service.feed_pcm("alpha", stream, bytes(640))
+        self.assertEqual(service.status("alpha").state, "listening")
+        now[0] = 102.5
+        service.feed_pcm("alpha", stream, bytes(640))
+        self.assertEqual(service.status("alpha").state, "thinking")
+        self.assertFalse(service.feed_pcm("alpha", stream, SPEECH))
+        await service.wait_idle("alpha")
+        self.assertEqual(self.assist.frames, [[SPEECH, bytes(640), bytes(640)]])
+        self.assertEqual(len(self.playback.plays), 1)
+        self.assertEqual(service.status("alpha").reason, "turn_complete")
+
+    async def test_local_no_speech_starts_at_live_frame_not_wake_preroll(self):
+        now = [100.0]
+        service = self.make(settings=ServiceSettings(
+            enabled=True, local_endpointing=True, rearm_after_turn=True))
+        service._clock = lambda: now[0]
+        stream = await service.listen("alpha")
+        service.feed_pcm("alpha", stream, FRAME)
+        now[0] = 104.9
+        service.feed_pcm("alpha", stream, bytes(640))
+        now[0] = 105.1
+        service.feed_pcm("alpha", stream, bytes(640))
+        self.assertEqual(service.status("alpha").state, "listening")
+        now[0] = 110.0
+        service.feed_pcm("alpha", stream, bytes(640))
+        await service.wait_idle("alpha")
+        self.assertEqual(service.status("alpha").reason, "no_speech")
+        self.assertEqual(service.status("alpha").state, "error")
+        self.assertEqual(self.playback.plays, [])
+        self.assertFalse(service.feed_pcm("alpha", stream, FRAME))
+
+    async def test_first_audio_timeout_cancels_ha_and_does_not_rearm(self):
+        now = [100.0]
+        service = self.make(settings=ServiceSettings(
+            enabled=True, local_endpointing=True, rearm_after_turn=True))
+        service._clock = lambda: now[0]
+        stream = await service.activate("alpha")
+        await self.assist.started.wait()
+        now[0] = 105.01
+        await asyncio.wait_for(service.wait_idle("alpha"), .5)
+        self.assertEqual(service.status("alpha").reason, "audio_not_received")
+        self.assertEqual(self.playback.plays, [])
+        self.assertFalse(service.feed_pcm("alpha", stream, SPEECH))
+
+    async def test_ha_vad_overrides_local_fallback_and_end_closes_capture(self):
+        class EventAssist(Assist):
+            async def run(self, audio, conversation_id=None, on_event=None):
+                self.event = on_event
+                return await super().run(audio, conversation_id, on_event)
+        now = [100.0]
+        assist = EventAssist()
+        service = self.make(assist=assist, settings=ServiceSettings(
+            enabled=True, local_endpointing=True, duplicate_window_seconds=0))
+        service._clock = lambda: now[0]
+        stream = await service.activate("alpha")
+        await assist.started.wait()
+        await assist.event({"type": "stt-vad-start"})
+        now[0] = 110.0
+        service.feed_pcm("alpha", stream, bytes(640))
+        self.assertEqual(service.status("alpha").state, "listening")
+        await assist.event({"type": "stt-vad-end"})
+        self.assertEqual(service.status("alpha").state, "thinking")
+        self.assertFalse(service.feed_pcm("alpha", stream, SPEECH))
+        await service.wait_idle("alpha")
+        self.assertEqual(len(self.playback.plays), 1)
+
+    async def test_wake_local_endpoint_rearms_successfully_but_manual_is_one_shot(self):
+        now = [100.0]
+        service = self.make(settings=ServiceSettings(
+            enabled=True, local_endpointing=True, rearm_after_turn=True,
+            duplicate_window_seconds=0))
+        service._clock = lambda: now[0]
+        stream = await service.listen("alpha")
+        for _ in range(2):
+            service.feed_pcm("alpha", stream, FRAME)
+            service.feed_pcm("alpha", stream, SPEECH)
+            now[0] += 2.5
+            service.feed_pcm("alpha", stream, bytes(640))
+            await service.wait_idle("alpha")
+            self.assertEqual(service.status("alpha").state, "armed")
+        self.assertEqual(self.assist.calls, [None, "conversation-1"])
+        manual = await service.activate("alpha")
+        service.end_utterance("alpha", manual)
+        await service.wait_idle("alpha")
+        self.assertEqual(service.status("alpha").state, "stopped")
+        self.assertFalse(service.feed_pcm("alpha", manual, FRAME))
+        await service.activate("alpha")
+        self.assertEqual(service.status("alpha").state, "listening")
+
+    async def test_cancelled_wake_turn_never_rearms(self):
+        service = self.make(settings=ServiceSettings(
+            enabled=True, rearm_after_turn=True, local_endpointing=True,
+            duplicate_window_seconds=0))
+        stream = await service.listen("alpha")
+        service.feed_pcm("alpha", stream, FRAME)
+        await self.assist.started.wait()
+        service._sessions["alpha"].task.cancel()
+        await service.wait_idle("alpha")
+        self.assertEqual(service.status("alpha").state, "stopped")
+        self.assertEqual(service.status("alpha").reason, "turn_cancelled")
+        self.assertFalse(service.feed_pcm("alpha", stream, SPEECH))
+        await service.activate("beta")
+
+    async def test_ha_vad_end_cancels_sender_before_stt_end(self):
+        peer = SimulatedHASocket()
+        sent = asyncio.Event()
+        closed = asyncio.Event()
+        async def connect(_url):
+            return peer
+        async def audio():
+            try:
+                yield SPEECH
+                sent.set()
+                await asyncio.Event().wait()
+            finally:
+                closed.set()
+        async def event(message):
+            if message["type"] == "stt-vad-end":
+                self.assertTrue(closed.is_set())
+                # Complete the synthetic server's later STT/intent/TTS stages.
+                await peer.send(b"\x07")
+        client = HAClient("http://example.invalid", "synthetic-token", connect=connect)
+        run = asyncio.create_task(client.run(audio(), on_event=event))
+        try:
+            await asyncio.wait_for(sent.wait(), 1)
+            peer._event("stt-vad-end")
+            await asyncio.wait_for(run, 1)
+        finally:
+            run.cancel()
+            await asyncio.gather(run, return_exceptions=True)
+        self.assertTrue(peer.closed)
+        self.assertEqual(peer.audio_bytes, len(SPEECH))
+
+    async def test_builder_forwards_exact_cisco_originating_device_id(self):
+        config = load_config(Path(__file__).parents[1] / "examples/local-voice-assistant.example.json")
+        config["service"]["enabled"] = True
+        config["ha"]["device_id"] = "synthetic-cisco-device-212"
+        peer = SimulatedHASocket()
+        async def connect(_url):
+            return peer
+        async def audio():
+            yield FRAME
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".local/voice").mkdir(parents=True)
+            (root / ".local/voice/ha-token.txt").write_text("synthetic-token")
+            service = build_service(config, root, object(), connect=connect)
+            await service.assist.run(audio())
+        self.assertEqual(peer.command["device_id"], "synthetic-cisco-device-212")
+
     async def test_shutdown_stops_other_phones_even_if_one_sink_fails(self):
         class FailingStop(Playback):
             broken = False
@@ -688,6 +848,33 @@ def make_wave(pcm, rate=16000, channels=1):
 
 
 class ConfigAndAudioTests(unittest.TestCase):
+    def test_local_endpoint_clocks_and_rms_are_explicit(self):
+        self.assertEqual(pcm_rms(bytes(640)), 0)
+        self.assertEqual(pcm_rms(SPEECH), .25)
+        self.assertEqual(pcm_rms(b"\x00\x80" * 320), 1)
+        endpoint = UtteranceEndpoint(10, .01)
+        self.assertIsNone(endpoint.decision(15))
+        self.assertEqual(endpoint.decision(15.01), "audio_not_received")
+        endpoint.observe(bytes(640), 14)
+        self.assertIsNone(endpoint.decision(19))
+        self.assertEqual(endpoint.decision(19.01), "no_speech")
+        endpoint.observe(SPEECH, 18)
+        endpoint.observe(SPEECH, 20)
+        self.assertIsNone(endpoint.decision(20.5))
+        self.assertEqual(endpoint.decision(21), "end_of_speech")
+        endpoint.ha_vad_started = True
+        self.assertIsNone(endpoint.decision(100))
+
+    def test_optional_originating_device_id_validation(self):
+        example = Path(__file__).parents[1] / "examples/local-voice-assistant.example.json"
+        config = load_config(example)
+        self.assertNotIn("device_id", config["ha"])
+        for value in (None, "", "x" * 129, "two words", "line\nbreak", 1, True):
+            with self.subTest(value=value):
+                config["ha"]["device_id"] = value
+                with self.assertRaisesRegex(ValueError, "device_id"):
+                    validate_config(config)
+
     def test_example_is_disabled_and_valid(self):
         config = load_config(Path(__file__).parents[1] / "examples/local-voice-assistant.example.json")
         self.assertFalse(config["service"]["enabled"])
@@ -752,7 +939,9 @@ class ConfigAndAudioTests(unittest.TestCase):
 
     def test_settings_reject_nonfinite_and_truthy_strings(self):
         for args in ({"enabled": "false"}, {"preroll_ms": 3}, {"queue_frames": 2},
-                     {"turn_timeout_seconds": float("nan")}, {"rearm_after_turn": 1}):
+                     {"turn_timeout_seconds": float("nan")}, {"rearm_after_turn": 1},
+                     {"local_endpointing": "true"}, {"speech_rms_threshold": 0},
+                     {"speech_rms_threshold": float("inf")}):
             with self.assertRaises(ValueError):
                 ServiceSettings(**args)
 

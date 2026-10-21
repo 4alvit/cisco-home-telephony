@@ -8,8 +8,11 @@ import importlib.util
 import http.client
 import io
 import json
+import os
 from pathlib import Path
+import stat
 import sys
+import tempfile
 import threading
 from types import SimpleNamespace
 import unittest
@@ -61,6 +64,7 @@ class FakeService:
         self.events = events
         self.activations = 0
         self.close_error = None
+        self.playback = SimpleNamespace(play=mock.AsyncMock(), stop=mock.AsyncMock())
 
     def ensure_allowed(self, phone_id):
         pass
@@ -150,6 +154,103 @@ class SessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(self.observer.done.is_set(),
                             "a started AMI observer must be stopped on every exit")
 
+    def enable_progress(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name).resolve()
+        directory = root / '.local' / 'run'
+        directory.mkdir(parents=True, mode=0o700)
+        self.args.workspace = str(root)
+        self.args.status_file = str(directory / 'progress.json')
+        return Path(self.args.status_file)
+
+    async def test_progress_tracks_readiness_and_completed_replies_without_private_text(self):
+        path = self.enable_progress()
+        snapshots = []
+
+        async def activate(phone_id):
+            callback = self.build_service.call_args.kwargs['on_event']
+            snapshots.append(json.loads(path.read_text()))
+            for state, reason in (('stopped', 'new_session'), ('armed', 'model_warmup'),
+                                  ('armed', 'wake_ready'), ('listening', None),
+                                  ('thinking', 'synthetic-private-token'), ('speaking', None)):
+                callback(SimpleNamespace(state=state, reason=reason))
+                snapshots.append(json.loads(path.read_text()))
+            await self.service.playback.play(phone_id, 'synthetic-private-reply')
+            callback(SimpleNamespace(state='stopped', reason='turn_complete'))
+            snapshots.append(json.loads(path.read_text()))
+            return 'synthetic-stream'
+
+        self.service.activate = activate
+        result, error = await self.invoke()
+        self.assertIsNone(error)
+        self.assertIsNone(result['error'])
+        self.assertEqual([value['phase'] for value in snapshots], [
+            'preparing', 'preparing', 'preparing', 'armed', 'listening', 'thinking', 'speaking', 'stopped'])
+        self.assertEqual([value['turns_completed'] for value in snapshots], [0] * 7 + [1])
+        self.assertEqual(result['turns_completed'], 1)
+        self.assertEqual(json.loads(path.read_text())['phase'], 'stopped')
+        self.assertNotIn('synthetic-private', json.dumps(snapshots) + json.dumps(result))
+        self.assertEqual(self.media_factory.call_args.kwargs['max_packets'],
+                         subject.transport.packet_budget(self.config['duration_seconds']))
+
+    async def test_status_failure_stops_capture_and_preserves_cleanup(self):
+        path = self.enable_progress()
+        publish = subject.SessionProgress.publish
+
+        def fail_listening(progress, phase, reason=None):
+            if phase == 'listening':
+                raise OSError('synthetic-private-path')
+            return publish(progress, phase, reason)
+
+        async def activate(phone_id):
+            self.build_service.call_args.kwargs['on_event'](
+                SimpleNamespace(state='listening', reason=None))
+            return 'synthetic-stream'
+
+        self.service.activate = activate
+        with mock.patch.object(subject.SessionProgress, 'publish', fail_listening):
+            result, error = await self.invoke()
+        self.assertIsNone(error)
+        self.assertEqual(result['error'], 'voice_session_failed')
+        self.assertEqual(json.loads(path.read_text())['phase'], 'error')
+        self.assertTrue(self.session.stop_confirmed)
+        self.watchdog.finish.assert_called_once()
+        self.assertNotIn('synthetic-private-path', json.dumps(result))
+
+    async def test_prestart_failure_leaves_error_snapshot(self):
+        path = self.enable_progress()
+        self.build_service.side_effect = ValueError('synthetic-model-details')
+        result, error = await self.invoke()
+        self.assertIsNotNone(error)
+        value = json.loads(path.read_text())
+        self.assertEqual((value['phase'], value['reason'], value['turns_completed']), ('error', None, 0))
+        self.assertEqual(self.session.starts, 0)
+
+    async def test_provider_error_is_not_hidden_by_shutdown_event(self):
+        path = self.enable_progress()
+
+        async def activate(phone_id):
+            callback = self.build_service.call_args.kwargs['on_event']
+            callback(SimpleNamespace(state='error', reason='turn_failed'))
+            callback(SimpleNamespace(state='stopped', reason='shutdown'))
+            self.assertEqual(json.loads(path.read_text())['phase'], 'error')
+            return 'synthetic-stream'
+
+        self.service.activate = activate
+        result, error = await self.invoke()
+        self.assertIsNone(error)
+        self.assertEqual(result['error'], 'voice_session_failed')
+        self.assertEqual(json.loads(path.read_text())['reason'], 'turn_failed')
+        self.assertEqual(json.loads(path.read_text())['phase'], 'error')
+
+    async def test_long_session_display_remains_bounded_through_cleanup(self):
+        self.config['duration_seconds'] = 300
+        with mock.patch.object(phone_voice_display, 'VoiceDisplayServer', return_value=self.display) as factory:
+            result, error = await self.invoke()
+        self.assertIsNone(error)
+        self.assertEqual(factory.call_args.kwargs['ttl_seconds'], 330)
+
     async def test_service_construction_failure_does_not_leave_observer_running(self):
         self.build_service.side_effect = ValueError("synthetic-invalid-model")
         result, error = await self.invoke()
@@ -230,7 +331,7 @@ class SessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result["error"])
         self.assertEqual(self.display.update_status.call_args_list, [
             mock.call("Thinking", "Preparing wake detector. Please wait for Listening."),
-            mock.call("Listening", "Say your wake phrase."),
+            mock.call("Listening", "Wake ready. Say your wake phrase."),
         ])
         self.assertEqual(result["result"]["reason"], "turn_complete")
         self.assertTrue(self.session.stop_confirmed)
@@ -346,6 +447,7 @@ class SessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.remove_signal.call_count, self.add_signal.call_count)
 
     async def test_cancellation_during_service_close_drains_ordered_cleanup(self):
+        progress_path = self.enable_progress()
         entered, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
         async def close():
@@ -381,6 +483,8 @@ class SessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
             self.watchdog.finish.assert_called_once()
             self.display.close.assert_called_once()
             self.assertEqual(self.remove_signal.call_count, self.add_signal.call_count)
+            self.assertEqual(json.loads(progress_path.read_text())['phase'], 'stopped')
+            self.assertEqual(json.loads(progress_path.read_text())['reason'], 'shutdown')
         finally:
             release.set()
             if not task.done():
@@ -603,7 +707,7 @@ class SessionCLIExitTests(unittest.TestCase):
             "watchdog_stop_confirmed": False,
         }
 
-    def invoke(self, result):
+    def invoke(self, result, extra_args=()):
         output = io.StringIO()
         with mock.patch.object(subject.transport, "load_pilot_config", return_value=(
                 {}, {}, {"id": "synthetic-phone"})), \
@@ -616,10 +720,18 @@ class SessionCLIExitTests(unittest.TestCase):
                 "--transport-config", "synthetic-transport.toml",
                 "--voice-config", "synthetic-voice.toml",
                 "--run", "--attended", "--exclusive-media", "--enable-microphone",
+                *extra_args,
             ])
         run.assert_awaited_once()
+        if extra_args:
+            self.assertEqual(run.call_args.args[0].status_file, '.local/run/progress.json')
         self.assertEqual(json.loads(output.getvalue()), result)
         return exit_code
+
+    def test_status_file_flag_preserves_one_final_stdout_object(self):
+        result = self.completed_result()
+        result['turns_completed'] = 2
+        self.assertEqual(self.invoke(result, ('--status-file', '.local/run/progress.json')), 0)
 
     def test_completed_turn_succeeds_with_either_stop_confirmation(self):
         for confirmed_by in ("main", "supervisor"):
@@ -627,6 +739,14 @@ class SessionCLIExitTests(unittest.TestCase):
                 result = self.completed_result()
                 result["result"]["stop_confirmed"] = confirmed_by == "main"
                 result["watchdog_stop_confirmed"] = confirmed_by == "supervisor"
+                self.assertEqual(self.invoke(result), 0)
+
+    def test_clean_explicit_stop_or_lease_expiry_is_not_a_runtime_failure(self):
+        for reason in ('explicit_stop', 'display_stop', 'shutdown', 'lease_expired'):
+            with self.subTest(reason=reason):
+                result = self.completed_result()
+                result['result']['reason'] = reason
+                result['turns_completed'] = 0
                 self.assertEqual(self.invoke(result), 0)
 
     def test_completed_turn_requires_armed_watchdog(self):
@@ -676,10 +796,99 @@ class SessionCLIExitTests(unittest.TestCase):
                 if failure == "runtime_error":
                     result["error"] = "voice_session_failed"
                 elif failure == "incomplete_turn":
-                    result["result"]["reason"] = "display_stop"
+                    result["result"]["reason"] = "transport_stopped"
                 else:
                     result["result"] = None
                 self.assertEqual(self.invoke(result), 1)
+
+
+class ProgressFileTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+        self.directory = self.root / '.local' / 'run'
+        self.directory.mkdir(parents=True, mode=0o700)
+        self.path = self.directory / 'progress.json'
+
+    def test_atomic_private_json_contains_only_fixed_progress_fields(self):
+        with mock.patch.object(subject.time, 'time', return_value=1700000000.25):
+            progress = subject.SessionProgress(self.root, self.path)
+            with self.path.open() as previous:
+                before = os.fstat(previous.fileno()).st_ino
+                progress.publish('speaking', 'private transcript or token')
+                progress.completed_reply()
+                self.assertNotEqual(self.path.stat().st_ino, before)
+                self.assertEqual(json.load(previous)['phase'], 'preparing')
+        self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
+        self.assertEqual(self.path.stat().st_uid, os.getuid())
+        self.assertEqual(json.loads(self.path.read_text()), {
+            'schema_version': 1, 'phase': 'speaking', 'reason': None,
+            'turns_completed': 1, 'updated_at': 1700000000.25})
+        self.assertEqual(list(self.directory.iterdir()), [self.path])
+
+    def test_bad_paths_do_not_create_or_follow_any_output(self):
+        outside = self.root / 'outside.json'
+        outside.write_text('unchanged')
+        linked_directory = self.root / '.local' / 'linked'
+        linked_directory.symlink_to(self.directory, target_is_directory=True)
+        for path in (outside, self.directory / '..' / 'escape.json',
+                     self.root / '.local' / 'bare.json', linked_directory / 'progress.json'):
+            with self.subTest(path=path), self.assertRaises((OSError, ValueError)):
+                subject.SessionProgress(self.root, path)
+        self.assertEqual(outside.read_text(), 'unchanged')
+        self.assertFalse(self.path.exists())
+        self.path.symlink_to(outside)
+        with self.assertRaises(ValueError):
+            subject.SessionProgress(self.root, self.path)
+        self.assertEqual(outside.read_text(), 'unchanged')
+
+    def test_shared_directory_and_nonprivate_or_nonregular_file_are_refused(self):
+        self.directory.chmod(0o755)
+        with self.assertRaises(ValueError):
+            subject.SessionProgress(self.root, self.path)
+        self.directory.chmod(0o700)
+        self.path.write_text('{}')
+        self.path.chmod(0o644)
+        with self.assertRaises(ValueError):
+            subject.SessionProgress(self.root, self.path)
+        self.path.unlink()
+        os.mkfifo(self.path, 0o600)
+        with self.assertRaises(ValueError):
+            subject.SessionProgress(self.root, self.path)
+
+    def test_hard_link_is_refused_and_failed_replace_retains_old_snapshot(self):
+        progress = subject.SessionProgress(self.root, self.path)
+        other = self.directory / 'other.json'
+        os.link(self.path, other)
+        with self.assertRaises(ValueError):
+            progress.publish('listening')
+        other.unlink()
+        original = self.path.read_bytes()
+        with mock.patch.object(subject.os, 'replace', side_effect=OSError('synthetic failure')):
+            with self.assertRaises(OSError):
+                progress.publish('listening')
+        self.assertEqual(self.path.read_bytes(), original)
+        self.assertEqual(list(self.directory.iterdir()), [self.path])
+
+
+class ProgressPlaybackTests(unittest.IsolatedAsyncioTestCase):
+    async def test_counts_only_completed_playback_and_preserves_stop(self):
+        progress = subject.SessionProgress(ROOT)
+        original = SimpleNamespace(play=mock.AsyncMock(return_value='done'), stop=mock.AsyncMock())
+        playback = subject.ProgressPlayback(original, progress)
+        self.assertEqual(await playback.play('phone', object()), 'done')
+        self.assertEqual(progress.turns_completed, 1)
+        for error in (RuntimeError('synthetic provider text'), asyncio.CancelledError()):
+            original.play.side_effect = error
+            with self.assertRaises(type(error)):
+                await playback.play('phone', object())
+            self.assertEqual(progress.turns_completed, 1)
+        original.play.side_effect = None
+        await playback.play('phone', object())
+        self.assertEqual(progress.turns_completed, 2)
+        await playback.stop('phone')
+        original.stop.assert_awaited_once_with('phone')
 
 
 if __name__ == "__main__":

@@ -149,6 +149,14 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(playback.frames_sent, 1)
 
 class LifecycleRegressionTests(unittest.IsolatedAsyncioTestCase):
+    def test_explicit_session_duration_is_bounded_at_five_minutes(self):
+        for duration in (30, 180, 300):
+            controller = PhoneVoiceController(Session(), None, 'phone', duration=duration)
+            self.assertEqual(controller.duration, duration)
+        for duration in (0, -1, 301, True, '300', 10 ** 400, float('inf'), float('nan')):
+            with self.subTest(duration=duration), self.assertRaises(ValueError):
+                PhoneVoiceController(Session(), None, 'phone', duration=duration)
+
     async def test_disabled_service_never_starts_transport(self):
         session = Session()
         service = AssistantService(ServiceSettings(enabled=False), {'phone': True},
@@ -189,6 +197,158 @@ class LifecycleRegressionTests(unittest.IsolatedAsyncioTestCase):
         result = await PhoneVoiceController(session, service, 'phone', duration=1,
                                             receive_idle_seconds=.02).run(mode='wake')
         self.assertEqual(result.reason, 'receive_idle_timeout')
+        self.assertTrue(result.stop_confirmed)
+
+
+class UsableLeaseTests(unittest.IsolatedAsyncioTestCase):
+    async def scripted_run(self, phases, *, duration=180):
+        now = [0.0]
+        session = Session()
+        phases = iter(phases)
+        fed = []
+        service = SimpleNamespace(state='armed', ensure_allowed=lambda _: None)
+
+        async def listen(_):
+            return 'one-stream'
+
+        async def stop(*_, **__):
+            service.state = 'stopped'
+
+        def poll():
+            now[0], service.state, audio = next(phases)
+            if service.state == 'transport_stopped':
+                session.state = 'stopped'
+            return [bytes(320)] if audio else []
+
+        session.poll = poll
+        service.listen = listen
+        service.stop = stop
+        service.status = lambda _: SimpleNamespace(state=service.state)
+        service.feed_pcm = lambda _phone, stream, _pcm: fed.append((now[0], stream))
+        controller = PhoneVoiceController(session, service, 'phone', duration=duration,
+                                          receive_idle_seconds=3, clock=lambda: now[0])
+        result = await controller.run(mode='wake')
+        return result, session, fed
+
+    async def test_processing_and_playback_pause_idle_check_then_resume_with_fresh_grace(self):
+        result, session, fed = await self.scripted_run([
+            (0, 'armed', True), (20, 'thinking', False), (25, 'speaking', False),
+            (26, 'armed', False), (28.99, 'armed', False), (29.01, 'armed', False)])
+        self.assertEqual(result.reason, 'receive_idle_timeout')
+        self.assertEqual(fed, [(0, 'one-stream')])
+        self.assertEqual(session.stops, ['receive_idle_timeout'])
+        self.assertTrue(result.stop_confirmed)
+
+    async def test_transport_failure_still_stops_during_processing(self):
+        result, session, _ = await self.scripted_run([
+            (0, 'thinking', False), (1, 'transport_stopped', False)])
+        self.assertEqual(result.reason, 'transport_stopped')
+        self.assertEqual(session.stops, ['transport_stopped'])
+
+    async def test_deadline_discovered_inside_transport_poll_is_normal_expiry(self):
+        now = [0.0]
+        commands = []
+        media = SimpleNamespace(bind_ip='192.0.2.10', bind_port=24000, phone_port=24002,
+                                open=mock.Mock(), close=mock.Mock(), receive=mock.Mock(return_value=[]))
+        session = VoiceSession(commands.append, media, lambda: 'idle', duration=300,
+                               enable_microphone=True, media_reserved=True, clock=lambda: now[0])
+        poll = session.poll
+
+        def expiry_poll():
+            now[0] = 300.0
+            return poll()
+
+        async def listen(_):
+            return 'one-stream'
+
+        async def stop(*_, **__):
+            pass
+
+        session.poll = expiry_poll
+        service = SimpleNamespace(ensure_allowed=lambda _: None, listen=listen, stop=stop,
+                                  status=lambda _: SimpleNamespace(state='armed'))
+        result = await PhoneVoiceController(session, service, 'phone', duration=300,
+                                            clock=lambda: now[0]).run(mode='wake')
+        self.assertEqual(session.reason, 'duration_expired')
+        self.assertEqual(result.reason, 'lease_expired')
+        self.assertTrue(result.stop_confirmed)
+        self.assertEqual(commands, ['RTPTx:192.0.2.10:24000', 'RTPTx:Stop'])
+        media.receive.assert_not_called()
+
+    async def test_wake_rearm_never_renews_deadline_or_feeds_at_expiry(self):
+        result, session, fed = await self.scripted_run([
+            (0, 'armed', True), (90, 'thinking', False), (179, 'armed', True),
+            (180, 'armed', True)])
+        self.assertEqual(result.reason, 'lease_expired')
+        self.assertEqual(fed, [(0, 'one-stream'), (179, 'one-stream')])
+        self.assertEqual(session.started, 1)
+        self.assertEqual(session.stops, ['lease_expired'])
+
+    async def test_manual_finishes_one_turn_even_when_service_can_rearm(self):
+        session = Session()
+        session.poll = lambda: [bytes(320)]
+        turns = []
+
+        class Assist:
+            async def run(self, audio, **kwargs):
+                async for _ in audio:
+                    turns.append(True)
+                    break
+                return SimpleNamespace(conversation_id='one-conversation')
+
+        class NoManualWake:
+            def feed(self, _):
+                raise AssertionError('manual completion must not feed the rearmed detector')
+            def reset(self):
+                pass
+
+        async def decode(_):
+            return bytes(320), 8000
+
+        service = AssistantService(ServiceSettings(enabled=True, rearm_after_turn=True,
+                                                   duplicate_window_seconds=0),
+                                   {'phone': True}, lambda _: NoManualWake(), Assist(),
+                                   PhonePCMPlayback(session, decode))
+        result = await asyncio.wait_for(PhoneVoiceController(session, service, 'phone',
+                                                              duration=180).run(), 2)
+        self.assertEqual(result.reason, 'turn_complete')
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(len(session.sent), 1)
+        self.assertEqual(session.started, 1)
+
+    async def test_wake_rearms_for_two_successful_turns_with_one_transport_start(self):
+        session = Session()
+        session.poll = lambda: [bytes(320)]
+        turns = []
+
+        class Wake:
+            def feed(self, _): return True
+            def reset(self): pass
+
+        class Assist:
+            async def run(self, audio, **kwargs):
+                async for _ in audio:
+                    turns.append(kwargs.get('conversation_id'))
+                    break
+                return SimpleNamespace(conversation_id='same-conversation')
+
+        async def decode(_):
+            return bytes(320), 8000
+
+        def on_event(event):
+            if event.state == 'armed' and len(turns) == 2:
+                controller.request_stop('display_stop')
+
+        service = AssistantService(ServiceSettings(enabled=True, rearm_after_turn=True,
+                                                   duplicate_window_seconds=0),
+                                   {'phone': True}, lambda _: Wake(), Assist(),
+                                   PhonePCMPlayback(session, decode), on_event=on_event)
+        controller = PhoneVoiceController(session, service, 'phone', duration=180)
+        result = await asyncio.wait_for(controller.run(mode='wake'), 2)
+        self.assertEqual(result.reason, 'display_stop')
+        self.assertEqual(turns, [None, 'same-conversation'])
+        self.assertEqual(len(session.sent), 2)
+        self.assertEqual(session.started, 1)
         self.assertTrue(result.stop_confirmed)
 
 
