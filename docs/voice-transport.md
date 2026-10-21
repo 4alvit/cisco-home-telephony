@@ -146,6 +146,10 @@ its configured local address can be bound and the existing private AMI and phone
 HTTP endpoints are reachable. It does not change routing, firewall rules or
 phone provisioning.
 
+If startup traffic changes source port, first-packet pinning can reject the
+later stream. Follow the [observed source-port diagnostic](voice-rtp-source-port.md)
+before changing a private profile; packet capture alone is not accepted audio.
+
 From the repository root, validate the private configuration first:
 
 ```sh

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="670" viewBox="0 0 1000 670" role="img" aria-labelledby="title desc">
+  <title id="title">RTP destinations and the observed phone source port</title>
+  <desc id="desc">The phone sends microphone audio from an observed source port to the server bind port. Playback travels to phone_rtp_port. A receiver with no explicit expected source pins the first valid packet's port and SSRC; later port changes are rejected. An explicitly observed source is a fresh-session filter, not automatic relearning.</desc>
+  <defs>
+    <marker id="mic" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 10 5 0 10z" fill="#36d4bd"/></marker>
+    <marker id="play" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0 10 5 0 10z" fill="#b8a0ff"/></marker>
+    <style>
+      text{font-family:Arial,Helvetica,sans-serif;fill:#eaf1ff}
+      .title{font-size:28px;font-weight:700}.heading{font-size:21px;font-weight:700}
+      .body{font-size:17px}.small{font-size:15px;fill:#bacce6}
+      .code{font-family:Menlo,Consolas,monospace;font-size:16px}
+    </style>
+  </defs>
+  <rect width="1000" height="670" rx="22" fill="#101d32"/>
+  <text x="38" y="49" class="title">Three ports. Two directions. One source pin.</text>
+  <text x="38" y="82" class="body">Observe the transmit source; do not infer it from either destination.</text>
+
+  <rect x="38" y="113" width="290" height="222" rx="16" fill="#123d44" stroke="#36d4bd" stroke-width="2"/>
+  <text x="60" y="151" class="heading">Cisco phone</text>
+  <text x="60" y="190" class="small">Microphone transmit source</text>
+  <text x="60" y="216" class="body">Observed on incoming packets</text>
+  <text x="60" y="270" class="small">Playback receive destination</text>
+  <text x="60" y="297" class="code">phone_rtp_port</text>
+
+  <rect x="672" y="113" width="290" height="222" rx="16" fill="#30274b" stroke="#b8a0ff" stroke-width="2"/>
+  <text x="694" y="151" class="heading">Voice process</text>
+  <text x="694" y="190" class="small">Local receive destination</text>
+  <text x="694" y="216" class="code">bind_ipv4:bind_port</text>
+  <text x="694" y="270" class="small">Playback transmit source</text>
+  <text x="694" y="297" class="body">The same bound socket</text>
+
+  <text x="500" y="163" class="body" text-anchor="middle">Microphone PCMU</text>
+  <path d="M345 183H650" fill="none" stroke="#36d4bd" stroke-width="3" marker-end="url(#mic)"/>
+  <text x="500" y="217" class="small" text-anchor="middle">Phone → process</text>
+  <text x="500" y="260" class="body" text-anchor="middle">Playback PCMU</text>
+  <path d="M650 283H345" fill="none" stroke="#b8a0ff" stroke-width="3" marker-end="url(#play)"/>
+  <text x="500" y="317" class="small" text-anchor="middle">Process → phone</text>
+
+  <text x="38" y="374" class="body">expected_source_port filters only the phone's incoming transmit source.</text>
+  <rect x="38" y="398" width="924" height="207" rx="16" fill="#172a43" stroke="#446081"/>
+  <text x="60" y="435" class="heading">If startup traffic moves from port A to port B</text>
+  <text x="60" y="476" class="code">null</text>
+  <text x="294" y="476" class="body">First valid A pins A + SSRC; later B is rejected.</text>
+  <text x="60" y="518" class="code">observed B</text>
+  <text x="294" y="518" class="body">A is rejected; first valid B pins its SSRC.</text>
+  <text x="60" y="564" class="small">Both paths retain phone IP, RTP format, sequence and timestamp checks.</text>
+  <text x="60" y="587" class="small">A and B are symbolic examples, not firmware defaults or accepted port ranges.</text>
+  <text x="38" y="643" class="body">Stop and confirm cleanup before changing the private profile and starting again.</text>
+</svg>
