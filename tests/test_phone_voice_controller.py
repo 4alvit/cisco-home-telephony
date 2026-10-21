@@ -1,5 +1,6 @@
 """Hardware-free integration checks for the bounded voice bridge."""
 import asyncio
+import importlib.util
 from pathlib import Path
 import struct
 import sys
@@ -15,6 +16,11 @@ from phone_voice_controller import (PhoneVoiceController, PhonePCMPlayback, RtpP
                                     playback_frames, upsample_8k_frame)
 from phone_voice_transport import VoiceSession
 from voice_assistant.service import AssistantService, ServiceSettings
+
+RUNNER_SPEC = importlib.util.spec_from_file_location(
+    'controller_progress_subject', ROOT / 'scripts/voice_session.py')
+RUNNER = importlib.util.module_from_spec(RUNNER_SPEC)
+RUNNER_SPEC.loader.exec_module(RUNNER)
 
 
 class Session:
@@ -436,3 +442,99 @@ class QueuedPlaybackCancellationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_phone_pcm_playback_discards_send_queued_before_stop(self):
         await self.assert_queued_frame_cancelled(PhonePCMPlayback)
+
+
+class StoppedTransportPlaybackTests(unittest.IsolatedAsyncioTestCase):
+    async def assert_pending_playback_outcome(self, playback_type, reason, *, failed):
+        media = SimpleNamespace(
+            bind_ip='192.0.2.10', bind_port=24000, phone_port=24002,
+            open=mock.Mock(), close=mock.Mock(), send_pcm=mock.Mock(return_value=True))
+        session = VoiceSession(lambda _uri: None, media, lambda: 'idle',
+                               enable_playback=True, media_reserved=True, clock=lambda: 0)
+        session.start()
+        queued, release = threading.Event(), threading.Event()
+        real_play = session.play
+        play_results = []
+
+        def pending_play(*args, **kwargs):
+            queued.set()
+            if not release.wait(2):
+                raise AssertionError('pending playback barrier was not released')
+            result = real_play(*args, **kwargs)
+            play_results.append(result)
+            return result
+
+        session.play = pending_play
+        if playback_type is RtpPCMSink:
+            sink = RtpPCMSink(session, 'phone')
+
+            class Playback:
+                async def play(self, _phone_id, _result):
+                    await sink.write_pcm('phone', bytes(320), 8000)
+
+                async def stop(self, phone_id):
+                    await sink.stop(phone_id)
+
+            playback = Playback()
+        else:
+            async def decode(_result):
+                return bytes(320), 8000
+
+            playback = PhonePCMPlayback(session, decode)
+
+        class Assist:
+            async def run(self, _audio, **_kwargs):
+                return SimpleNamespace(conversation_id=None)
+
+        progress = RUNNER.SessionProgress(ROOT)
+        events = []
+
+        def on_event(event):
+            events.append((event.state, event.reason))
+            if event.reason != 'new_session':
+                progress.publish(event.state, event.reason)
+
+        service = AssistantService(ServiceSettings(enabled=True, rearm_after_turn=True),
+                                   {'phone': True}, lambda _: NeverWake(), Assist(),
+                                   RUNNER.ProgressPlayback(playback, progress), on_event=on_event)
+        try:
+            await service.activate('phone')
+            self.assertTrue(await asyncio.to_thread(queued.wait, 2))
+            self.assertEqual(service.status('phone').state, 'speaking')
+            # The controller stops transport before awaiting assistant.stop.
+            # Hold that exact gap open until the already queued write returns.
+            await asyncio.to_thread(session.stop, reason)
+            self.assertTrue(session.stop_confirmed)
+            release.set()
+            await asyncio.wait_for(service.wait_idle('phone'), 2)
+
+            self.assertEqual(play_results, [False])
+            media.send_pcm.assert_not_called()
+            self.assertEqual(progress.turns_completed, 0)
+            self.assertEqual(progress.failed, failed)
+            self.assertEqual(service.status('phone').state, 'error' if failed else 'stopped')
+            self.assertEqual(service.status('phone').reason,
+                             'turn_failed' if failed else 'turn_cancelled')
+            self.assertEqual(('error', 'turn_failed') in events, failed)
+            await service.stop('phone', reason='shutdown')
+            # A later stopped event must preserve genuine failures, while a
+            # canceled reply must neither latch an error nor count as complete.
+            self.assertEqual(progress.failed, failed)
+            self.assertEqual(progress.turns_completed, 0)
+        finally:
+            release.set()
+            await service.close()
+            session.stop('synthetic_test_cleanup')
+
+    async def test_orderly_stop_cancels_pending_reply_without_error_or_completion(self):
+        for playback_type in (RtpPCMSink, PhonePCMPlayback):
+            for reason in ('shutdown', 'explicit_stop', 'display_stop',
+                           'lease_expired', 'duration_expired'):
+                with self.subTest(sender=playback_type.__name__, reason=reason):
+                    await self.assert_pending_playback_outcome(playback_type, reason, failed=False)
+
+    async def test_transport_failure_keeps_pending_reply_error(self):
+        for playback_type in (RtpPCMSink, PhonePCMPlayback):
+            for reason in ('media_send_failed', 'unknown_transport_failure'):
+                with self.subTest(sender=playback_type.__name__, reason=reason):
+                    await self.assert_pending_playback_outcome(playback_type, reason, failed=True)

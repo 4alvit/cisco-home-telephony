@@ -44,6 +44,16 @@ def playback_frames(pcm: bytes, sample_rate: int):
         yield pcm[offset:offset + 320].ljust(320, b'\0')
 
 
+def _playback_transport_stopped(session):
+    # The controller closes transport before waiting for assistant cleanup.
+    # A queued frame can observe that orderly close before its task is canceled;
+    # it is canceled output, not a provider failure or a completed reply.
+    if getattr(session, 'reason', None) in (
+            'explicit_stop', 'display_stop', 'shutdown', 'lease_expired', 'duration_expired'):
+        raise asyncio.CancelledError
+    raise RuntimeError('playback_transport_stopped')
+
+
 class RtpPCMSink:
     """The WavePlayback sink contract, with a single physical-phone target.
 
@@ -78,7 +88,7 @@ class RtpPCMSink:
                 self.frames_sent += 1
                 return
             if self.session.state != 'active':
-                raise RuntimeError('playback_transport_stopped')
+                _playback_transport_stopped(self.session)
             await asyncio.sleep(.005)
 
     async def stop(self, phone_id):
@@ -111,7 +121,7 @@ class PhonePCMPlayback:
                     self.frames_sent += 1
                     break
                 if self.session.state != 'active':
-                    raise RuntimeError('playback_transport_stopped')
+                    _playback_transport_stopped(self.session)
                 await asyncio.sleep(.005)
 
     async def stop(self, phone_id):
