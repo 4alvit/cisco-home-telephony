@@ -131,8 +131,9 @@ source and passes with the readiness gate. Additional regressions cover an
 unready channel that times out, Stop during preparation, a competing call and
 invalid actionable-channel proof. A retained pilot startup failure was
 consistent with this race, but its original exception was unavailable; the
-historical cause is not conclusively established. Installed acceptance and
-image identity belong to the [Beta 14 release record](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.14).
+historical cause is not conclusively established. For installed-image identity
+and completed acceptance, consult the [Beta 14 release record](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.14)
+when available; this source change alone does not establish installation.
 
 For everyday operation, use the [daily-use guide](voice-daily-use.md). An
 existing recovery reservation still requires an operator to establish that
