@@ -84,8 +84,13 @@ class IntegratedFixtureTests(unittest.TestCase):
             with self.subTest(check=name):
                 self.assertIs(checks[name], True)
         requests = self.summary["http_requests"]
-        self.assertEqual([(r["method"], r["operation"], r["status"]) for r in requests[:3]],
+        status_requests = [r for r in requests if r["operation"] == "status"]
+        self.assertEqual([(r["method"], r["operation"], r["status"]) for r in status_requests[:3]],
                          [("GET", "status", 200), ("GET", "status", 403), ("GET", "status", 403)])
+        policy_requests = [r for r in requests if r["operation"] == "hands_free_status"]
+        if policy_requests:
+            self.assertEqual(requests[1], {"method": "GET", "operation": "hands_free_status", "status": 200})
+            self.assertTrue(all(r["method"] == "GET" and r["status"] == 200 for r in policy_requests))
         self.assertTrue(any(r["method"] == "POST" and r["operation"] == "start"
                             and r["status"] == 400 for r in requests))
         self.assertEqual(self.summary["launches"], len(self.runs))
@@ -157,6 +162,7 @@ class IntegratedFixtureTests(unittest.TestCase):
                 self.assertIs(row["observer_stopped"], True)
                 self.assertEqual(row["send_after_close"], 0)
         self.assertEqual(self.summary["owner_files"], {"locks": 1, "journals": 1})
+        self.assertEqual(self.summary["policy_files"], {"locks": 1, "journals": 0})
         for name in ("lease_released", "owner_journal_unreserved", "run_snapshots_removed", "private_permissions"):
             self.assertIs(self.summary["checks"][name], True)
         for name in ("workspace_removed", "children_reaped", "listener_closed", "owner_monitor_stopped", "run_snapshots_removed"):

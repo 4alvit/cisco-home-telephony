@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .service import AssistantService, ServiceSettings
+from .ha import validate_wake_word_phrase
 
 
 class NeverWake:
@@ -68,9 +69,13 @@ def validate_config(data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(ha["token_file"], str) or not ha["token_file"]:
         raise ValueError("token_file must be a path")
     wake = data["wake"]
-    if (not isinstance(wake, dict) or set(wake) != {"mode", "bundle_file"} or
+    if (not isinstance(wake, dict) or not {"mode", "bundle_file"} <= set(wake)
+            or not set(wake) <= {"mode", "bundle_file", "phrase"} or
             wake["mode"] not in ("manual", "onnx") or not isinstance(wake["bundle_file"], str)):
         raise ValueError("wake requires mode manual/onnx and a bundle_file path")
+    validate_wake_word_phrase(wake.get("phrase"))
+    if wake.get("phrase") is not None and wake["mode"] != "onnx":
+        raise ValueError("wake phrase requires onnx mode")
     return data
 
 
@@ -102,4 +107,5 @@ def build_service(config: dict[str, Any], workspace: Path, sink: Any, *,
     return AssistantService(settings, config["phones"], factory, client,
                             WavePlayback(client.fetch_audio, sink, compressed_decoder=compressed_decoder),
                             on_event=on_event,
+                            wake_word_phrase=config["wake"].get("phrase"),
                             on_reply=on_reply if config.get("display_reply_text", False) else None)

@@ -6,11 +6,16 @@ turns. It avoids the stock phone's separate XML RTP transmit/receive commands.
 The user can start it remotely; no physical button press is required. A normal
 incoming or outgoing call on either handset line ends the assistant call.
 
-This is an experimental contingency, not a claim of physical acceptance. The
-transport occupies a phone call while listening, has a maximum 300-second lease,
-and does not automatically restart after Stop, a failure, or expiry. The current
-implementation provides status through the existing gateway, CLI and Home
-Assistant; the XML status-display option must be omitted for this transport.
+This is an experimental transport, not a claim of physical acceptance. Each
+assistant call has a maximum 300-second lease and occupies a phone call while
+listening. One-session mode does not restart automatically. The explicitly
+enabled [hands-free policy](voice-control.md#hands-free-policy-and-status) can
+supervise successive sessions after verified cleanup and fresh idle checks.
+Status is available through the gateway, CLI and Home Assistant; omit the
+optional XML live-status display for this transport.
+
+The following diagram shows the one-session transport. Hands-free adds the
+[supervised renewal policy](voice-quickstart.md#enable-hands-free-mode) around it.
 
 ![Finite SIP speakerphone voice session](diagrams/sip-voice-topology.svg)
 
@@ -74,7 +79,32 @@ Persistent auto-answer and other phone preferences are unchanged.
    use cloud recognition. Enable successful-turn rearming if you want repeated
    questions within the original session deadline.
 
-Use the existing CLI configuration and commands; the manager remains the owner:
+## Choose hands-free or one session
+
+For hands-free, the profile must use ONNX wake mode with `rearm_after_turn: true`
+and a configured session length of 30–300 seconds. The explicit Enable command grants persistent microphone operation. No phone
+button or recurring CLI process is needed:
+
+```sh
+cisco --json 201 voice enable --idempotency-key handsfree-example-001
+cisco --json 201 voice status
+cisco --json 201 voice disable
+```
+
+The example line/key are synthetic. Enable supports `--dry-run` without changing
+intent or starting audio. Read [the hands-free quickstart](voice-quickstart.md#enable-hands-free-mode)
+for actual readiness and Disable confirmation. A policy that is enabled may
+still be waiting, warming up, backing off or faulted.
+
+Disable prevents new automatic starts before requesting Stop. A valid finite
+Stop of the current supervised session also disables intent; a historical Stop
+does not affect a newer generation. Hanging up the assistant call or sending DTMF Stop
+disables it as well; that is different from a positively observed ordinary call,
+which can pause the assistant and permit later resumption. Never treat ambiguous
+call disappearance as permission to redial.
+
+For one session, disable hands-free first. Use the existing CLI configuration
+and commands; the same manager remains the owner:
 
 ```bash
 voice_check_key="voice-check-$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
@@ -113,9 +143,14 @@ Use CLI or Home Assistant status and exact-session Stop; the optional live XML
 assistant display is unavailable in SIP mode. Check that the matching session
 is inactive and Stop is confirmed.
 
-The session lasts at most 300 seconds including setup. Replies do not extend
-it, and an inactive phone cannot hear the wake phrase through this prototype.
-Do not schedule repeated Starts to turn it into always-on listening.
+Each inner session lasts at most 300 seconds including setup. Replies do not
+extend it, and an inactive phone cannot hear the wake phrase through this path.
+Enabled hands-free mode requests Stop of its own session five seconds before
+the deadline, then renews only after confirmed cleanup and two fresh idle
+observations separated by a quiet period. Setup and model warmup may create
+capture gaps; call setup/renewal effects on the stock phone need physical checks.
+The native PBX deadline stays in place. Do not schedule repeated Starts or clear
+leases to simulate persistent operation.
 
 With the paced-idle update installed, an admitted SIP session sends PCM silence
 when no reply audio is waiting. Silence and speech share the same serialized
@@ -169,7 +204,8 @@ needs the updated gateway and both CLI files; it needs no HA update.
   it could still appear later. Its private deadline prevents a late indefinite
   call. Ambiguous cleanup stays `recovery_required`; do not delete the journal.
 
-The 300-second budget includes preparation and call setup. The native PBX timeout
+The 300-second inner-session budget includes preparation and call setup.
+Hands-free renewal does not extend an existing phone-channel lease. The native PBX timeout
 is independent of Python and ends the call even if a terminated worker cannot run
 its cleanup path. A later fresh reconciliation is still needed before releasing
 an uncertain manager reservation. The PBX deadline rounds down conservatively
@@ -201,13 +237,16 @@ The real-PBX test used a synthetic callee that automatically answered. The stock
 phone's HTTP speaker-key operation is covered by mocks only. It has an inherent
 snapshot-to-key race that must be assessed on hardware. Continuous SIP microphone
 input, room echo suppression, and the three-second media-idle bound also need
-physical qualification. This is a finite session, not an always-listening service;
-it adds no barge-in behavior to the existing assistant.
+physical qualification. Hands-free is persistent intent over bounded sessions,
+not guaranteed uninterrupted capture; it adds no barge-in behavior.
 
 The required physical acceptance is one opted-in phone, a remotely started
 speakerphone call, audible wake/command/reply/rearm, exact Stop, normal-call
 preemption, and worker-death/native-timeout cleanup. Preserve unrelated calls and
-do not enable a fleet until the one-phone result is verified.
+do not enable a fleet until the one-phone result is verified. For hands-free,
+also verify lease renewal, ordinary-call pause/resumption, failure handling and
+Disable during startup or renewal with no later automatic capture. Clean restart
+may preserve intent; uncertain ownership must fault without starting audio.
 
 ## Troubleshooting and rollback
 
@@ -234,8 +273,8 @@ do not enable a fleet until the one-phone result is verified.
 - `recovery_required`: inspect exact root IDs, channel Uniqueids, native deadline
   and manager journal. Do not blindly redial or clear ownership.
 
-For rollback, stop the exact session, confirm its channels are absent, restore the
-saved private XML/RTP profile and prior image, and disable the private `sip_voice`
+For rollback, Disable hands-free, stop any exact owned session and confirm its
+cleanup and channel absence. Restore the saved private XML/RTP profile and prior image, and disable the private `sip_voice`
 site overlay. There is no firmware, persistent auto-answer or public routing
 change to undo.
 

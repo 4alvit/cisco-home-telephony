@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+from dataclasses import replace
 import fcntl
 import importlib.util
 import io
@@ -1623,6 +1624,246 @@ class UsableVoiceSessionTests(ControlFixture):
                       {"remaining_seconds": 10**500}):
             with self.subTest(extra=extra), self.assertRaises(control.ControlError):
                 control._safe_status(dict(modern, **extra))
+
+
+class HandsFreeControlHooksTests(ControlFixture):
+    def test_early_rotation_is_independent_of_another_phone_observer(self):
+        spec = importlib.util.spec_from_file_location("independent_rotation_hands_free",
+            ROOT / "containers/asterisk/phone_voice_hands_free.py")
+        hands_free = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = hands_free
+        spec.loader.exec_module(hands_free)
+        config = self.load()
+        first = replace(config.profiles[0], duration=60, mode="wake",
+                        rearm_after_turn=True, media_transport="sip_audiosocket")
+        second = replace(first, phone_id="203", lines=("203", "204"),
+                         device="SEP020000000002", ipv4="192.0.2.21", bind_port=24580)
+        manager = self.make_control(config=replace(config, profiles=(first, second)),
+            authorize=lambda context, action, phone: context == ALLOWED)
+        manager._prepare = lambda profile, session: []
+        entered, release = threading.Event(), threading.Event()
+
+        def observe(phone):
+            if phone == "203":
+                entered.set()
+                if not release.wait(3):
+                    raise AssertionError("synthetic observer gate timed out")
+            return "idle"
+
+        supervisor = hands_free.HandsFreeSupervisor(manager, observe, lambda phone: ALLOWED,
+                                                   monitor=False)
+
+        def cleanup():
+            supervisor.close()
+            self.finish_controls()
+            supervisor.tick()
+
+        self.addCleanup(cleanup)
+        supervisor.enable("201", "rotation-first", context=ALLOWED,
+                          enable_microphone=True, exclusive_media=True)
+        supervisor.tick()
+        self.clock.advance(2)
+        supervisor.tick()
+        session = manager._current["201"]
+        self.assertTrue(session.supervised)
+        supervisor.enable("203", "rotation-second", context=ALLOWED,
+                          enable_microphone=True, exclusive_media=True)
+        worker = threading.Thread(target=supervisor.tick)
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            self.clock.advance(54.9)
+            manager.tick()
+            self.assertEqual(self.runners[0].terminations, 0)
+            self.clock.advance(.2)
+            manager.tick()
+            self.assertTrue(worker.is_alive(), "other phone observation must still be blocked")
+            self.assertEqual(self.runners[0].terminations, 1)
+            self.assertEqual(session.requested_reason, "lease_expired")
+        finally:
+            release.set()
+            worker.join(3)
+        self.assertFalse(worker.is_alive())
+
+    def test_unsupervised_finite_session_retains_full_duration(self):
+        manager = self.make_control()
+        state = self.start(manager)
+        session = manager._sessions[state["session_id"]]
+        self.assertFalse(session.supervised)
+        self.clock.advance(session.profile.duration - 5)
+        manager.tick()
+        self.assertEqual(self.runners[0].terminations, 0)
+        self.clock.advance(5)
+        manager.tick()
+        self.assertEqual(self.runners[0].terminations, 1)
+
+    def test_generation_admission_and_registration_precede_preparation(self):
+        manager = self.make_control()
+        hooks = manager.hands_free = mock.Mock()
+        original = manager._prepare
+
+        def prepare(profile, session):
+            hooks.admit.assert_called_once_with("201", "generation-1")
+            hooks.started.assert_called_once_with(session, "generation-1")
+            self.assertIs(manager._current["201"], session)
+            return original(profile, session)
+
+        with mock.patch.object(manager, "_prepare", side_effect=prepare):
+            state = self.start(manager, "202", _hands_free_generation="generation-1")
+        self.assertEqual(state["state"], "running")
+        self.assertNotIn("completion_reason", state)
+        self.assertNotIn("requested_reason", state)
+
+    def test_manual_admission_can_refuse_replay_but_dry_run_has_no_hooks(self):
+        manager = self.make_control()
+        first = self.start(manager)
+        hooks = manager.hands_free = mock.Mock()
+        hooks.admit.side_effect = control.ControlError("hands_free_enabled")
+        with self.assertRaises(control.ControlError):
+            self.start(manager)
+        hooks.admit.assert_called_once_with("201", None)
+        self.assertEqual(self.status(manager)["session_id"], first["session_id"])
+        hooks.reset_mock()
+        self.assertTrue(self.start(manager, dry_run=True)["valid"])
+        hooks.admit.assert_not_called()
+        hooks.started.assert_not_called()
+        self.assertEqual(len(self.runners), 1)
+
+    def test_exact_authorized_stop_disables_before_signalling(self):
+        manager = self.make_control()
+        state = self.start(manager)
+        hooks = manager.hands_free = mock.Mock()
+        with self.assertRaises(control.ControlError):
+            manager.stop("201", state["session_id"], context={})
+        with self.assertRaises(control.ControlError):
+            self.stop(manager, "0" * 32)
+        hooks.manual_stop.assert_not_called()
+
+        def disabled(phone, *, session_id):
+            self.assertEqual((phone, session_id), ("201", state["session_id"]))
+            self.assertEqual(self.runners[0].terminations, 0)
+
+        hooks.manual_stop.side_effect = disabled
+        self.stop(manager, state["session_id"], "202")
+        hooks.manual_stop.assert_called_once_with("201", session_id=state["session_id"])
+        self.assertEqual(self.runners[0].terminations, 1)
+
+    def test_stale_exact_stop_does_not_disable_new_session(self):
+        manager = self.make_control()
+        first = self.start(manager)
+        self.runners[0].finish()
+        manager.tick()
+        second = self.start(manager, request_id="replacement-request")
+        hooks = manager.hands_free = mock.Mock()
+        self.stop(manager, first["session_id"])
+        hooks.manual_stop.assert_not_called()
+        self.assertEqual(self.runners[1].terminations, 0)
+        self.assertEqual(self.status(manager)["session_id"], second["session_id"])
+
+    def test_disable_failure_does_not_signal_before_durable_change(self):
+        manager = self.make_control()
+        state = self.start(manager)
+        hooks = manager.hands_free = mock.Mock()
+        hooks.manual_stop.side_effect = control.ControlError("voice_state_unavailable", 503)
+        with self.assertRaises(control.ControlError):
+            self.stop(manager, state["session_id"])
+        self.assertEqual(self.runners[0].terminations, 0)
+        self.assertFalse(self.status(manager)["stop_requested"])
+
+    def test_shutdown_closes_supervisor_first_and_preserves_initial_stop_cause(self):
+        manager = self.make_control()
+        state = self.start(manager)
+        session = manager._sessions[state["session_id"]]
+        hooks = manager.hands_free = mock.Mock()
+
+        def close():
+            self.assertEqual(self.runners[0].terminations, 0)
+            manager._request_stop(session, reason="call_preempted")
+
+        hooks.close.side_effect = close
+        manager.close()
+        self.assertEqual(self.runners[0].terminations, 1)
+        self.assertEqual(session.requested_reason, "call_preempted")
+        hooks.close.side_effect = None
+
+    def test_supervisor_close_failure_still_signals_owned_runner(self):
+        manager = self.make_control()
+        state = self.start(manager)
+        hooks = manager.hands_free = mock.Mock()
+        hooks.close.side_effect = OSError("synthetic write failure")
+        with self.assertRaises(control.ControlError):
+            manager.close()
+        self.assertEqual(self.runners[0].terminations, 1)
+        self.assertEqual(manager._sessions[state["session_id"]].requested_reason, "shutdown")
+        hooks.close.side_effect = None
+
+
+class HandsFreeSIPCompletionTests(ControlFixture):
+    def setUp(self):
+        super().setUp()
+        self.transport["media_transport"] = "sip_audiosocket"
+        self.voice["wake"]["mode"] = "onnx"
+        self.write_inputs()
+
+    def finish(self, manager, state, reason, *, error=None):
+        self.runners[-1].finish({
+            "transport": "sip_audiosocket", "session_id": state["session_id"],
+            "originate_attempted": True, "pbx_deadline_armed": True,
+            "pbx_call_absent": True, "safe_no_media_started": False,
+            "cleanup_errors": [], "error": error,
+            "result": {"reason": reason, "stop_confirmed": True, "cleanup_errors": []}})
+        manager.tick()
+        return manager._sessions[state["session_id"]], self.status(manager)
+
+    def test_lease_timer_tags_sigterm_without_changing_finite_wire_fields(self):
+        manager = self.make_control()
+        state = self.start(manager)
+        self.clock.advance(self.transport["duration_seconds"])
+        manager.tick()
+        self.assertEqual(self.runners[-1].terminations, 1)
+        session, result = self.finish(manager, state, "explicit_stop")
+        self.assertEqual(session.completion_reason, "lease_expired")
+        self.assertEqual(result["phase_reason"], "lease_expired")
+        self.assertEqual(result["state"], "stopped")
+        self.assertTrue(session.cleanup_verified)
+        self.assertEqual(set(result), set(state))
+
+    def test_authoritative_report_keeps_call_and_manual_reasons_distinct(self):
+        manager = self.make_control()
+        for index, (reason, expected) in enumerate((
+                ("call_preempted", "call"), ("call_changed", "call"),
+                ("peer_ended", "transport_stopped"), ("dtmf_stop", "explicit_stop"),
+                ("peer_closed", "transport_stopped"))):
+            with self.subTest(reason=reason):
+                state = self.start(manager, request_id="reason-test-" + str(index))
+                session = manager._sessions[state["session_id"]]
+                manager._request_stop(session, reason="lease_expired")
+                progress = session.directory / "progress.json"
+                progress.write_text(json.dumps({"schema_version": 1, "phase": "thinking",
+                    "reason": "speech_start", "turns_completed": 0, "updated_at": 1}))
+                progress.chmod(0o600)
+                session, result = self.finish(manager, state, reason)
+                self.assertEqual(session.completion_reason, reason)
+                self.assertEqual(result["phase_reason"], expected)
+                self.assertEqual(result["state"], "failed" if reason == "peer_closed" else "stopped")
+                self.assertTrue(session.cleanup_verified)
+
+    def test_internal_call_suspend_tags_only_explicit_stop_result(self):
+        manager = self.make_control()
+        state = self.start(manager)
+        manager._request_stop(manager._sessions[state["session_id"]], reason="call_preempted")
+        session, result = self.finish(manager, state, "explicit_stop")
+        self.assertEqual(session.completion_reason, "call_preempted")
+        self.assertEqual(result["phase_reason"], "call")
+
+    def test_unknown_completion_reason_is_never_retained(self):
+        manager = self.make_control()
+        state = self.start(manager)
+        session, result = self.finish(manager, state, PRIVATE_MARKER)
+        self.assertEqual(session.completion_reason, "voice_session_failed")
+        self.assertEqual(result["phase_reason"], "voice_session_failed")
+        self.assertEqual(result["state"], "failed")
+        self.assert_safe(result)
 
 
 if __name__ == "__main__":

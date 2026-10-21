@@ -272,7 +272,17 @@ class Session:
     def guard(self):
         if self.stop_requested.is_set() or self.closed:
             raise BoundaryError('explicit_stop')
-        state = focus(self.grant, self.pbx.snapshot(), self.clock())
+        snapshot = self.pbx.snapshot()
+        state = focus(self.grant, snapshot, self.clock())
+        # A disappeared/replaced assistant call can be a manual hangup. Only
+        # simultaneous, distinct call identities prove competition suitable
+        # for later resumption; endpoint occupancy alone does not prove it.
+        owned = self.grant.channel
+        if (state == 'call_changed' and owned in snapshot.channels and
+                any(channel.name and channel.uniqueid and channel.line
+                    and channel.name != owned.name and channel.uniqueid != owned.uniqueid
+                    for channel in snapshot.channels)):
+            state = 'call_preempted'
         if state != 'owned_call':
             raise BoundaryError(state)
 
@@ -287,6 +297,18 @@ class Session:
         frames, reason, confirmed = 0, 'start_failed', False
         cleanup_errors = []
         cancelled = False
+
+        def guard_input():
+            # A completed receiver may already have observed a manual stop or
+            # disconnected peer. Do not overwrite it with a simultaneous call
+            # preemption that a persistent supervisor could later resume.
+            if task is not None and task.done() and not task.cancelled():
+                error = task.exception()
+                if (isinstance(error, BoundaryError) and
+                        str(error) in ('dtmf_stop', 'peer_ended', 'peer_closed')):
+                    raise error
+            self.guard()
+
         try:
             assistant.ensure_allowed(self.grant.phone)
             self.guard()
@@ -300,7 +322,7 @@ class Session:
             pump = asyncio.create_task(self.sink.pump_silence())
             last_audio = self.clock()
             while True:
-                self.guard()
+                guard_input()
                 state = assistant.status(self.grant.phone).state
                 if state in ('stopped', 'error'):
                     raise BoundaryError('assistant_stopped')
@@ -308,7 +330,7 @@ class Session:
                     task = asyncio.create_task(self.wire.read_pcm())
                 done, _ = await asyncio.wait((task, pump), timeout=.05,
                                              return_when=asyncio.FIRST_COMPLETED)
-                self.guard()
+                guard_input()
                 if pump.done():
                     if not pump.cancelled():
                         pump.result()

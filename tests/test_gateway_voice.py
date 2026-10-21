@@ -38,6 +38,7 @@ class GatewayVoiceTests(unittest.TestCase):
         self.module = SimpleNamespace(load_control_config=mock.Mock(return_value=self.registry),
             TokenSourceAuthorizer=self.core.TokenSourceAuthorizer,
             VoiceControl=mock.Mock(return_value=self.voice), ControlPhone=self.core.ControlPhone,
+            HandsFreeSupervisor=mock.Mock(return_value=None),
             ControlError=self.core.ControlError,
             STOP_GRACE_SECONDS=45, EXTERNAL_OWNER_GRACE_SECONDS=145,
             _safe_status=self.core._safe_status)

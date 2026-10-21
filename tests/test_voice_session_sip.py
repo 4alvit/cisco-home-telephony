@@ -299,7 +299,7 @@ class PreemptionTests(ControlFixture):
             with self.subTest(endpoint=endpoint):
                 state = self.start(manager, request_id=f'known-preemption-{index}')
                 report = asyncio.run(self.run_child(state, endpoint))
-                self.assertEqual(report['result']['reason'], 'call_changed')
+                self.assertEqual(report['result']['reason'], 'call_preempted')
                 self.assertIsNone(report['error'])
                 self.runners[-1].finish(report)
                 manager.tick()

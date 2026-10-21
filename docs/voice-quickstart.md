@@ -1,13 +1,99 @@
 # Use the voice assistant on a Cisco phone
 
-Start a finite session, ask a question, hear the reply, and stop when finished.
-The updated runtime supports **up to five minutes per explicitly started
-session**, including preparation, waiting and playback. Another question does
-not reset the deadline.
+Choose **hands-free mode** to intentionally keep the assistant available, or
+**one session** to start and stop a finite attempt yourself. Both can be controlled
+remotely without pressing a phone button. Hands-free mode is off by default.
 
-This guide describes the finite-session implementation, not proof of deployment
-or acoustic acceptance. Check the installed revision and
-[acceptance record](voice-rollout.md); older clients may expose earlier controls.
+These instructions describe implementation capability, not deployment or acoustic
+acceptance. Check the installed revision and [acceptance record](voice-rollout.md);
+older gateways and clients may not expose the new controls.
+
+## Enable hands-free mode
+
+The administrator must first configure the [SIP speakerphone transport](sip-voice-contingency.md)
+with an ONNX wake profile, successful-turn rearming and a configured session
+length of 30–300 seconds. Use the intended private HA pipeline and configured Baya voice; changing transport does not select them.
+
+**Enable authorizes persistent microphone operation**, including automatic
+resumption under the rules below. Replace the example line and request key:
+
+```sh
+cisco --json 201 voice enable --idempotency-key handsfree-example-001
+cisco --json 201 voice status
+```
+
+The explicit `voice enable` command supplies the microphone and exclusive-media
+consent; it does not need the finite Start flags or `--attended`. Add `--dry-run`
+to Enable to validate without changing desired state or starting audio. A new
+Enable without an explicit key generates one once; after an uncertain response,
+inspect status instead of issuing a new operation blindly.
+
+![Persistent intent, bounded sessions, call priority and Disable](diagrams/hands-free-operator-flow.svg)
+
+Read **desired state and actual readiness separately**:
+
+- `hands_free.enabled: true` means the persistent policy is enabled, not that
+  the microphone is ready.
+- `waiting_idle` means the controller is waiting for all phone lines to be
+  registered and idle. It does not by itself prove that a call is in progress.
+- `starting` and `running` do not invite speech on their own. Require
+  `hands_free.state: running`, no policy error and the **same non-null session
+  ID** in `hands_free` and `voice`, then all of:
+  `voice.state: running`, `active: true`, `error: null`, both Stop flags false,
+  positive `remaining_seconds`, `phase: armed` and `phase_reason: wake_ready`.
+- `backoff` is a bounded retry delay. `faulted` needs the underlying problem
+  resolved and a fresh explicit Enable. Unconfirmed cleanup is never readiness.
+
+An unconfirmed ordinary call can keep Enable refused even after Disable.
+Follow [pending-call recovery](voice-control.md#unconfirmed-ordinary-calls);
+Disable does not prove that an earlier queued call is gone.
+
+Not ready does **not** mean the microphone is off: preparation can already
+have active capture, and failed cleanup can leave closure uncertain.
+
+Say the wake phrase and question only when ready. Wait for the reply to finish
+and readiness to return before the next question. There is no audible ready cue
+or support for talking over a reply.
+
+Each inner session still lasts at most 300 seconds, including preparation and
+playback. To renew, the gateway requests Stop of its own session five seconds
+before that session’s deadline, then requires confirmed cleanup and two fresh
+idle observations separated by a quiet period. Renewal includes a new call,
+model warmup and a gap in capture; this is persistent intent, not uninterrupted
+listening. Do not rely on a fixed restart delay or conversation memory across
+new session IDs.
+
+An ordinary call has priority. Only a positively observed competing call permits
+automatic resumption after it ends and the idle checks pass. Hanging up the
+assistant call, DTMF Stop, Stop of the current supervised session or an ambiguous
+call change disables hands-free intent. Clean gateway restarts may preserve enabled intent;
+unresolved ownership or cleanup fails closed.
+
+## Disable hands-free mode
+
+```sh
+cisco --json 201 voice disable
+cisco --json 201 voice status
+```
+
+Disable durably turns off automatic starts before requesting Stop of any owned
+session. It works between sessions and during preparation or backoff, without
+requiring a session ID. It has no dry-run option. Check `hands_free.enabled: false`
+and, if a session was active, its matching inactive state and confirmed Stop.
+A disabled policy with unconfirmed cleanup is not proof that the microphone is
+off; follow [recovery](voice-control.md#deadlines-and-uncertain-cleanup).
+
+A valid finite `voice stop` for the **current supervised session** also disables
+hands-free intent. Repeating Stop for a historical session cannot disable a newer
+generation; use `voice disable` for a phone-wide stop of the policy. A new finite
+Start is refused while hands-free is enabled: disable first. Enable replay cannot
+undo a later Disable; use a fresh key only for a deliberate new Enable.
+
+## One-session controls
+
+For one finite attempt, keep hands-free disabled and use Start/Stop below.
+The session lasts at most five minutes, including preparation, waiting and
+playback. Another question does not reset that deadline.
 
 ![Start, speak, repeat within the deadline, and confirm Stop](diagrams/voice-operator-flow.svg)
 
@@ -45,11 +131,10 @@ profile accepts one request and then ends.
    replies do not extend the original deadline.
 5. Stop that session remotely and verify it is inactive with Stop confirmed.
 
-This removes the need to touch the phone during a session. It still requires
-a deliberate Start: an inactive phone cannot hear a wake phrase through this
-prototype. Expiry, a call, a failure or a restart does not start another session.
-Do not schedule repeating Start commands to turn the finite session into
-permanent listening.
+This one-session workflow needs a deliberate Start. With hands-free disabled,
+expiry, a call, failure or restart does not start another session. Use the
+explicit hands-free policy for supervised renewal; do not schedule repeating
+Start commands or bypass the existing owner.
 
 ## Start at the phone
 
@@ -82,12 +167,16 @@ question. Wait for the reply to finish; speaking over it is not supported.
 The session ID and deadline stay the same. Context can be retained within that
 session; a separate Start begins without its previous context.
 `turns_completed` counts software playback completion, not confirmation that
-someone heard it. Stop, call preemption, failure and expiry do not restart listening.
+someone heard it. One-session mode does not restart after Stop, a call, failure
+or expiry. Enabled hands-free mode follows its separate renewal and call-priority
+rules; Stop of its current supervised session disables it.
 
 ## Stop and verify
 
 For a gateway-owned session, use the [CLI or Home Assistant](#use-the-cli-or-home-assistant)
-to stop the exact session remotely; no handset button is required. Read status
+to stop the exact session remotely. Stop of the current supervised session also
+disables hands-free intent; `voice disable` is the phone-wide policy control.
+No handset button is required. Read status
 again and check the matching ID, **inactive** state and **Stop confirmed: Yes**.
 
 The phone menu is an optional alternative: return to **Home Phone Apps → Voice
@@ -131,9 +220,11 @@ After an uncertain response, [read status before retrying](voice-control.md#if-t
 Home Assistant uses the administrator-only `cisco_phone_control.voice` response
 service, sharing the same owner and Start gates. See its
 [status/start/stop contract](voice-control.md#gateway-and-interface-integration).
-Read voice phase and remaining time from that response. The ordinary Call status
-sensor does not show voice-session readiness; the current integration has no
-dedicated voice phase/remaining-time entities or voice Start button.
+Read voice phase and remaining time from that response. The separate
+administrator-only `cisco_phone_control.hands_free` response service provides
+`status`, `enable` and `disable`; see the [service contract](voice-control.md#gateway-and-interface-integration).
+It requires the updated companion integration and gateway. The ordinary Call
+status sensor does not establish assistant readiness.
 
 ## Inspect playback progress
 
@@ -183,10 +274,15 @@ the selected providers and speaker; keep their IDs and credentials private.
   its own timeout; increasing the session does not extend it. Instant replies
   are not promised.
 - **Expired session:** clean expiry reports `stopped` and `lease_expired`.
-  Check Stop confirmation separately, then deliberately Start again if needed.
-- **Incoming call:** it takes priority and ends voice; listening does not resume
-  automatically afterward.
+  Check Stop confirmation separately. One-session mode needs another deliberate
+  Start; enabled hands-free mode can renew after cleanup and fresh idle checks.
+- **Incoming call:** it takes priority and ends the assistant call. Only enabled
+  hands-free mode with positively observed call preemption may resume afterward.
+- **Enabled but unavailable:** inspect `hands_free.state` and its error. Do not
+  relabel `waiting_idle`, `backoff` or `faulted` as listening.
 
 Dialing **630** is a separate SIP Assist route, not a test of this session path.
-Permanent background listening, barge-in and whole-house wake arbitration remain
-outside this prototype.
+Seamless uninterrupted capture, barge-in and automatic whole-house wake
+arbitration are not promised by hands-free mode. The optional
+[shared wake phrase](voice-control.md#shared-wake-phrase-admission) can suppress
+near-simultaneous duplicates; it is not a whole-conversation lock.

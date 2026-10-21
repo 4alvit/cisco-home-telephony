@@ -166,6 +166,37 @@ For idle speaker/dial-tone use, explicitly run `cisco 213 speaker toggle`. The g
 
 `alert timer` and `alert alarm` start an alert immediately; they do not schedule it. Alerts ring until manual answer/reject or Stop, with no audio after answering. For countdowns and recurring weekday schedules, use the [Home Assistant integration](https://github.com/ha-homelab/asterisk-telephony) and [radio/alarms guide](radio-and-alarms.md). `ring 640` keeps the legacy 20-second ringing timeout and finite destination behavior.
 
+## Persistent hands-free mode
+
+With a compatible gateway and an eligible SIP wake profile, enable automatic
+voice sessions for the physical handset containing the selected line:
+
+```sh
+cisco 201 voice enable --dry-run
+cisco 201 voice enable
+cisco 201 voice status
+cisco 201 voice disable
+```
+
+`enable` explicitly authorizes ongoing microphone operation. The gateway owns
+renewal, so the CLI can exit. `disable` durably removes that permission and
+requests cleanup even between sessions. Check status afterward: disabled intent
+alone does not confirm that the current media session has finished stopping.
+
+Status separates desired enablement from actual readiness. A running session
+is only ready for a wake phrase when its matching finite status reports
+`armed` and `wake_ready`. Waiting for idle, startup, backoff and faults do not
+mean it is ready for a wake phrase; absence of readiness does not prove microphone
+closure. Renewals retain the finite media deadline and include a preparation
+gap. Ordinary calls have priority; only confirmed call preemption permits
+automatic resumption after the phone becomes idle again.
+
+Enable and Disable generate request keys; use `--idempotency-key KEY` to retain
+one explicitly. Do not retry an uncertain change blindly. Read status first;
+replaying an old Enable cannot override a later Disable. See the
+[hands-free quickstart](voice-quickstart.md) for profile requirements and
+[lifecycle details](voice-control.md) for restart, fault and Stop behavior.
+
 ## Bounded voice sessions
 
 An explicitly enabled voice gateway accepts `cisco LINE voice status`,
@@ -187,7 +218,10 @@ intended attended attempt. Each session is bounded to at most 300 seconds.
 Manual mode completes one turn; a configured wake profile can rearm after a
 successful reply within the same fixed deadline. `voice stop` reads the current
 owned session and stops that exact ID; `--session-id` targets a previously
-recorded ID. Repeating an old Stop cannot stop a replacement session. See the
+recorded ID. Stopping the current supervised session also disables its
+hands-free intent. Repeating a historical Stop cannot stop a replacement
+session or disable a newer hands-free generation. Disable hands-free mode
+before starting a separate finite session. See the
 [voice quickstart](voice-quickstart.md) for readiness and repeat conversations.
 
 Start dry-run validates through the gateway without launching the runner.
