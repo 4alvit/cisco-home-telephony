@@ -56,6 +56,13 @@ hands-free service and separate read-only desired-state and voice-status
 entities. Updating a client or loading an eligible profile alone does not
 activate capture.
 
+While listening, the phone keeps an **active SIP speakerphone call** open as
+the microphone and reply-audio transport. Its screen therefore continues to
+show a connected Voice Assistant call between requests. This is an expected
+part of this prototype, not the phone's normal idle screen. It still uses the
+stock Cisco firmware; no replacement operating system is installed on the
+phone. Use Disable to end the supervised listening mode and its owned call.
+
 ![Hands-free intent, bounded sessions and cleanup](diagrams/hands-free-operator-flow.svg)
 
 Hands-free requires the SIP AudioSocket transport, ONNX wake mode,
