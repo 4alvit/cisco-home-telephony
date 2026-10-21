@@ -122,8 +122,11 @@ async def run(args, config, private, phone, voice):
         service.ensure_allowed(phone['id'])
         if stopped.is_set():
             raise RuntimeError('stopped_before_start')
+        # Renew on the same port after closed connections enter TIME_WAIT.
+        # SO_REUSEPORT stays disabled: an active listener must remain exclusive.
         server = await asyncio.start_server(connected, '127.0.0.1', config['bind_port'],
-                                            limit=8192, backlog=1, reuse_address=False)
+                                            limit=8192, backlog=1, reuse_address=True,
+                                            reuse_port=False)
         grant = await port.start()
         if stopped.is_set():
             raise RuntimeError('stopped_during_start')
