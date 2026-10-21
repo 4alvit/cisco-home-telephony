@@ -273,8 +273,8 @@ startup/cleanup. Inspect `activeDeadlineSeconds` in the generated manifest;
 do not reuse an older fixed 120-second manifest for a longer session. This outer
 deadline does not extend the owner's configured media deadline. The 120-second termination grace remains a separate Stop
 budget. Keep the last structured result private and check both conversation
-outcome and Stop confirmation. A failed or ambiguous result retains its durable reservation; never delete a journal or
-lock file to make a retry pass.
+outcome and Stop confirmation. A failure with unverified cleanup retains its
+durable reservation; never delete a journal or lock file to make a retry pass.
 
 ## Collect the result and remove temporary credentials
 
@@ -302,6 +302,14 @@ result separates two outcomes:
 - `cleanup_success` reports successful release of the session's media ownership.
   It can be true after a manual Stop or an expired lease even though the
   conversation did not finish. Inspect `reason` and `voice.stop_confirmed`.
+
+It can also be true with `reason: "start_failed"` when the controller validates
+the exact failed child's proof that it attempted neither watchdog arming nor
+RTP Start and completed local cleanup. In that case `voice.state` remains
+`failed`, `voice.stop_confirmed` stays false, `turn_success` and `success` are
+false, and the command exits unsuccessfully. The attempt stays consumed; any
+later attempt requires a new explicit ID. An empty packet counter or a saved
+diagnostic report alone cannot release ownership.
 
 `turns_completed` counts replies completed before the terminal reason. A wake
 session can finish cleanly on Stop or expiry after one or more replies; do not

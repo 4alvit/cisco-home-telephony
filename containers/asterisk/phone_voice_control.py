@@ -112,6 +112,15 @@ def _require(condition, reason='invalid_voice_control_config', status=400):
         raise ControlError(reason, status)
 
 
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('duplicate_json_key')
+        result[key] = value
+    return result
+
+
 def _private_path(value, workspace):
     root = Path(workspace).resolve()
     path = Path(value)
@@ -350,6 +359,8 @@ class _Session:
     stop_confirmed: bool = False
     killed: bool = False
     spawn_attempted: bool = False
+    launch_challenge: str | None = field(default=None, repr=False)
+    cleanup_verified: bool = False
     error: str | None = None
     phase: str | None = 'preparing'
     phase_reason: str | None = None
@@ -654,6 +665,9 @@ class VoiceControl:
                     # additionally covers surviving watchdog descendants.
                     env = {'PATH': '/usr/local/bin:/usr/bin:/bin', 'PYTHONDONTWRITEBYTECODE': '1',
                            'PYTHONUNBUFFERED': '1', 'TMPDIR': '/tmp', 'LANG': 'C.UTF-8'}
+                    s.launch_challenge = secrets.token_hex(32)
+                    env.update(CISCO_VOICE_SESSION_ID=s.session_id,
+                               CISCO_VOICE_LAUNCH_CHALLENGE=s.launch_challenge)
                     s.started = self.clock()
                     s.spawn_attempted = True
                     s.handle = self.runner_factory(argv, cwd=str(ROOT), env=env, lease_fd=s.lease_fd)
@@ -683,6 +697,7 @@ class VoiceControl:
         s.state, s.error = state, error
         s.phase = 'error' if error else 'stopped'
         self._write(s)
+        s.cleanup_verified = True
         self._release(s)
 
     def _release(self, s):
@@ -750,35 +765,87 @@ class VoiceControl:
             self._request_stop(s)
             return self._view(s)
 
+    def _proof_owner(self, s):
+        # Called under the manager lock. Do not overwrite another session's
+        # journal even when a mismatched child claims it never started media.
+        _require(self._sessions.get(s.session_id) is s
+                 and self._requests.get(s.request_id) is s
+                 and self._current.get(s.profile.phone_id) is s and s.lease_fd >= 0,
+                 'voice_owner_unavailable')
+        journal = json.loads(_read(self._paths(s.profile)[1]), object_pairs_hook=_unique_object)
+        _require(isinstance(journal, dict) and journal.get('reserved') is True
+                 and journal.get('session_id') == s.session_id
+                 and journal.get('request_id') == s.request_id
+                 and journal.get('phone') == s.profile.phone_id,
+                 'voice_owner_unavailable')
+
+    def _no_media_proof(self, s, report, raw):
+        proof = report['cleanup_proof']
+        code = s.handle.poll()
+        _require(type(code) is int and code == 1 and not s.killed
+                 and not s.stop_requested and s.stop_at is None
+                 and s.spawn_attempted is True and s.handle.read_result() == raw)
+        _require(type(proof) is dict and set(proof) == {
+            'version', 'kind', 'session_id', 'challenge', 'rtp_start_attempted',
+            'watchdog_arm_attempted', 'watchdog_process_created', 'cleanup_complete'})
+        _require(type(proof['version']) is int and proof['version'] == 1
+                 and proof['kind'] == 'safe_no_media_started'
+                 and proof['session_id'] == s.session_id
+                 and type(proof['challenge']) is str
+                 and re.fullmatch(r'[0-9a-f]{64}', proof['challenge'])
+                 and type(s.launch_challenge) is str
+                 and hmac.compare_digest(proof['challenge'], s.launch_challenge)
+                 and proof['rtp_start_attempted'] is False
+                 and proof['watchdog_arm_attempted'] is False
+                 and proof['watchdog_process_created'] is False
+                 and proof['cleanup_complete'] is True)
+        _require(set(report) == {'error', 'result', 'states', 'turns_completed', 'capture_observed',
+                                'input', 'output_frames', 'recorded_audio', 'cleanup_errors',
+                                'watchdog_armed', 'cleanup_proof'}
+                 and report['error'] == 'voice_session_failed' and report['result'] is None
+                 and report['watchdog_armed'] is False
+                 and type(report['cleanup_errors']) is list and report['cleanup_errors'] == []
+                 and type(report['turns_completed']) is int and report['turns_completed'] == 0
+                 and s.turns_completed == 0 and report['capture_observed'] is False
+                 and type(report['input']) is dict and report['input'] == {}
+                 and type(report['output_frames']) is int and report['output_frames'] == 0
+                 and report['recorded_audio'] is False and type(report['states']) is list
+                 and all(state in ('stopped', 'error') for state in report['states']))
+        return True
+
     def _finish(self, s, raw):
-        confirmed, clean, reason = False, False, 'voice_result_unavailable'
+        with self._lock:
+            self._finish_locked(s, raw)
+
+    def _finish_locked(self, s, raw):
+        confirmed, clean, never_started, reason = False, False, False, 'voice_result_unavailable'
+        s.cleanup_verified = False
         self._progress(s)
+        report = None
         try:
             _require(type(raw) is bytes and len(raw) <= MAX_REPORT and not s.handle.overflow)
-            report = json.loads(raw)
-            result = report.get('result')
-            count = report.get('turns_completed')
-            if type(count) is int and 0 <= count <= MAX_TURNS:
-                s.turns_completed = max(s.turns_completed, count)
-            confirmed = (report.get('watchdog_armed') is True and report.get('watchdog_finished') is True
-                         and type(report.get('watchdog_stop_errors')) is int
-                         and report['watchdog_stop_errors'] == 0
-                         and (report.get('watchdog_stop_confirmed') is True
-                              or isinstance(result, dict) and result.get('stop_confirmed') is True))
-            clean = report.get('cleanup_errors') == []
-            completed = (isinstance(result, dict)
-                         and result.get('reason') in ('turn_complete', 'explicit_stop',
-                                                     'display_stop', 'shutdown', 'lease_expired'))
-            if isinstance(result, dict) and result.get('reason') in PHASE_REASONS:
-                s.phase_reason = result['reason']
-            reason = 'voice_session_failed' if report.get('error') or not completed else None
+            report = json.loads(raw, object_pairs_hook=_unique_object)
         except Exception:
             pass
+        if isinstance(report, dict) and 'cleanup_proof' in report:
+            self._proof_owner(s)
+        try:
+            _require(isinstance(report, dict))
+            if 'cleanup_proof' in report:
+                never_started = self._no_media_proof(s, report, raw)
+                clean, reason = True, 'voice_session_failed'
+                s.phase_reason = 'start_failed'
+            else:
+                confirmed, clean, reason = self._stop_report(s, report)
+        except Exception:
+            # A malformed proof cannot fall back to contradictory Stop fields.
+            confirmed, clean, never_started = False, False, False
         s.stop_confirmed = bool(confirmed and not s.killed)
-        if s.stop_confirmed and clean:
+        if s.stop_confirmed and clean or never_started:
             s.state, s.error = ('failed', reason) if reason else ('stopped', None)
             s.phase = 'error' if reason else 'stopped'
             self._write(s)
+            s.cleanup_verified = True
             self._release(s)
         else:
             s.state, s.error = 'recovery_required', 'voice_stop_unconfirmed'
@@ -789,6 +856,26 @@ class VoiceControl:
             if s.lease_fd >= 0:
                 os.close(s.lease_fd); s.lease_fd = -1
         s.handle = None
+
+    @staticmethod
+    def _stop_report(s, report):
+        result = report.get('result')
+        count = report.get('turns_completed')
+        if type(count) is int and 0 <= count <= MAX_TURNS:
+            s.turns_completed = max(s.turns_completed, count)
+        confirmed = (report.get('watchdog_armed') is True and report.get('watchdog_finished') is True
+                     and type(report.get('watchdog_stop_errors')) is int
+                     and report['watchdog_stop_errors'] == 0
+                     and (report.get('watchdog_stop_confirmed') is True
+                          or isinstance(result, dict) and result.get('stop_confirmed') is True))
+        clean = report.get('cleanup_errors') == []
+        completed = (isinstance(result, dict)
+                     and result.get('reason') in ('turn_complete', 'explicit_stop',
+                                                 'display_stop', 'shutdown', 'lease_expired'))
+        if isinstance(result, dict) and result.get('reason') in PHASE_REASONS:
+            s.phase_reason = result['reason']
+        reason = 'voice_session_failed' if report.get('error') or not completed else None
+        return confirmed, clean, reason
 
     def tick(self):
         """One nonblocking supervisor pass; deterministic with injected test handles."""

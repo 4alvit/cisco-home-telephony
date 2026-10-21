@@ -404,6 +404,65 @@ class SessionLifecycleTests(unittest.TestCase):
             session.start()
         self.assertEqual(self.execute.call_count, count)
 
+    def test_never_started_cleanup_is_sealed_against_a_queued_start(self):
+        session = self.session()
+        watchdog = v._Watchdog({}, ())
+        queued = threading.Event()
+        errors = []
+
+        def delayed_start():
+            queued.set()
+            try:
+                session.start()
+            except Exception as error:
+                errors.append(error)
+
+        with session._lock:
+            thread = threading.Thread(target=delayed_start)
+            thread.start()
+            self.assertTrue(queued.wait(1))
+            session.stop('start_failed')
+            self.assertTrue(session.no_media_started(watchdog))
+            self.assertFalse(session.stop_confirmed)
+        thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], v.VoiceTransportError)
+        self.execute.assert_not_called()
+        self.media.open.assert_not_called()
+
+    def test_rejected_start_remains_attempted_even_without_owned_directions(self):
+        session = self.session()
+        self.execute.side_effect = v.CommandRejected('synthetic rejection')
+        with self.assertRaises(v.CommandRejected):
+            session.start()
+        self.assertTrue(session._start_attempted)
+        self.assertEqual(session._directions, set())
+        self.assertFalse(session.no_media_started(v._Watchdog({}, ())))
+
+    def test_never_started_proof_excludes_failed_close_socket_and_watchdog_attempt(self):
+        for field in ('close', 'socket', 'arm', 'process', 'missing'):
+            with self.subTest(field=field):
+                session = self.session()
+                watchdog = v._Watchdog({}, ())
+                session.stop('start_failed')
+                if field == 'close':
+                    session.stop_errors.append('local_close_failed')
+                elif field == 'socket':
+                    self.media.sock = object()
+                elif field == 'arm':
+                    with mock.patch.object(v.multiprocessing, 'get_context', side_effect=RuntimeError):
+                        with self.assertRaises(RuntimeError):
+                            watchdog.arm(self.now + 2)
+                    self.assertTrue(watchdog._arm_attempted)
+                    self.assertIsNone(watchdog.process)
+                elif field == 'process':
+                    watchdog.process = object()
+                else:
+                    del watchdog._arm_attempted
+                self.assertFalse(session.no_media_started(watchdog))
+                self.media.sock = None
+
     def test_playback_only_explicit_opt_in_never_requests_microphone(self):
         session = self.session(enable_microphone=False, enable_playback=True, volume=17)
         session.start()

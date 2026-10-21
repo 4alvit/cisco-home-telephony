@@ -9,6 +9,7 @@ import io
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 import tempfile
 import threading
@@ -35,6 +36,20 @@ def completed_report(reason="turn_complete", *, confirmed=True):
         "watchdog_armed": True, "watchdog_finished": True,
         "watchdog_stop_errors": 0, "watchdog_stop_confirmed": confirmed,
         "transcript": PRIVATE_MARKER, "token": PRIVATE_MARKER,
+    }
+
+
+def no_media_report(session_id, challenge):
+    return {
+        'error': 'voice_session_failed', 'result': None, 'states': ['stopped'],
+        'turns_completed': 0, 'capture_observed': False, 'input': {}, 'output_frames': 0,
+        'recorded_audio': False, 'cleanup_errors': [], 'watchdog_armed': False,
+        'cleanup_proof': {
+            'version': 1, 'kind': 'safe_no_media_started', 'session_id': session_id,
+            'challenge': challenge, 'rtp_start_attempted': False,
+            'watchdog_arm_attempted': False, 'watchdog_process_created': False,
+            'cleanup_complete': True,
+        },
     }
 
 
@@ -1028,6 +1043,208 @@ class ControlLifecycleTests(ControlFixture):
                 self.assertEqual(result["state"], "stopped")
                 self.assertIsNone(result["error"])
                 self.assertTrue(result["stop_confirmed"])
+
+
+class NoMediaCleanupTests(ControlFixture):
+    def prepared(self, index=0):
+        self.configuration['state_directory'] = '.local/no-media-' + str(index)
+        self.write_inputs()
+        instance = self.make_control()
+        started = self.start(instance)
+        session = instance._sessions[started['session_id']]
+        env = self.launches[-1][2]
+        value = no_media_report(started['session_id'], env['CISCO_VOICE_LAUNCH_CHALLENGE'])
+        return instance, session, self.runners[-1], value
+
+    def test_exact_failed_child_releases_without_fabricating_stop_or_success(self):
+        instance, session, child, value = self.prepared()
+        env = self.launches[-1][2]
+        self.assertEqual(env['CISCO_VOICE_SESSION_ID'], session.session_id)
+        self.assertRegex(env['CISCO_VOICE_LAUNCH_CHALLENGE'], r'^[0-9a-f]{64}$')
+        child.finish(value, code=1)
+        instance.tick()
+        status = self.status(instance)
+        self.assertEqual((status['state'], status['error'], status['phase']),
+                         ('failed', 'voice_session_failed', 'error'))
+        self.assertFalse(status['stop_confirmed'])
+        self.assertEqual(status['turns_completed'], 0)
+        self.assertTrue(session.cleanup_verified)
+        self.assertLess(session.lease_fd, 0)
+        self.assertIsNone(session.directory)
+        journal = instance._journal(session.profile)
+        self.assertIs(journal['reserved'], False)
+        self.assertNotIn(value['cleanup_proof']['challenge'], json.dumps(journal) + json.dumps(status))
+        self.assertNotIn('cleanup_proof', journal)
+        replacement = self.make_control(config=instance.config)
+        self.assertEqual(self.start(replacement)['state'], 'failed')
+        self.assertEqual(len(self.runners), 1)  # exact failed request remains idempotent
+        self.start(replacement, request_id='next-explicit-request')
+        self.assertNotEqual(self.launches[-1][2]['CISCO_VOICE_LAUNCH_CHALLENGE'],
+                            value['cleanup_proof']['challenge'])
+
+    def test_malformed_or_contradictory_proofs_never_fall_back_to_stop_ack(self):
+        mutations = []
+        for field, values in {
+            'version': (True, 2, '1'), 'kind': ('other',),
+            'session_id': ('0' * 32, None), 'challenge': ('0' * 64, None, True),
+            'rtp_start_attempted': (True, 0, None),
+            'watchdog_arm_attempted': (True, 0, None),
+            'watchdog_process_created': (True, 0, None),
+            'cleanup_complete': (False, 1, None),
+        }.items():
+            for value in values:
+                mutations.append(lambda report, field=field, value=value:
+                                 report['cleanup_proof'].__setitem__(field, value))
+        for field in no_media_report('', '')['cleanup_proof']:
+            mutations.append(lambda report, field=field: report['cleanup_proof'].pop(field))
+        for field, values in {
+            'turns_completed': (1, False), 'capture_observed': (True, 0),
+            'output_frames': (1, False), 'input': ({'received': 1}, []),
+            'recorded_audio': (True, 0), 'states': (['listening'], None),
+            'cleanup_errors': (['local_close_failed'], None),
+            'watchdog_armed': (True, 0), 'result': ({'stop_confirmed': True},),
+            'error': (None,),
+        }.items():
+            for value in values:
+                mutations.append(lambda report, field=field, value=value: report.__setitem__(field, value))
+        mutations += [lambda report: report['cleanup_proof'].update(extra=True),
+                      lambda report: report.update(watchdog_finished=True, watchdog_stop_errors=0,
+                                                   watchdog_stop_confirmed=True),
+                      lambda report: report.pop('cleanup_proof')]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(case=index):
+                instance, session, child, value = self.prepared(index)
+                mutate(value)
+                child.finish(value, code=1)
+                instance.tick()
+                self.assertEqual(self.status(instance)['state'], 'recovery_required')
+                self.assertFalse(session.cleanup_verified)
+                self.assertTrue(instance._journal(session.profile)['reserved'])
+
+    def test_live_or_nonstandard_exit_kill_signal_and_progress_cannot_release(self):
+        cases = [('code', value) for value in (None, 0, -15, -9, 2, True, False)]
+        cases += [('killed', True), ('stop_requested', True), ('stop_at', 100),
+                  ('turns_completed', 1), ('overflow', True)]
+        for index, (field, value) in enumerate(cases):
+            with self.subTest(field=field, value=value):
+                instance, session, child, report = self.prepared(index)
+                child.finish(report, code=value if field == 'code' else 1)
+                if field == 'overflow':
+                    child.overflow = value
+                elif field != 'code':
+                    setattr(session, field, value)
+                instance.tick()
+                self.assertFalse(session.cleanup_verified)
+                self.assertTrue(instance._journal(session.profile)['reserved'])
+                self.assertIsNotNone(session.directory)
+                self.assertEqual(self.status(instance)['state'],
+                                 'running' if field == 'code' and value is None else 'recovery_required')
+
+    def test_incomplete_output_and_duplicate_json_keys_cannot_release(self):
+        for index, kind in enumerate(('eof', 'top-duplicate', 'proof-duplicate')):
+            with self.subTest(kind=kind):
+                instance, session, child, value = self.prepared(index)
+                raw = json.dumps(value)
+                if kind == 'top-duplicate':
+                    raw = raw[:-1] + ', "watchdog_armed": false}'
+                elif kind == 'proof-duplicate':
+                    raw = raw.replace('"version": 1', '"version": 1, "version": 1')
+                child.returncode, child.result = 1, None if kind == 'eof' else raw.encode()
+                instance.tick()
+                self.clock.advance(control.REPORT_GRACE_SECONDS + 1)
+                instance.tick()
+                self.assertFalse(session.cleanup_verified)
+                self.assertTrue(instance._journal(session.profile)['reserved'])
+
+    def test_report_must_be_the_complete_output_of_this_handle(self):
+        instance, session, child, value = self.prepared()
+        child.finish(value, code=1)
+        instance._finish(session, child.result + b'\n')
+        self.assertFalse(session.cleanup_verified)
+        self.assertEqual(self.status(instance)['state'], 'recovery_required')
+        self.assertTrue(instance._journal(session.profile)['reserved'])
+
+    def test_exact_journal_and_current_owner_are_required_without_overwriting_mismatch(self):
+        for index, field in enumerate(('session_id', 'request_id', 'phone', 'reserved',
+                                       'current', 'sessions', 'requests')):
+            with self.subTest(field=field):
+                instance, session, child, value = self.prepared(index)
+                path = instance._paths(session.profile)[1]
+                original = path.read_bytes()
+                mapping = None
+                if field in ('current', 'sessions', 'requests'):
+                    mapping, key = {'current': (instance._current, session.profile.phone_id),
+                                    'sessions': (instance._sessions, session.session_id),
+                                    'requests': (instance._requests, session.request_id)}[field]
+                    mapping[key] = object()
+                else:
+                    journal = json.loads(original)
+                    journal[field] = False if field == 'reserved' else 'wrong-owner'
+                    path.write_text(json.dumps(journal))
+                before = path.read_bytes()
+                child.finish(value, code=1)
+                try:
+                    with self.assertRaises(control.ControlError):
+                        instance._finish(session, child.result)
+                    self.assertEqual(path.read_bytes(), before)
+                    self.assertGreaterEqual(session.lease_fd, 0)
+                    self.assertFalse(session.cleanup_verified)
+                    self.assertIsNotNone(session.directory)
+                finally:
+                    path.write_bytes(original)
+                    if mapping is not None:
+                        mapping[key] = session
+
+    def test_journal_write_failure_keeps_lock_snapshot_and_unverified_cleanup(self):
+        instance, session, child, report = self.prepared()
+        child.finish(report, code=1)
+        before = instance._paths(session.profile)[1].read_bytes()
+        with mock.patch.object(instance, '_write', side_effect=OSError('synthetic write failure')):
+            with self.assertRaises(OSError):
+                instance.tick()
+        self.assertFalse(session.cleanup_verified)
+        self.assertGreaterEqual(session.lease_fd, 0)
+        self.assertIsNotNone(session.directory)
+        self.assertEqual(instance._paths(session.profile)[1].read_bytes(), before)
+
+    def test_directory_fsync_failure_after_replace_keeps_the_owned_lock(self):
+        instance, session, child, report = self.prepared()
+        child.finish(report, code=1)
+        path = instance._paths(session.profile)[1]
+        before = path.read_bytes()
+        fsync = os.fsync
+
+        def fail_directory(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError('synthetic directory fsync failure')
+            return fsync(fd)
+
+        try:
+            with mock.patch.object(control.os, 'fsync', side_effect=fail_directory):
+                with self.assertRaises(control.ControlError):
+                    instance.tick()
+            self.assertFalse(json.loads(path.read_bytes())['reserved'])  # replace occurred
+            self.assertFalse(session.cleanup_verified)
+            self.assertGreaterEqual(session.lease_fd, 0)
+            self.assertIsNotNone(session.directory)
+            with self.assertRaises(control.ControlError):
+                self.start(instance, request_id='blocked-after-fsync-failure')
+            self.assertEqual(len(self.runners), 1)
+        finally:
+            path.write_bytes(before)  # restore only this synthetic fixture for teardown
+
+    def test_failure_before_process_launch_still_releases_without_child_proof(self):
+        instance = self.make_control()
+        with mock.patch.object(instance, '_prepare', side_effect=ValueError('synthetic preparation')):
+            with self.assertRaises(control.ControlError):
+                self.start(instance)
+        session = next(iter(instance._sessions.values()))
+        self.assertFalse(session.spawn_attempted)
+        self.assertTrue(session.cleanup_verified)
+        self.assertFalse(session.stop_confirmed)
+        self.assertEqual(self.status(instance)['state'], 'failed')
+        self.assertFalse(instance._journal(session.profile)['reserved'])
+        self.assertEqual(self.runners, [])
 
 
 class SubprocessHandleTests(unittest.TestCase):
