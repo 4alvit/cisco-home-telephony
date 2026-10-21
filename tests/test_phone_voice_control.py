@@ -1577,6 +1577,37 @@ class UsableVoiceSessionTests(ControlFixture):
             self.start(instance)
         self.assertEqual(self.launches, [])
 
+    def test_playback_counters_survive_status_stop_and_manager_restart(self):
+        instance = self.make_control()
+        session_id = self.start(instance)["session_id"]
+        self.progress(instance, session_id, "armed", 2, "wake_ready")
+        path = instance._sessions[session_id].directory / "progress.json"
+        value = json.loads(path.read_text())
+        counters = dict(playback_requests=4, tts_offers=3, empty_playbacks=1,
+                        incomplete_playbacks=1, completed_pcm_bytes=1280)
+        value["playback"] = counters
+        path.write_text(json.dumps(value))
+        self.assertEqual(self.status(instance, "202")["playback"], counters)
+        report = completed_report("lease_expired")
+        report["turns_completed"] = 2
+        self.runners[0].finish(report)
+        instance.tick()
+        self.assertEqual(self.status(instance)["playback"], counters)
+        restored = self.make_control()
+        self.assertEqual(self.status(restored)["playback"], counters)
+        self.assertNotIn(PRIVATE_MARKER, json.dumps(self.status(restored)))
+
+    def test_invalid_playback_progress_does_not_block_exact_stop(self):
+        instance = self.make_control()
+        session_id = self.start(instance)["session_id"]
+        self.progress(instance, session_id, "armed")
+        path = instance._sessions[session_id].directory / "progress.json"
+        value = json.loads(path.read_text())
+        value["playback"] = {"transcript": PRIVATE_MARKER}
+        path.write_text(json.dumps(value))
+        self.assertNotIn("playback", self.status(instance))
+        self.assertEqual(self.stop(instance, session_id)["state"], "stopping")
+
     def test_extended_wire_status_remains_optional_and_bounded(self):
         old = {"schema_version": 1, "phone": "201", "line": "201",
                "session_id": None, "state": "idle", "active": False,

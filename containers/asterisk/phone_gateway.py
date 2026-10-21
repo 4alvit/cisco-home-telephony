@@ -475,9 +475,11 @@ class Gateway:
         require(phone_id in self.phones, 'unknown_phone', 404)
         return {'_phone_proof': self._voice_phone_proof, 'phone': phone_id}
 
-    def voice_request(self, target, operation, body, context):
+    def voice_request(self, target, operation, body, context, *, include_playback=False):
         require(self.voice is not None, 'voice_control_unavailable', 503)
         require(operation in ('status', 'start', 'stop'), 'unknown_action', 404)
+        require(type(include_playback) is bool and (not include_playback or operation == 'status'),
+                'invalid_voice_request', 400)
         require(isinstance(body, dict), 'json_object_required', 400)
         allowed = {
             'status': set(),
@@ -493,7 +495,9 @@ class Gateway:
                     'idempotency_key_required', 400)
         try:
             if operation == 'status':
-                value = self.voice.status(target, context=context)
+                value = dict(self.voice.status(target, context=context))
+                if not include_playback:
+                    value.pop('playback', None)
                 return {'status': 'ok', 'voice': value}
             if operation == 'start':
                 for flag in ('attended', 'exclusive_media', 'enable_microphone', 'dry_run'):
@@ -517,6 +521,8 @@ class Gateway:
                 value = self.voice.stop(target, session_id, context=context)
             # Stop's exact session ID supplies idempotence. Its key is correlation;
             # Start's key is also the manager's replay/duplicate-start identity.
+            value = dict(value)
+            value.pop('playback', None)  # Preserve strict deployed HA response schemas.
             return {'status': 'accepted', 'action_id': key, 'voice': value}
         except self._voice_module.ControlError as error:
             raise Refused(error.reason, error.status) from None
@@ -1178,9 +1184,10 @@ class Handler(BaseHTTPRequestHandler):
         require(len(self.headers.get_all('Authorization', [])) == 1
                 and constant(self.headers.get('Authorization', ''), 'Bearer ' + gateway.config['api_token']), 'forbidden', 403)
         voice_match = re.fullmatch(
-            r'/v1/phones/(2[0-9]{2})/voice_(status|start|stop)', self.path)
+            r'/v1/phones/(2[0-9]{2})/voice_(status|start|stop)(\?include_playback=1)?', self.path)
         if voice_match:
-            target, operation = voice_match.groups()
+            target, operation, playback_query = voice_match.groups()
+            require(not playback_query or operation == 'status', 'invalid_voice_request', 400)
             if operation == 'status':
                 require(self.command == 'GET' and not self.body(0), 'bad_voice_method', 400)
                 data = {}
@@ -1194,7 +1201,8 @@ class Handler(BaseHTTPRequestHandler):
                     raise Refused('invalid_json', 400) from None
             context = {'source': source,
                        'authorization': tuple(self.headers.get_all('Authorization', []))}
-            return self.reply(200, gateway.voice_request(target, operation, data, context))
+            return self.reply(200, gateway.voice_request(
+                target, operation, data, context, include_playback=bool(playback_query)))
         if self.command == 'GET':
             require(self.path == '/v1/phones' and not self.body(0), 'not_found', 404)
             return self.reply(200, gateway.listing())

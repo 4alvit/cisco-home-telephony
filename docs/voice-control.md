@@ -266,8 +266,49 @@ compatibility; their absence does not mean ready. `phase` can be `preparing`,
 `armed`, `listening`, `thinking`, `speaking`, `stopped`, `error` or null; inspect
 its fixed `phase_reason` as well. `mode` is `manual` or `wake`;
 `session_seconds` and `remaining_seconds` are bounded by 300.
-`turns_completed` counts software-completed replies, not human confirmation
-that a reply was heard. No transcript or model identifier is added to status.
+With this revision, `turns_completed` increments only after nonempty decoded
+PCM has been passed to the playback sink and any drain has completed. Missing
+TTS URLs, empty PCM, failures and cancellation do not qualify. Earlier versions
+counted any normal playback return, including a reply with no audio. Neither
+counter definition proves that a reply was heard. No transcript or model
+identifier is added to status.
+
+Stopping playback invalidates the pending reply across audio fetch, decoding,
+frame delivery and drain. A frame already sent cannot be recalled, but later
+frames from that reply must not resume after Stop or certify a completed turn.
+A new playback request remains possible after the stopped request has ended.
+
+Optional playback diagnostics use the same authenticated status endpoint:
+
+```bash
+cisco --config .local/cisco-cli.json --json 201 voice status --playback
+```
+
+This requests `GET /v1/phones/201/voice_status?include_playback=1`. The optional
+`voice.playback` object contains five bounded integer counters:
+
+- `playback_requests`: HA results reaching playback after ownership checks;
+  this does not count every HA result or attest STT accuracy.
+- `tts_offers`: those results containing a TTS URL; no URL is exposed.
+- `empty_playbacks`: known successful returns with no PCM to play.
+- `incomplete_playbacks`: errors, cancellation or unverified adapter outcomes.
+  These may have transmitted partial audio; they do not mean zero output.
+- `completed_pcm_bytes`: source PCM bytes in fully completed playbacks only.
+  These are not SIP packet counts, a silence measurement or proof of audibility.
+
+During an in-progress playback, completion counters remain unchanged. A TTS
+offer or completed PCM does not identify the actual synthesis backend, prove
+that Baya ran rather than cached audio being returned, or verify the speaker.
+The existing provider preflight and separate listening acceptance still apply.
+
+Default status, Start and Stop responses omit this object to preserve the
+installed Home Assistant companion's strict schema. The diagnostics require
+the updated gateway and CLI, including its HTTP worker; HA needs no update.
+An older server or a session without these counters reports
+`playback_metadata_unavailable` rather than inventing zeros or retrying a
+mutation. The query is accepted only on GET status, with no body, no duplicate
+parameters and the exact value shown above. Old status/progress documents
+without the optional object remain valid.
 
 In wake mode, successful rearming stays inside the original session ID and
 deadline. Say the wake phrase again when ready for the next request. Stop,

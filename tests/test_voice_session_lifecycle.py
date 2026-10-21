@@ -66,7 +66,8 @@ class FakeService:
         self.events = events
         self.activations = 0
         self.close_error = None
-        self.playback = SimpleNamespace(play=mock.AsyncMock(), stop=mock.AsyncMock())
+        self.playback = SimpleNamespace(play=mock.AsyncMock(return_value=subject.PlaybackResult(1, 640)),
+                                        stop=mock.AsyncMock())
 
     def ensure_allowed(self, phone_id):
         pass
@@ -925,14 +926,16 @@ class ProgressFileTests(unittest.TestCase):
             with self.path.open() as previous:
                 before = os.fstat(previous.fileno()).st_ino
                 progress.publish('speaking', 'private transcript or token')
-                progress.completed_reply()
+                progress.playback_update(completed=True, completed_pcm_bytes=640)
                 self.assertNotEqual(self.path.stat().st_ino, before)
                 self.assertEqual(json.load(previous)['phase'], 'preparing')
         self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
         self.assertEqual(self.path.stat().st_uid, os.getuid())
         self.assertEqual(json.loads(self.path.read_text()), {
             'schema_version': 1, 'phase': 'speaking', 'reason': None,
-            'turns_completed': 1, 'updated_at': 1700000000.25})
+            'turns_completed': 1, 'updated_at': 1700000000.25,
+            'playback': {'playback_requests': 0, 'tts_offers': 0, 'empty_playbacks': 0,
+                         'incomplete_playbacks': 0, 'completed_pcm_bytes': 640}})
         self.assertEqual(list(self.directory.iterdir()), [self.path])
 
     def test_bad_paths_do_not_create_or_follow_any_output(self):
@@ -983,9 +986,10 @@ class ProgressFileTests(unittest.TestCase):
 class ProgressPlaybackTests(unittest.IsolatedAsyncioTestCase):
     async def test_counts_only_completed_playback_and_preserves_stop(self):
         progress = subject.SessionProgress(ROOT)
-        original = SimpleNamespace(play=mock.AsyncMock(return_value='done'), stop=mock.AsyncMock())
+        outcome = subject.PlaybackResult(1, 640)
+        original = SimpleNamespace(play=mock.AsyncMock(return_value=outcome), stop=mock.AsyncMock())
         playback = subject.ProgressPlayback(original, progress)
-        self.assertEqual(await playback.play('phone', object()), 'done')
+        self.assertEqual(await playback.play('phone', object()), outcome)
         self.assertEqual(progress.turns_completed, 1)
         for error in (RuntimeError('synthetic provider text'), asyncio.CancelledError()):
             original.play.side_effect = error

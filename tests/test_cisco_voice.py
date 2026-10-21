@@ -65,6 +65,65 @@ class VoiceCLITests(unittest.TestCase):
         self.assertNotIn(PRIVATE, json.dumps(result))
         self.assertNotIn('error', result['voice'])
 
+    def test_playback_metadata_is_optional_bounded_and_printed_without_private_data(self):
+        counters = dict(playback_requests=4, tts_offers=3, empty_playbacks=1,
+                        incomplete_playbacks=1, completed_pcm_bytes=1280)
+        value = dict(status_value(), playback=counters)
+        code, result, _ = self.invoke(['status'], value=value)
+        self.assertEqual(code, 0)
+        self.assertEqual(result['voice']['playback'], counters)
+        code, output, _ = self.invoke(['status'], value=value, human=True)
+        self.assertEqual(code, 0)
+        self.assertIn('PCM bytes in completed playbacks: 1280', output)
+        self.assertIn('incomplete playback may be partial', output)
+        self.assertNotIn(PRIVATE, output)
+        code, result, calls = self.invoke(['status', '--playback'], value=value)
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, [('/v1/phones/202/voice_status?include_playback=1', None)])
+        for key in counters:
+            for invalid in (True, -1, 1.5, 10 ** 1000, PRIVATE):
+                with self.subTest(key=key, invalid=type(invalid).__name__):
+                    code, result, _ = self.invoke(['status'], value=dict(
+                        status_value(), playback=dict(counters, **{key: invalid})))
+                    self.assertNotEqual(code, 0)
+                    self.assertNotIn(PRIVATE, json.dumps(result))
+        for invalid in (None, {}, dict(counters, transcript=PRIVATE)):
+            code, result, _ = self.invoke(['status'], value=dict(status_value(), playback=invalid))
+            self.assertNotEqual(code, 0)
+            self.assertNotIn(PRIVATE, json.dumps(result))
+
+    def test_playback_on_old_server_is_unavailable_without_retry_or_invented_zeros(self):
+        for failure in (None, cisco.Refused('gateway_http_error', http_status=404)):
+            code, result, calls = self.invoke(['status', '--playback'], failure=failure)
+            self.assertEqual(code, 1)
+            self.assertEqual(result['reason'], 'playback_metadata_unavailable')
+            self.assertNotIn('playback', result)
+            self.assertEqual(calls, [('/v1/phones/202/voice_status?include_playback=1', None)])
+
+    def test_http_worker_accepts_only_exact_readonly_playback_query(self):
+        payload = {'url': 'http://192.0.2.1', 'token': 'x' * 40,
+                   'timeout': 2, 'body': None,
+                   'path': '/v1/phones/202/voice_status?include_playback=1'}
+        # Documentation-only ranges are not accepted as gateway destinations.
+        payload['url'] = 'http://192.168.50.1'
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.status = 200
+        response.read.return_value = b'{"status":"ok"}'
+        opener = mock.Mock()
+        opener.open.return_value = response
+        with mock.patch.object(cisco_http.request, 'build_opener', return_value=opener):
+            self.assertTrue(cisco_http.perform(payload)['ok'])
+            self.assertEqual(opener.open.call_args.args[0].get_method(), 'GET')
+            opener.reset_mock()
+            for path, body in ((payload['path'], {}),
+                    (payload['path'] + '&include_playback=1', None),
+                    (payload['path'].replace('=1', '=0'), None),
+                    (payload['path'].replace('voice_status', 'voice_start'), None),
+                    (payload['path'].replace('voice_status', 'voice_stop'), None)):
+                self.assertFalse(cisco_http.perform(dict(payload, path=path, body=body))['ok'])
+            opener.open.assert_not_called()
+
     def test_start_requires_all_explicit_flags_and_request_key_before_http(self):
         full = self.start_args()
         for omitted in ('--attended', '--exclusive-media', '--enable-microphone', '--idempotency-key'):

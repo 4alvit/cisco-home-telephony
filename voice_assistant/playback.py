@@ -18,6 +18,14 @@ class PCMOutput:
     sample_width: int = 2
 
 
+@dataclass(frozen=True)
+class PlaybackResult:
+    """Completed source PCM writes, not resampled wire frames or heard audio."""
+
+    frames: int
+    pcm_bytes: int
+
+
 def decode_wave(data: bytes, *, max_seconds: float = 60) -> PCMOutput:
     """Accept uncompressed LE16 WAV, downmix stereo, preserve explicit rate."""
     with wave.open(io.BytesIO(data), "rb") as source:
@@ -80,7 +88,8 @@ class WavePlayback:
     media. Calls include the explicit sample rate; 20 ms frames are used where
     the source rate permits. write_pcm must await actual delivery, or the sink
     must provide async drain(phone_id) to await all queued playback. No socket
-    or physical audio device is opened here.
+    or physical audio device is opened here. stop invalidates the whole pending
+    reply, including fetch/decode and writes following an already sent frame.
     """
 
     def __init__(self, fetch_audio: Callable[[str], Awaitable[Any]], sink: Any, *,
@@ -88,26 +97,43 @@ class WavePlayback:
                  max_seconds: float = 60):
         self.fetch_audio, self.sink = fetch_audio, sink
         self.compressed_decoder, self.max_seconds = compressed_decoder, max_seconds
+        self._generations: dict[str, int] = {}
 
-    async def play(self, phone_id: str, result: Any) -> None:
+    async def play(self, phone_id: str, result: Any) -> PlaybackResult:
+        generation = self._generations.get(phone_id, 0)
+
+        def check_current() -> None:
+            if generation != self._generations.get(phone_id, 0):
+                raise asyncio.CancelledError
+
         if not result.tts_url:
-            return
+            return PlaybackResult(0, 0)
         payload = await self.fetch_audio(result.tts_url)
+        check_current()
         if payload.data.startswith(b"RIFF") and payload.data[8:12] == b"WAVE":
             pcm = decode_wave(payload.data, max_seconds=self.max_seconds)
         elif self.compressed_decoder:
             pcm = await self.compressed_decoder(payload.data, payload.content_type)
         else:
             raise ValueError("compressed TTS requires an explicitly configured local decoder")
+        check_current()
         if (pcm.sample_width != 2 or pcm.channels != 1 or pcm.sample_rate <= 0 or
                 len(pcm.data) % 2 or len(pcm.data) > pcm.sample_rate * 2 * self.max_seconds):
             raise ValueError("invalid or excessive decoded speech")
+        if not pcm.data:
+            return PlaybackResult(0, 0)
         frame_bytes = (pcm.sample_rate // 50) * 2
+        frames = 0
         for offset in range(0, len(pcm.data), frame_bytes):
             await self.sink.write_pcm(phone_id, pcm.data[offset:offset + frame_bytes], pcm.sample_rate)
+            check_current()
+            frames += 1
         drain = getattr(self.sink, "drain", None)
         if drain is not None:
             await drain(phone_id)
+            check_current()
+        return PlaybackResult(frames, len(pcm.data))
 
     async def stop(self, phone_id: str) -> None:
+        self._generations[phone_id] = self._generations.get(phone_id, 0) + 1
         await self.sink.stop(phone_id)

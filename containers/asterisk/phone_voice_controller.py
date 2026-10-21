@@ -90,6 +90,9 @@ class RtpPCMSink:
             if self.session.state != 'active':
                 _playback_transport_stopped(self.session)
             await asyncio.sleep(.005)
+        # A stopped generation discarded this block; normal return would
+        # incorrectly certify its delivery to the shared playback adapter.
+        raise asyncio.CancelledError
 
     async def stop(self, phone_id):
         if phone_id != self.phone_id:

@@ -25,10 +25,13 @@ sys.path.insert(0, str(ROOT / 'containers/asterisk'))
 import phone_voice_transport as transport
 from phone_voice_controller import PhoneVoiceController, RtpPCMSink
 from voice_assistant.config import build_service, load_config
-from voice_assistant.playback import FFmpegDecoder
+from voice_assistant.playback import FFmpegDecoder, PlaybackResult
 
 
 PROGRESS_PHASES = frozenset(('preparing', 'armed', 'listening', 'thinking', 'speaking', 'stopped', 'error'))
+PLAYBACK_LIMITS = {'playback_requests': 10000, 'tts_offers': 10000,
+                   'empty_playbacks': 10000, 'incomplete_playbacks': 10000,
+                   'completed_pcm_bytes': 64 * 1024 * 1024}
 PROGRESS_REASONS = frozenset(('model_warmup', 'wake_ready', 'turn_complete', 'new_session',
     'user_stop', 'explicit_stop', 'display_stop', 'shutdown', 'duplicate_activation', 'call',
     'audio_backpressure', 'wake_inference_failed', 'turn_timeout', 'turn_failed',
@@ -44,6 +47,7 @@ class SessionProgress:
         self.workspace = Path(workspace).resolve()
         self.parts = None
         self.phase, self.reason, self.turns_completed = 'preparing', None, 0
+        self.playback = dict.fromkeys(PLAYBACK_LIMITS, 0)
         self.failed = False
         self.failure_reason = None
         if filename is not None:
@@ -69,7 +73,8 @@ class SessionProgress:
         if self.parts is None:
             return
         value = {'schema_version': 1, 'phase': self.phase, 'reason': self.reason,
-                 'turns_completed': self.turns_completed, 'updated_at': time.time()}
+                 'turns_completed': self.turns_completed, 'updated_at': time.time(),
+                 'playback': dict(self.playback)}
         directory = os.open(self.workspace, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         temporary = None
         try:
@@ -111,19 +116,55 @@ class SessionProgress:
             finally:
                 os.close(directory)
 
-    def completed_reply(self):
-        self.turns_completed += 1
+    def playback_update(self, *, completed=False, **increments):
+        updated = dict(self.playback)
+        for key, amount in increments.items():
+            if (key not in PLAYBACK_LIMITS or type(amount) is not int or amount < 0
+                    or updated[key] + amount > PLAYBACK_LIMITS[key]):
+                raise ValueError('playback_counter_limit')
+            updated[key] += amount
+        if completed and self.turns_completed >= 10000:
+            raise ValueError('playback_counter_limit')
+        self.playback = updated
+        self.turns_completed += int(completed)
         self.publish(self.phase, self.reason)
 
 
 class ProgressPlayback:
-    """Count a reply only after playback returns, never when a turn is canceled."""
+    """Count verified nonempty PCM completion, not a generic successful return.
+
+    Requests are HA results reaching playback after ownership checks. Incomplete
+    playback may have sent partial audio; completed bytes are not total output,
+    a non-silence measurement, an RTP acknowledgment or evidence of audibility.
+    """
     def __init__(self, playback, progress):
         self.playback, self.progress = playback, progress
 
     async def play(self, *args, **kwargs):
-        result = await self.playback.play(*args, **kwargs)
-        self.progress.completed_reply()
+        reply = args[1] if len(args) > 1 else kwargs.get('result')
+        self.progress.playback_update(playback_requests=1,
+                                      tts_offers=int(bool(getattr(reply, 'tts_url', None))))
+        try:
+            result = await self.playback.play(*args, **kwargs)
+        except (Exception, asyncio.CancelledError):
+            try:
+                self.progress.playback_update(incomplete_playbacks=1)
+            except Exception:
+                pass  # Preserve the original playback failure or cancellation.
+            raise
+        valid = (isinstance(result, PlaybackResult)
+                 and type(result.frames) is int and 0 <= result.frames <= 10000
+                 and type(result.pcm_bytes) is int
+                 and 0 <= result.pcm_bytes <= PLAYBACK_LIMITS['completed_pcm_bytes']
+                 and result.pcm_bytes % 2 == 0)
+        if valid and result.frames > 0 and result.pcm_bytes >= result.frames * 2:
+            self.progress.playback_update(completed=True, completed_pcm_bytes=result.pcm_bytes)
+        elif valid and result.frames == result.pcm_bytes == 0:
+            self.progress.playback_update(empty_playbacks=1)
+        else:
+            # Legacy/custom adapters retain their return contract, but cannot
+            # certify PCM completion without an explicit, valid result.
+            self.progress.playback_update(incomplete_playbacks=1)
         return result
 
     async def stop(self, *args, **kwargs):

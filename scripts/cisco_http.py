@@ -83,8 +83,14 @@ def perform(payload):
             raise ValueError('invalid_token')
         if api == 'home_assistant' and (path != SCHEDULE_PATH or not isinstance(body, dict)):
             raise ValueError('invalid_ha_request')
-        if api == 'gateway' and not re.fullmatch(r'/v1/phones(?:/2[0-9]{2}/[a-z]+(?:_[a-z]+)*)?', path):
-            raise ValueError('invalid_request_path')
+        if api == 'gateway':
+            playback_status = (isinstance(path, str) and re.fullmatch(
+                r'/v1/phones/2[0-9]{2}/voice_status\?include_playback=1', path))
+            if playback_status:
+                if body is not None:
+                    raise ValueError('invalid_request_body')
+            elif not re.fullmatch(r'/v1/phones(?:/2[0-9]{2}/[a-z]+(?:_[a-z]+)*)?', path):
+                raise ValueError('invalid_request_path')
         if type(timeout) not in (int, float) or not 1 <= timeout <= 60:
             raise ValueError('invalid_timeout')
         if body is not None and not isinstance(body, dict):

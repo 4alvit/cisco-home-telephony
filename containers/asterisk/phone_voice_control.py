@@ -34,6 +34,9 @@ MAX_CONFIG = 256 * 1024
 MAX_REPORT = 16 * 1024
 MAX_SESSION_SECONDS = 300
 MAX_TURNS = 10000
+PLAYBACK_LIMITS = {'playback_requests': 10000, 'tts_offers': 10000,
+                   'empty_playbacks': 10000, 'incomplete_playbacks': 10000,
+                   'completed_pcm_bytes': 64 * 1024 * 1024}
 STOP_GRACE_SECONDS = 45.0
 RUNNER_COMPLETION_MARGIN_SECONDS = 7.0
 UNCERTAIN_CLEANUP_SECONDS = 55.0
@@ -54,6 +57,14 @@ PHASE_REASONS = frozenset(('model_warmup', 'wake_ready', 'new_session', 'turn_co
                           'playback_stop_failed', 'speech_start', 'end_of_speech',
                           'no_speech', 'utterance_limit', 'audio_not_received', 'turn_cancelled',
                           'duplicate_activation', 'call', 'start_failed', 'assistant_error'))
+
+
+def _safe_playback(value):
+    _require(type(value) is dict and set(value) == set(PLAYBACK_LIMITS),
+             'invalid_voice_response', 502)
+    _require(all(type(value[key]) is int and 0 <= value[key] <= maximum
+                 for key, maximum in PLAYBACK_LIMITS.items()), 'invalid_voice_response', 502)
+    return {key: value[key] for key in PLAYBACK_LIMITS}
 
 
 def _safe_status(value):
@@ -97,6 +108,8 @@ def _safe_status(value):
         _require(type(duration) in (int, float) and 0 < duration <= MAX_SESSION_SECONDS
                  and math.isfinite(duration), 'invalid_voice_response', 502)
         result['session_seconds'] = duration
+    if 'playback' in value:
+        result['playback'] = _safe_playback(value['playback'])
     return result
 
 
@@ -373,6 +386,7 @@ class _Session:
     phase: str | None = 'preparing'
     phase_reason: str | None = None
     turns_completed: int = 0
+    playback: dict | None = None
 
 
 class VoiceControl:
@@ -562,8 +576,11 @@ class VoiceControl:
             stamp = value.get('updated_at')
             _require(type(stamp) in (int, float) and math.isfinite(stamp) and stamp > 0)
             reason = value.get('reason')
+            playback = _safe_playback(value['playback']) if 'playback' in value else None
             s.phase, s.phase_reason = phase, reason if type(reason) is str and reason in PHASE_REASONS else None
             s.turns_completed = max(s.turns_completed, count)
+            if playback is not None:
+                s.playback = playback
         except (ControlError, ValueError, TypeError, OverflowError, RecursionError):
             # Progress is advisory; a missing update cannot block exact-session Stop.
             pass
@@ -578,7 +595,8 @@ class VoiceControl:
                 'stop_confirmed': s.stop_confirmed, 'error': s.error,
                 'phase': s.phase, 'phase_reason': s.phase_reason,
                 'turns_completed': s.turns_completed, 'mode': s.profile.mode,
-                'session_seconds': s.profile.duration}
+                'session_seconds': s.profile.duration,
+                **({'playback': dict(s.playback)} if s.playback is not None else {})}
 
     @staticmethod
     def _check_profile(p, config, phone, voice):

@@ -562,6 +562,15 @@ def voice_status(value):
             valid = type(item) in (int, float) and 0 < item <= 300 and math.isfinite(item)
         require(valid, 'invalid_voice_response')
         result[field] = item
+    if 'playback' in value:
+        limits = {'playback_requests': 10000, 'tts_offers': 10000,
+                  'empty_playbacks': 10000, 'incomplete_playbacks': 10000,
+                  'completed_pcm_bytes': 64 * 1024 * 1024}
+        playback = value['playback']
+        require(type(playback) is dict and set(playback) == set(limits), 'invalid_voice_response')
+        require(all(type(playback[key]) is int and 0 <= playback[key] <= maximum
+                    for key, maximum in limits.items()), 'invalid_voice_response')
+        result['playback'] = {key: playback[key] for key in limits}
     return result
 
 
@@ -589,8 +598,18 @@ def voice_command(args, config, *, on_dispatch=None):
     read_only = operation == 'status' or operation == 'stop' and args.dry_run
     if read_only:
         if response is None:
-            response = client.request(path + 'status')
+            query = '?include_playback=1' if getattr(args, 'playback', False) else ''
+            try:
+                response = client.request(path + 'status' + query)
+            except Refused as exc:
+                if (query and exc.http_status == 404
+                        and exc.reason in ('not_found', 'gateway_http_error')):
+                    raise Refused('playback_metadata_unavailable', http_status=404) from None
+                raise
         require(isinstance(response, dict) and response.get('status') == 'ok', 'invalid_voice_response')
+        if getattr(args, 'playback', False):
+            require(isinstance(response.get('voice'), dict), 'invalid_voice_response')
+            require('playback' in response['voice'], 'playback_metadata_unavailable')
     else:
         key = args.idempotency_key
         if operation == 'stop' and key is None:
@@ -680,6 +699,14 @@ def display_voice(result, args):
         print('Session limit: ' + str(value['session_seconds']) + ' seconds')
     if 'turns_completed' in value:
         print('Turns completed: ' + str(value['turns_completed']))
+    if 'playback' in value:
+        for key, label in (('playback_requests', 'Replies reaching playback'),
+                           ('tts_offers', 'Replies offering TTS'),
+                           ('empty_playbacks', 'Playbacks with no PCM'),
+                           ('incomplete_playbacks', 'Incomplete or unverified playbacks'),
+                           ('completed_pcm_bytes', 'PCM bytes in completed playbacks')):
+            print(label + ': ' + str(value['playback'][key]))
+        print('PCM completion does not confirm audibility; incomplete playback may be partial.')
     print('Stop requested: ' + str(value['stop_requested']))
     print('Stop confirmed: ' + str(value['stop_confirmed']))
     for field, label in (('error', 'Reason'), ('phase_reason', 'Phase reason')):
@@ -780,7 +807,8 @@ def parser():
     alarm.add_argument('--replace', action='store_true', help='explicitly replace an alarm owned by the sibling line')
     voice_sub = sub.add_parser('voice', help='Bounded attended voice controls').add_subparsers(
         dest='voice_action', required=True)
-    voice_sub.add_parser('status', help='Read voice ownership without an AMI inventory request')
+    voice_sub.add_parser('status', help='Read voice ownership without an AMI inventory request').add_argument(
+        '--playback', action='store_true', help='Request optional private PCM completion counters')
     voice_start = voice_sub.add_parser('start', help='Requires --idempotency-key and all explicit microphone gates')
     for flag in ('attended', 'exclusive-media', 'enable-microphone'):
         voice_start.add_argument('--' + flag, action='store_true')
