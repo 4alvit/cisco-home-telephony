@@ -115,6 +115,31 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['error'], 'voice_session_failed')
         self.assertNotIn('synthetic', str(result))
 
+    async def test_idle_report_counts_wire_silence_without_a_completed_reply(self):
+        self.reader = asyncio.StreamReader()
+        self.reader.feed_data(packet(1, TOKEN.bytes))
+
+        async def end_after_idle():
+            async with asyncio.timeout(1):
+                while not self.writer.data:
+                    await asyncio.sleep(.001)
+            self.reader.feed_data(packet(3, b'#'))
+
+        with patch.object(runner, 'LeaseWitness', return_value=SimpleNamespace(verify=lambda: None)), \
+             patch.object(runner, 'SessionProgress', return_value=self.progress), \
+             patch.object(runner, 'AmiPort', Port), \
+             patch.object(runner, 'build_service', return_value=self.assistant), \
+             patch.object(runner.asyncio, 'start_server', side_effect=self.serve), \
+             patch.object(runner.transport, '_gateway_module', return_value=None):
+            result, _ = await asyncio.gather(
+                runner.run(self.args, self.config, {}, {'id': '201'}, {}), end_after_idle())
+        self.assertEqual(result['result']['reason'], 'dtmf_stop')
+        self.assertGreater(result['silence_frames'], 0)
+        self.assertEqual(result['output_frames'], result['silence_frames'])
+        self.assertEqual(result['turns_completed'], 0)
+        self.assertEqual(result['input_frames'], 0)
+        self.assertEqual(self.writer.data, [packet(0x12, bytes(640))] * result['silence_frames'])
+
     async def failure_report(self, *, env=None, build_failure=True, close_failure=False,
                              port_type=Port, gateway=None, bind_failure=False):
         build = mock.Mock(side_effect=RuntimeError('synthetic')) if build_failure else mock.Mock(return_value=self.assistant)

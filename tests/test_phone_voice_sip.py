@@ -312,7 +312,13 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.reservation_may_release)
         self.assertEqual(service.status('demo').state, 'stopped')
         self.assertIsNone(service._owner)
-        self.assertEqual(writer.data, [packet(0x12, FRAME)] * 2)
+        # This fixture's TTS is nonzero, so distinguish only exact idle frames
+        # without weakening either reply's byte-for-byte assertion.
+        silence = packet(0x12, bytes(640))
+        self.assertEqual([frame for frame in writer.data if frame != silence],
+                         [packet(0x12, FRAME)] * 2)
+        self.assertEqual(writer.data.count(silence), session.sink.silence_frames)
+        self.assertEqual(wire.frames_sent, 2 + session.sink.silence_frames)
         await service.close()
 
 
