@@ -18,6 +18,7 @@ from typing import Protocol
 from uuid import UUID
 
 FRAME_BYTES = 640
+SILENCE_PCM = bytes(FRAME_BYTES)
 MAX_SECONDS = 300
 MAX_PAYLOAD = FRAME_BYTES * 10
 
@@ -181,6 +182,8 @@ class Sink:
         self.generation = 0
         self.next_frame = 0.0
         self.lock = asyncio.Lock()
+        self.pending_tts = 0
+        self.silence_frames = 0
 
     async def write_pcm(self, phone, data, sample_rate):
         if (phone != self.grant.phone or type(data) is not bytes or len(data) % 2 or
@@ -191,25 +194,44 @@ class Sink:
         if not data:
             return
         generation = self.generation
-        async with self.lock:
-            if generation != self.generation:
-                raise asyncio.CancelledError
-            samples = struct.unpack('<' + 'h' * (len(data) // 2), data)
-            count = min(320, math.ceil(len(samples) * 16000 / sample_rate))
-            resampled = []
-            for index in range(count):
-                pos = index * sample_rate / 16000
-                low = min(int(pos), len(samples) - 1)
-                high = min(low + 1, len(samples) - 1)
-                resampled.append(round(samples[low] + (samples[high] - samples[low]) * (pos - low)))
-            pcm = struct.pack('<' + 'h' * count, *resampled).ljust(FRAME_BYTES, b'\0')
-            self.guard()
-            await asyncio.sleep(max(0, self.next_frame - self.clock()))
-            if generation != self.generation:
-                raise asyncio.CancelledError
-            self.guard()
-            await self.wire.write_pcm(pcm)
-            self.next_frame = self.clock() + .02
+        self.pending_tts += 1
+        try:
+            async with self.lock:
+                if generation != self.generation:
+                    raise asyncio.CancelledError
+                samples = struct.unpack('<' + 'h' * (len(data) // 2), data)
+                count = min(320, math.ceil(len(samples) * 16000 / sample_rate))
+                resampled = []
+                for index in range(count):
+                    pos = index * sample_rate / 16000
+                    low = min(int(pos), len(samples) - 1)
+                    high = min(low + 1, len(samples) - 1)
+                    resampled.append(round(samples[low] + (samples[high] - samples[low]) * (pos - low)))
+                pcm = struct.pack('<' + 'h' * count, *resampled).ljust(FRAME_BYTES, b'\0')
+                self.guard()
+                await asyncio.sleep(max(0, self.next_frame - self.clock()))
+                if generation != self.generation:
+                    raise asyncio.CancelledError
+                self.guard()
+                await self.wire.write_pcm(pcm)
+                self.next_frame = self.clock() + .02
+        finally:
+            self.pending_tts -= 1
+
+    async def pump_silence(self):
+        """Send one paced idle frame only when no TTS write is waiting."""
+        while True:
+            await asyncio.sleep(max(.02 if self.pending_tts else 0,
+                                    self.next_frame - self.clock()))
+            async with self.lock:
+                # Recheck after acquiring the shared writer. A sequential TTS
+                # caller registers its next frame before yielding this task.
+                if self.pending_tts or self.clock() < self.next_frame:
+                    continue
+                self.guard()
+                await self.wire.write_pcm(SILENCE_PCM)
+                self.silence_frames += 1
+                self.next_frame = self.clock() + .02
 
     async def stop(self, phone):
         if phone != self.grant.phone:
@@ -259,7 +281,7 @@ class Session:
         if self.started:
             raise ValueError('single_use_session')
         self.started = True
-        task = None
+        task = pump = None
         frames, reason, confirmed = 0, 'start_failed', False
         cleanup_errors = []
         cancelled = False
@@ -273,6 +295,7 @@ class Session:
             await asyncio.wait_for(self.wire.admit(), min(3, self.grant.deadline - self.clock()))
             self.guard()
             stream = await assistant.listen(self.grant.phone)
+            pump = asyncio.create_task(self.sink.pump_silence())
             last_audio = self.clock()
             while True:
                 self.guard()
@@ -281,9 +304,14 @@ class Session:
                     raise BoundaryError('assistant_stopped')
                 if task is None:
                     task = asyncio.create_task(self.wire.read_pcm())
-                done, _ = await asyncio.wait((task,), timeout=.05)
+                done, _ = await asyncio.wait((task, pump), timeout=.05,
+                                             return_when=asyncio.FIRST_COMPLETED)
                 self.guard()
-                if done:
+                if pump.done():
+                    if not pump.cancelled():
+                        pump.result()
+                    raise BoundaryError('silence_sender_stopped')
+                if task in done:
                     pcm, task = task.result(), None
                     last_audio = self.clock()
                     assistant.feed_pcm(self.grant.phone, stream, pcm)
@@ -303,9 +331,10 @@ class Session:
 
             async def cleanup():
                 nonlocal confirmed
-                if task is not None:
-                    task.cancel()
-                    await asyncio.gather(task, return_exceptions=True)
+                workers = [worker for worker in (task, pump) if worker is not None]
+                for worker in workers:
+                    worker.cancel()
+                await asyncio.gather(*workers, return_exceptions=True)
                 for label, action in (
                     ('wire_close_failed', self.wire.close),
                     ('assistant_stop_failed', lambda: assistant.stop(self.grant.phone, reason=reason))):

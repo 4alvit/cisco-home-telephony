@@ -185,7 +185,11 @@ class LoopbackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(report['cleanup_errors'], [])
         self.assertTrue(report['pbx_call_absent'])
         self.assertTrue(self.assistant.close_completed)
-        self.assertEqual(await asyncio.wait_for(reader.read(), 1), b'')
+        # Read through EOF, accounting only for the admitted idle PCM sender.
+        self.assertEqual(await asyncio.wait_for(reader.read(), 1),
+                         packet(0x12, bytes(640)) * report['silence_frames'])
+        self.assertEqual(report['output_frames'], report['silence_frames'])
+        self.assertEqual(report['turns_completed'], 0)
 
     async def test_paused_reader_with_106496_bytes_and_peer_eof_cleans_start_failure(self):
         self.port.release.clear()

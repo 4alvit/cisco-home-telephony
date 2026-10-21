@@ -209,6 +209,8 @@ async def run(args, config, private, phone, voice):
                       turns_completed=progress.turns_completed,
                       input_frames=wire.frames_received if wire else 0,
                       output_frames=wire.frames_sent if wire else 0)
+        if session is not None:
+            report['silence_frames'] = session.sink.silence_frames
         reason = (report['result'] or {}).get('reason')
         public_reason = {'call_changed': 'call', 'peer_ended': 'transport_stopped',
                          'dtmf_stop': 'explicit_stop'}.get(reason, reason)
