@@ -26,7 +26,10 @@ write passwords or call recordings into shared logs.
 This baseline PBX is **stateless**: `AstDB`, spool and file logs live in
 `emptyDir` volumes and disappear when the Pod is recreated. Voicemail,
 recordings, persistent CDR and retained AstDB state are not enabled. Phones
-restore registrations after a restart. Adding voicemail/recording requires a
+re-register after a PBX restart. A handset reboot or PoE power cycle also depends
+on its boot configuration: prepare a working, source-restricted TFTP window
+before restarting a phone. See [daily boot and TFTP](daily-phone-boot.md).
+Adding voicemail/recording requires a
 separate PVC, retention policy, encryption and a recovery test; the current
 backup does not back up a persistent volume that does not exist.
 
@@ -183,8 +186,10 @@ Disabling SIP ALG on an edge router makes sense if that router is actually in
 the SIP path; do not alter unrelated firewall settings by trial and error.
 
 **Contacts disappear after a restart:** devices must register again. Test a
-cold boot after closing TFTP: a particular firmware load may need its TFTP
-configuration again. Open a new narrow window for that boot if required.
+cold boot with a prepared recovery window: a particular firmware load may need
+its TFTP configuration again. A phone that worked before power loss is not proof
+that it can boot with TFTP closed. Use the [daily boot runbook](daily-phone-boot.md)
+before another restart; do not repeatedly cycle PoE while the server is absent.
 
 Limit diagnostic packet capture to a short window: SIP and TFTP can contain
 credentials, phone numbers and audio. Keep pcap files private and delete them
@@ -203,8 +208,10 @@ Then remove the maintenance allowances for **UDP 69 and UDP 20000–20031** from
 the host firewall, including any persistent rules that would restore them on
 reboot. Preserve SIP/RTP and the separately restricted AMI rules. Verify that
 no TFTP server remains and that the firewall has returned to its closed state.
-Neither Job expiry nor TTL cleanup performs this firewall step. If the phone
-needs TFTP on a later cold boot, open a new reviewed window.
+Neither Job expiry nor TTL cleanup performs this firewall step. Before a later
+handset reboot, prepare a new reviewed window unless autonomous boot has been
+verified for that exact phone/load. The [daily boot design](daily-phone-boot.md)
+describes a proposed profile-only service; it is not installed by these commands.
 
 ## Stopping and removal
 

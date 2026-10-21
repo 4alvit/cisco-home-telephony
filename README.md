@@ -158,6 +158,11 @@ SR4-3 copy, byte-level checks, extraction steps and provenance limitations.
 6. [Add further phones in a controlled batch](docs/adding-phones.md) —
    [Cisco fleet and Mac architecture](docs/diagrams/fleet-and-mac.svg).
 
+Before a handset reboot or PoE power cycle, follow the
+[daily boot and TFTP runbook](docs/daily-phone-boot.md). The current maintenance
+server expires after one hour; working calls before a restart do not prove that
+the phone can reload its configuration while TFTP is closed.
+
 Before physical inventory is complete, [bootstrap the PBX and AMI](docs/pbx-bootstrap.md)
 with `provision.py --pbx-only`. This does not create placeholder phones, Cisco XML
 or TFTP configuration.

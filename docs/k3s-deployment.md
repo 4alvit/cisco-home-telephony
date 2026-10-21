@@ -355,9 +355,13 @@ kubectl --context home-k3s -n telephony delete job cisco-tftp --ignore-not-found
 
 A 7945G may request TFTP configuration again at its next reboot. Closing TFTP
 prevents updates; it does not guarantee autonomous boot with every firmware
-version. Test a cold boot of one phone after closing the window. If the selected
-load needs TFTP at boot, open a restricted reboot window. Permanent TFTP requires
-a separate deliberate decision and LAN protection.
+version. Prepare a restricted recovery window before testing a cold boot of one
+phone with TFTP closed. For ordinary handset or PoE restarts, make the accepted
+profile set available first unless autonomous boot has been verified for the
+exact device/load. See [daily boot and the proposed profile-only TFTP service](daily-phone-boot.md).
+The current scripts still create only the expiring maintenance Job. Removing
+its deadline would leave its firmware directory available indefinitely and is
+not the proposed daily-boot design.
 
 ## Sources
 
