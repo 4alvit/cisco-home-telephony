@@ -122,7 +122,10 @@ lease/renewal completion does.
 
 Shutdown prevents new starts before stopping owned sessions. Enabled intent
 can survive a clean gateway restart, but an unresolved journal fails closed
-and is never erased automatically. A disabled intent and an unconfirmed Stop
+and is never erased automatically. A confirmed phone hangup, DTMF Stop or
+ambiguous call ending disables intent even if gateway shutdown was requested
+at the same time; restarting the service must not undo that stop.
+A disabled intent and an unconfirmed Stop
 must be shown together; neither an empty channel list nor process exit proves
 physical microphone closure.
 
