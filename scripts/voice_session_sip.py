@@ -63,6 +63,28 @@ async def run(args, config, private, phone, voice):
     report = {'transport': 'sip_audiosocket', 'session_id': token.hex,
               'recorded_audio': False, 'error': None, 'result': None,
               'cleanup_errors': [], 'turns_completed': 0}
+    stop_waiter = None
+    cancelled = False
+    signal_handlers = []
+
+    def cleanup_error(reason):
+        if reason not in report['cleanup_errors']:
+            report['cleanup_errors'].append(reason)
+
+    def abort_connection(writer):
+        try:
+            writer.transport.abort()
+        except Exception:
+            cleanup_error('connection_abort_failed')
+
+    def close_connection(writer, *, abort=False):
+        try:
+            writer.close()
+        except Exception:
+            cleanup_error('connection_close_failed')
+            abort = True
+        if abort:
+            abort_connection(writer)
 
     def stop():
         stopped.set()
@@ -82,14 +104,17 @@ async def run(args, config, private, phone, voice):
         # No task is spawned, and a second peer never replaces the first one.
         if (accepted.done() or stopped.is_set() or
                 writer.get_extra_info('peername', (None,))[0] != '127.0.0.1'):
-            writer.close()
+            # These transports belong to this listener but never to the media
+            # session. Abort promptly rather than retain an unbounded peer list.
+            close_connection(writer, abort=True)
             return
         connections.append(writer)
         accepted.set_result((reader, writer))
 
-    for number in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(number, stop)
     try:
+        for number in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(number, stop)
+            signal_handlers.append(number)
         # ONNX construction happens before ringing or listening sockets.
         service = build_service(voice, Path(args.workspace).resolve(), sink,
                                 on_event=event, compressed_decoder=FFmpegDecoder(args.ffmpeg, max_seconds=30))
@@ -102,9 +127,18 @@ async def run(args, config, private, phone, voice):
         grant = await port.start()
         if stopped.is_set():
             raise RuntimeError('stopped_during_start')
-        reader, writer = await asyncio.wait_for(accepted, min(3, grant.deadline - time.monotonic()))
+        stop_waiter = asyncio.create_task(stopped.wait())
+        done, _ = await asyncio.wait((accepted, stop_waiter),
+            timeout=max(0, min(3, grant.deadline - time.monotonic())),
+            return_when=asyncio.FIRST_COMPLETED)
+        if stopped.is_set():
+            raise RuntimeError('stopped_before_session')
+        if accepted not in done:
+            raise TimeoutError('accept_timeout')
+        reader, writer = accepted.result()
         server.close()
-        await server.wait_closed()
+        # wait_closed can wait for this accepted transport too. Consume it
+        # before waiting for server closure, otherwise both sides can deadlock.
         wire = Wire(reader, writer, token)
         session = Session(wire, grant, port)
         sink.target = session.sink
@@ -113,27 +147,60 @@ async def run(args, config, private, phone, voice):
         if report['result']['reason'] not in ('explicit_stop', 'lease_expired', 'shutdown',
                                              'dtmf_stop', 'peer_ended', 'call_changed'):
             report['error'] = 'voice_session_failed'
+    except asyncio.CancelledError:
+        cancelled = True
     except Exception:
         report['error'] = 'voice_session_failed'
     finally:
         stop()
-        if server is not None:
-            server.close()
-            await server.wait_closed()
-        for writer in connections:
-            writer.close()
-        try:
-            if service is not None:
-                await service.close()
-        except Exception:
-            report['cleanup_errors'].append('assistant_cleanup_failed')
-        # Session.run already performs this exact cleanup. If setup failed,
-        # reconcile this operation's root/phone identities here instead.
-        if report['result'] is None:
+
+        async def cleanup():
+            if not accepted.done():
+                accepted.cancel()
+            if stop_waiter is not None:
+                stop_waiter.cancel()
+            if server is not None:
+                try:
+                    server.close()
+                except Exception:
+                    cleanup_error('listener_cleanup_failed')
+            for writer in connections:
+                close_connection(writer)
+            if stop_waiter is not None:
+                await asyncio.gather(stop_waiter, return_exceptions=True)
+            for writer in connections:
+                try:
+                    await asyncio.wait_for(writer.wait_closed(), .5)
+                except (Exception, asyncio.CancelledError):
+                    cleanup_error('connection_cleanup_failed')
+                    abort_connection(writer)
+            if server is not None:
+                try:
+                    await asyncio.wait_for(server.wait_closed(), .5)
+                except (Exception, asyncio.CancelledError):
+                    cleanup_error('listener_cleanup_failed')
+                    for writer in connections:
+                        abort_connection(writer)
             try:
-                await port.hangup_and_confirm()
-            except Exception:
-                report['cleanup_errors'].append('pbx_cleanup_failed')
+                if service is not None:
+                    await asyncio.wait_for(service.close(), 2)
+            except (Exception, asyncio.CancelledError):
+                cleanup_error('assistant_cleanup_failed')
+            # Session.run already performs this exact cleanup. If setup failed,
+            # reconcile this operation's root/phone identities here instead.
+            if report['result'] is None:
+                try:
+                    await asyncio.wait_for(port.hangup_and_confirm(), 5)
+                except (Exception, asyncio.CancelledError):
+                    cleanup_error('pbx_cleanup_failed')
+
+        cleanup_task = asyncio.create_task(cleanup())
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                cancelled = True
+        cleanup_task.result()
         report.update(originate_attempted=port.originate_attempted,
                       speaker_attempted=port.speaker_attempted,
                       pbx_deadline_armed=port.deadline_armed,
@@ -145,13 +212,17 @@ async def run(args, config, private, phone, voice):
         reason = (report['result'] or {}).get('reason')
         public_reason = {'call_changed': 'call', 'peer_ended': 'transport_stopped',
                          'dtmf_stop': 'explicit_stop'}.get(reason, reason)
+        if cancelled:
+            public_reason = 'shutdown'
         failed = bool(report['error'] or report['cleanup_errors'] or not port.absence_confirmed)
         try:
             progress.publish('error' if failed else 'stopped', public_reason)
         except Exception:
             report['cleanup_errors'].append('status_cleanup_failed')
-        for number in (signal.SIGINT, signal.SIGTERM):
+        for number in signal_handlers:
             loop.remove_signal_handler(number)
+    if cancelled:
+        raise asyncio.CancelledError
     if (identity is not None and report['error'] == 'voice_session_failed'
             and report['result'] is None and report['cleanup_errors'] == []
             and not connections and wire is None and report['pbx_call_absent'] is True
