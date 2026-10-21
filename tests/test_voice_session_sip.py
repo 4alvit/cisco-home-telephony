@@ -171,7 +171,12 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['pbx_call_absent'])
         self.assertEqual(result['cleanup_errors'], [])
         self.assertIsNone(result['result'])
-        self.assertEqual(result, no_sip_report(TOKEN.hex, 'a' * 64))
+        expected = no_sip_report(TOKEN.hex, 'a' * 64)
+        expected['startup_diagnostic'] = {
+            'version': 1, 'reason': 'other', 'error_type': 'RuntimeError',
+            'stage': 'service_build', 'ami_stage': 'not_started',
+            'ami_action': 'other', 'ami_error': 'other'}
+        self.assertEqual(result, expected)
 
     async def test_missing_malformed_or_other_session_identity_never_emits_proof(self):
         cases = [{}, dict(self.identity(), CISCO_VOICE_SESSION_ID='0' * 32),

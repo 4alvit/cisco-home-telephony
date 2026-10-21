@@ -32,6 +32,7 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 MAX_CONFIG = 256 * 1024
 MAX_REPORT = 16 * 1024
+MAX_FAILURE_RECEIPT = 4096
 MAX_SESSION_SECONDS = 300
 MAX_TURNS = 10000
 PLAYBACK_LIMITS = {'playback_requests': 10000, 'tts_offers': 10000,
@@ -65,6 +66,52 @@ SIP_COMPLETION_REASONS = SIP_CLEAN_REASONS | frozenset((
     'wire_not_ready', 'start_failed', 'admission_unverified', 'assistant_stopped',
     'silence_sender_stopped', 'receive_idle_timeout', 'session_failed',
     'observation_unavailable', 'stale_observation', 'voice_session_failed'))
+
+# Diagnostic vocabulary is independent of the cleanup proof and public status.
+# Never retain exception text, arbitrary AMI messages, or launch credentials.
+STARTUP_DIAGNOSTIC_REASONS = frozenset((
+    'lease_identity_changed', 'lease_not_held', 'lease_journal_invalid',
+    'lease_journal_changed', 'explicit_stop', 'lease_expired', 'snapshot_stale',
+    'pbx_proof_unavailable', 'call_identity_changed', 'call_admission_mismatch',
+    'pbx_deadline_unverified', 'phone_not_idle', 'do_not_disturb_or_unknown',
+    'call_changed', 'call_setup_timeout', 'single_use_call', 'ami_action_rejected',
+    'stopped_before_start', 'stopped_during_start', 'stopped_before_session',
+    'accept_timeout', 'ami_timeout', 'bad_ami_banner', 'invalid_ami_header',
+    'invalid_ami_response', 'phone_redirect_refused', 'invalid_phone_response',
+    'phone_rejected_action', 'phone_did_not_confirm_action', 'other'))
+STARTUP_DIAGNOSTIC_ERROR_TYPES = frozenset((
+    'BoundaryError', 'Refused', 'TimeoutError', 'OSError', 'RuntimeError', 'other'))
+STARTUP_DIAGNOSTIC_STAGES = frozenset((
+    'inputs_or_initialization', 'service_build', 'authorize_phone', 'listener_bind',
+    'sip_start', 'peer_accept', 'wire_session', 'runner_unhandled', 'other'))
+STARTUP_DIAGNOSTIC_AMI_STAGES = frozenset((
+    'not_started', 'guard', 'login', 'idle_snapshot', 'dnd', 'originate',
+    'setup_snapshot', 'verify_identity', 'verify_session', 'verify_deadline',
+    'speaker_snapshot', 'speaker', 'grant', 'complete', 'other'))
+STARTUP_DIAGNOSTIC_AMI_ACTIONS = frozenset((
+    'Login', 'PJSIPShowEndpoints', 'CoreShowChannels', 'DBGet', 'Originate',
+    'Getvar', 'Hangup', 'other'))
+STARTUP_DIAGNOSTIC_AMI_ERRORS = frozenset((
+    'authentication_failed', 'login_in_use', 'permission_denied', 'no_such_channel',
+    'no_endpoints', 'endpoints_unavailable', 'unknown_action', 'other'))
+_STARTUP_DIAGNOSTIC_FIELDS = {
+    'reason': STARTUP_DIAGNOSTIC_REASONS, 'error_type': STARTUP_DIAGNOSTIC_ERROR_TYPES,
+    'stage': STARTUP_DIAGNOSTIC_STAGES, 'ami_stage': STARTUP_DIAGNOSTIC_AMI_STAGES,
+    'ami_action': STARTUP_DIAGNOSTIC_AMI_ACTIONS, 'ami_error': STARTUP_DIAGNOSTIC_AMI_ERRORS,
+}
+_DIAGNOSTIC_CLEANUP_ERRORS = frozenset((
+    'connection_abort_failed', 'connection_close_failed', 'listener_cleanup_failed',
+    'connection_cleanup_failed', 'assistant_cleanup_failed', 'pbx_cleanup_failed',
+    'status_cleanup_failed', 'wire_close_failed', 'assistant_stop_failed', 'other'))
+_DIAGNOSTIC_RESULT_REASONS = SIP_COMPLETION_REASONS | frozenset(('unknown', 'disconnected'))
+
+
+def valid_startup_diagnostic(value):
+    """Accept only the fixed, non-secret startup diagnostic schema."""
+    return (type(value) is dict and set(value) == {'version', *_STARTUP_DIAGNOSTIC_FIELDS}
+            and type(value['version']) is int and value['version'] == 1
+            and all(type(value[key]) is str and value[key] in allowed
+                    for key, allowed in _STARTUP_DIAGNOSTIC_FIELDS.items()))
 
 
 def _safe_playback(value):
@@ -882,6 +929,8 @@ class VoiceControl:
 
     def _no_sip_proof(self, s, report, raw):
         _require(s.profile.media_transport == 'sip_audiosocket')
+        if 'startup_diagnostic' in report:
+            _require(valid_startup_diagnostic(report['startup_diagnostic']))
         proof = report['cleanup_proof']
         _require(type(proof) is dict and set(proof) == {
             'version', 'kind', 'transport', 'session_id', 'challenge',
@@ -890,7 +939,7 @@ class VoiceControl:
         _require(proof['kind'] == 'safe_no_sip_originate'
                  and proof['transport'] == 'sip_audiosocket'
                  and proof['originate_attempted'] is False)
-        _require(set(report) == {
+        _require(set(report) - {'startup_diagnostic'} == {
             'transport', 'session_id', 'recorded_audio', 'error', 'result', 'cleanup_errors',
             'turns_completed', 'originate_attempted', 'speaker_attempted', 'pbx_deadline_armed',
             'pbx_call_absent', 'safe_no_media_started', 'input_frames', 'output_frames', 'cleanup_proof'}
@@ -904,6 +953,105 @@ class VoiceControl:
                  and all(type(report[key]) is int and report[key] == 0
                          for key in ('turns_completed', 'input_frames', 'output_frames')))
         return True
+
+    def _save_failure(self, s, raw, report, *, cleanup_evidence_verified):
+        """Best-effort, bounded diagnostic evidence; never a recovery authority."""
+        if s.state not in ('failed', 'recovery_required'):
+            return
+        temporary = None
+        try:
+            # Refuse stale sessions, foreign journals and changed private paths.
+            # This runs before the terminal journal write or lease release.
+            self._proof_owner(s)
+            self._mkdir()
+            code = s.handle.poll()
+            status = 'unavailable'
+            if type(raw) is bytes:
+                if len(raw) > MAX_REPORT or s.handle.overflow:
+                    status = 'overflow'
+                elif report is None:
+                    status = 'invalid_json'
+                elif type(report) is not dict:
+                    status = 'not_object'
+                else:
+                    try:
+                        self._completed_child(s, raw, (0, 1))
+                        status = ('matched' if report.get('transport') == s.profile.media_transport
+                                  and report.get('session_id') == s.session_id else 'identity_mismatch')
+                    except Exception:
+                        status = 'child_unverified'
+            receipt = {
+                'schema_version': 1, 'session_id': s.session_id, 'phone': s.profile.phone_id,
+                'transport': s.profile.media_transport, 'state': s.state,
+                'error': s.error if s.error in PUBLIC_ERRORS else 'other',
+                'returncode': code if type(code) is int and -255 <= code <= 255 else None,
+                'report_status': status,
+                'report_bytes': min(len(raw), MAX_REPORT + 1) if type(raw) is bytes else None,
+                'report_overflow': s.handle.overflow is True,
+                'stop_requested': s.stop_requested is True, 'killed': s.killed is True,
+                'stop_confirmed': s.stop_confirmed is True,
+                'cleanup_evidence_verified': cleanup_evidence_verified is True,
+            }
+            if status == 'matched':
+                def category(value, allowed):
+                    return value if type(value) is str and value in allowed else 'other'
+
+                def errors(value):
+                    if type(value) is not list:
+                        return None
+                    return sorted({category(item, _DIAGNOSTIC_CLEANUP_ERRORS)
+                                   for item in value[:32]})
+
+                claims = {
+                    'error': None if report.get('error') is None else
+                             category(report['error'], PUBLIC_ERRORS),
+                    'cleanup_errors': errors(report.get('cleanup_errors')),
+                }
+                for key in ('originate_attempted', 'speaker_attempted', 'pbx_deadline_armed',
+                            'pbx_call_absent', 'safe_no_media_started', 'recorded_audio'):
+                    value = report.get(key)
+                    claims[key] = value if type(value) is bool else None
+                for key, limit in (('turns_completed', MAX_TURNS), ('input_frames', 100000000),
+                                   ('output_frames', 100000000), ('silence_frames', 100000000)):
+                    value = report.get(key)
+                    claims[key] = value if type(value) is int and 0 <= value <= limit else None
+                result = report.get('result')
+                claims['result_present'] = type(result) is dict
+                if type(result) is dict:
+                    claims['result_reason'] = category(result.get('reason'), _DIAGNOSTIC_RESULT_REASONS)
+                    value = result.get('stop_confirmed')
+                    claims['result_stop_confirmed'] = value if type(value) is bool else None
+                    claims['result_cleanup_errors'] = errors(result.get('cleanup_errors'))
+                diagnostic = report.get('startup_diagnostic')
+                claims['startup_diagnostic_status'] = (
+                    'absent' if 'startup_diagnostic' not in report else
+                    'valid' if valid_startup_diagnostic(diagnostic) else 'invalid')
+                if valid_startup_diagnostic(diagnostic):
+                    claims['startup_diagnostic'] = dict(diagnostic)
+                receipt['child_claims'] = claims
+            encoded = (json.dumps(receipt, sort_keys=True, separators=(',', ':')) + '\n').encode()
+            _require(len(encoded) <= MAX_FAILURE_RECEIPT)
+            path = self._paths(s.profile)[1].with_suffix('.last-failure.json')
+            fd, temporary = tempfile.mkstemp(prefix='.voice-failure-', dir=path.parent)
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+            directory = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except Exception:
+            # Missing diagnostics must not change the ownership or cleanup decision.
+            pass
+        finally:
+            if temporary is not None:
+                try:
+                    os.unlink(temporary)
+                except OSError:
+                    pass
 
     def _finish(self, s, raw):
         with self._lock:
@@ -943,12 +1091,14 @@ class VoiceControl:
         if s.stop_confirmed and clean or never_started:
             s.state, s.error = ('failed', reason) if reason else ('stopped', None)
             s.phase = 'error' if reason else 'stopped'
+            self._save_failure(s, raw, report, cleanup_evidence_verified=True)
             self._write(s)
             s.cleanup_verified = True
             self._release(s)
         else:
             s.state, s.error = 'recovery_required', 'voice_stop_unconfirmed'
             s.phase = 'error'
+            self._save_failure(s, raw, report, cleanup_evidence_verified=False)
             self._write(s)
             # The durable reservation now blocks every manager, even after
             # this process exits. Keep snapshots for private investigation.

@@ -80,6 +80,7 @@ class AmiPort:
         self.originate_attempted = self.seen_phone = self.deadline_armed = False
         self.speaker_attempted = self.used = False
         self.start_attempted = False
+        self.startup_stage = 'not_started'
         self.absence_confirmed = False
         self._lifecycle_lock = threading.RLock()
         self._start_active = self._sealed = False
@@ -123,13 +124,16 @@ class AmiPort:
         return result[0]['Value']
 
     def _verify_channel(self, ami, item):
+        self.startup_stage = 'verify_identity'
         uid = item.get('Uniqueid', '')
         if (not uid or item not in self._related([item]) or
                 not re.fullmatch(r'PJSIP/' + re.escape(self.line) + r'-[0-9a-f]+', item.get('Channel', ''))):
             raise BoundaryError('call_identity_changed')
+        self.startup_stage = 'verify_session'
         if (self._getvar(ami, 'VOICE_SIP_SESSION', uid) != self.session.hex or
                 self._getvar(ami, 'VOICE_SIP_END', uid) != str(self.expires)):
             raise BoundaryError('call_admission_mismatch')
+        self.startup_stage = 'verify_deadline'
         try:
             observed_at = self.clock()
             seconds = float(self._getvar(ami, 'TIMEOUT(absolute)', uid))
@@ -140,11 +144,15 @@ class AmiPort:
         self.deadline_armed = True
 
     def _start(self):
+        self.startup_stage = 'guard'
         self._guard()
+        self.startup_stage = 'login'
         with self.gateway.AMI(self.private['ami']) as ami:
+            self.startup_stage = 'idle_snapshot'
             endpoints, channels, own = self._snapshot(ami)
             if own or any(endpoints.get(line) != 'Not in use' for line in self.phone['lines']):
                 raise BoundaryError('phone_not_idle')
+            self.startup_stage = 'dnd'
             for line in self.phone['lines']:
                 # DB() through Getvar is an escalating function in Asterisk;
                 # use the existing SYSTEM-authorized read action instead.
@@ -155,9 +163,11 @@ class AmiPort:
                     raise BoundaryError('do_not_disturb_or_unknown')
             # Seal and final dispatch intent are atomic; never hold this lock
             # across the network call. A queued start cannot outlive its proof.
+            self.startup_stage = 'guard'
             with self._lifecycle_lock:
                 self._guard()
                 self.originate_attempted = True  # sticky BEFORE ambiguous network I/O
+            self.startup_stage = 'originate'
             ami.action('Originate', Channel='Local/' + self.line + '@cisco-voice-sip/n',
                 ChannelId=self.root, OtherChannelId=self.root + '-b',
                 Application='Dial', Data=f'AudioSocket/127.0.0.1:{self.port}/{self.session}/c(slin16),3,g',
@@ -165,7 +175,9 @@ class AmiPort:
                 Variable='__VOICE_SIP_SESSION=' + self.session.hex + ',__VOICE_SIP_END=' + str(self.expires))
             setup_end = min(self.deadline, self.clock() + 10)
             while self.clock() < setup_end:
+                self.startup_stage = 'guard'
                 self._guard()
+                self.startup_stage = 'setup_snapshot'
                 _, channels, own = self._snapshot(ami)
                 if len(own) > 1 or any(item not in self._related(channels) for item in own):
                     raise BoundaryError('call_changed')
@@ -180,20 +192,26 @@ class AmiPort:
                         continue
                     self._verify_channel(ami, item)
                     if item.get('ChannelStateDesc') == 'Ringing' and not self.speaker_attempted:
+                        self.startup_stage = 'guard'
                         self._guard()
                         # Re-read after all proof queries before the one key press.
+                        self.startup_stage = 'speaker_snapshot'
                         _, _, fresh = self._snapshot(ami)
                         if len(fresh) != 1 or fresh[0].get('Uniqueid') != item['Uniqueid'] or fresh[0].get('ChannelStateDesc') != 'Ringing':
                             continue
+                        self.startup_stage = 'guard'
                         self._guard()
+                        self.startup_stage = 'speaker'
                         self.speaker_attempted = True
                         self.gateway.execute(self.phone, 'Key:Speaker')
                     elif item.get('ChannelStateDesc') == 'Up':
+                        self.startup_stage = 'grant'
                         grant = Grant(self.session, self.phone['id'],
                                       Channel(item['Channel'], item['Uniqueid'], self.line),
                                       self.created, self.deadline)
                         if focus(grant, self.observation, self.clock()) == 'owned_call':
                             self.grant = grant
+                            self.startup_stage = 'complete'
                             return grant
                 self.stop_event.wait(.1)
         raise BoundaryError('call_setup_timeout')
