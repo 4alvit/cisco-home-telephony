@@ -11,6 +11,41 @@ or acoustic acceptance. Check the installed revision and
 
 ![Start, speak, repeat within the deadline, and confirm Stop](diagrams/voice-operator-flow.svg)
 
+## Start without touching the handset
+
+While you are present with the phone, use the [CLI or Home Assistant](#use-the-cli-or-home-assistant)
+to start its configured session remotely. The controller opens the authorized
+microphone and playback paths; there is no handset menu, Speaker or Answer
+button to press for this path. Across-room speech pickup and reply audibility
+still require a physical check in the intended room.
+
+For repeated wake-phrase requests, the administrator must first select a **wake**
+profile with rearming enabled and a session budget of up to 300 seconds. These
+are private server settings, not options on each CLI Start command. A manual
+profile accepts one request and then ends.
+
+1. Check ordinary phone status with `cisco 201 status` (substitute your line).
+   Confirm it is online with neither line in a call or playing radio, then check
+   `voice status` for existing session ownership.
+2. Send one explicit Start with a fresh request key and all three confirmations.
+3. Read the matching session's status. In wake mode, require `state: running`,
+   `active: true`, `error: null`, `stop_requested: false`,
+   `stop_confirmed: false`, positive `remaining_seconds`, `phase: armed` and
+   `phase_reason: wake_ready` together. An accepted request, running process
+   or stale phase alone does not establish readiness.
+   There is no audible ready cue; read the CLI or Home Assistant response before
+   speaking.
+4. Say the configured wake phrase and question. Wait for playback to finish and
+   readiness to return before the next wake phrase. Watch `remaining_seconds`;
+   replies do not extend the original deadline.
+5. Stop that session remotely and verify it is inactive with Stop confirmed.
+
+This removes the need to touch the phone during a session. It still requires
+a deliberate Start: an inactive phone cannot hear a wake phrase through this
+prototype. Expiry, a call, a failure or a restart does not start another session.
+Do not schedule repeating Start commands to turn the finite session into
+permanent listening.
+
 ## Start at the phone
 
 1. Make sure neither line is in a call or playing radio. Stay at the phone.
@@ -85,6 +120,9 @@ After an uncertain response, [read status before retrying](voice-control.md#if-t
 Home Assistant uses the administrator-only `cisco_phone_control.voice` response
 service, sharing the same owner and Start gates. See its
 [status/start/stop contract](voice-control.md#gateway-and-interface-integration).
+Read voice phase and remaining time from that response. The ordinary Call status
+sensor does not show voice-session readiness; the current integration has no
+dedicated voice phase/remaining-time entities or voice Start button.
 
 ## Speech setup and common problems
 
