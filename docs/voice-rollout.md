@@ -92,11 +92,13 @@ of readiness is not proof that the microphone is off.
 ### Release and acceptance record
 
 The hands-free implementation is pinned to
-[source c8f7e83](https://github.com/4alvit/cisco-home-telephony/commit/c8f7e83ff4c2b443a7ac16b03f24895c9fbc0bec).
+[source db24080](https://github.com/4alvit/cisco-home-telephony/commit/db240801527cbb33d956b9446b5c329962b2ee07).
 The paired Home Assistant component is version **0.6.0b1**,
 [source 692f357](https://github.com/ha-homelab/asterisk-telephony/commit/692f357aa15d9ec1a1bbfd41753ac362cb49da60).
-The integrated application suite ran 1,773 tests with four skips; the companion
-completed all 92 tests on each of Home Assistant 2026.10.0 and 2026.10.2.
+The integrated local application suite ran 1,775 tests with five skips on macOS.
+The Linux-only TCP renewal regression passed separately on Linux, including a
+negative run that reproduced the original failure. The companion completed all
+92 tests on each of Home Assistant 2026.10.0 and 2026.10.2.
 
 The [Beta 12 release record](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.12)
 is the canonical record for the downloadable image, checksums, installed-pilot
