@@ -66,9 +66,13 @@ Persistent auto-answer and other phone preferences are unchanged.
    directory would defeat mutual exclusion. Omit `display_port`. The sample
    control file intentionally starts with `enabled: false`; enable it only when
    the matching image, private PBX context and topology have been verified.
-6. Reuse the existing ONNX voice configuration and its exact selected HA pipeline,
-   originating phone device ID and Baya voice. SIP transport requires ONNX mode.
-   It does not select the HA default pipeline or change the household voice.
+6. Reuse the existing ONNX voice configuration and its explicitly selected HA
+   pipeline, originating phone device ID and configured Baya voice. To match an
+   Echo-style setup, select that same pipeline and voice. SIP transport requires
+   ONNX mode; it does not select the HA default pipeline or change the voice.
+   Local wake detection does not make STT local: the selected pipeline may still
+   use cloud recognition. Enable successful-turn rearming if you want repeated
+   questions within the original session deadline.
 
 Use the existing CLI configuration and commands; the manager remains the owner:
 
@@ -82,6 +86,7 @@ cisco --json 201 voice start --idempotency-key "$voice_start_key" \
   --attended --exclusive-media --enable-microphone
 cisco --json 201 voice status
 cisco --json 201 voice stop --session-id EXACT_SESSION_ID_FROM_START
+cisco --json 201 voice status
 ```
 
 Both validation and live Start require a key. The dry run checks the profile
@@ -97,6 +102,32 @@ Start. Do not invoke `voice_session_sip.py` directly: its live mode additionally
 requires the descriptor inherited from the owning manager. Do not use the old
 standalone `run_reserved.py` wrapper for this transport; its report contract is
 the XML/RTP contract. The gateway path has a separate SIP completion validator.
+
+## Use the session without handset buttons
+
+Wait for the matching session's [wake-ready status](voice-quickstart.md#start-without-touching-the-handset)
+before speaking; an accepted Start or running process alone is not readiness.
+There is no audible ready cue. Say the configured wake phrase and question,
+then wait for playback to finish and readiness to return before asking again.
+Use CLI or Home Assistant status and exact-session Stop; the optional live XML
+assistant display is unavailable in SIP mode. Check that the matching session
+is inactive and Stop is confirmed.
+
+The session lasts at most 300 seconds including setup. Replies do not extend
+it, and an inactive phone cannot hear the wake phrase through this prototype.
+Do not schedule repeated Starts to turn it into always-on listening.
+
+For a status-only playback check after installing the
+[playback diagnostics update](voice-control.md#playback-diagnostics):
+
+```sh
+cisco --json 201 voice status --playback
+```
+
+Positive `completed_pcm_bytes` records completed delivery of nonempty decoded
+PCM to the software sink. It does not prove non-silent or audible sound, the
+actual synthesis backend, or that Baya generated the reply. The diagnostic
+needs the updated gateway and both CLI files; it needs no HA update.
 
 ## Ownership and failure handling
 
@@ -115,8 +146,9 @@ the XML/RTP contract. The gateway path has a separate SIP completion validator.
   not exempt another phone channel from preemption.
 - Stop closes AudioSocket, cancels the assistant and hangs up only this operation's
   verified channels. It sends the exact Uniqueid in AMI's `Channel` field; pinned
-  Asterisk 22.11.0 supports Uniqueid lookup there. A fresh empty result proves
-  cleanup; an AMI success response alone does not.
+  Asterisk 22.11.0 supports Uniqueid lookup there. A fresh empty result is
+  required to confirm the owned PBX channels are gone; an AMI success response
+  alone does not suffice. Physical microphone closure still needs its own check.
 - A never-attempted originate may finish as failed without fabricating a Stop ACK.
   This requires the current owner's complete child report, normal failure exit,
   launch-bound SIP cleanup proof, zero media/turn evidence and a durably written
@@ -161,6 +193,15 @@ do not enable a fleet until the one-phone result is verified.
 
 ## Troubleshooting and rollback
 
+- **Stuck in `preparing` after AudioSocket connects:** an early SIP build waited
+  for server closure while its accepted stream was still open. The
+  [startup lifecycle fix](https://github.com/4alvit/cisco-home-telephony/pull/17)
+  consumes that stream before waiting for listener closure and closes the
+  accepted writer before bounded writer/listener shutdown waits. Real loopback
+  TCP regressions cover startup, Stop and cancellation; they do not establish
+  phone audio. Verify that the installed gateway includes the fix; updating
+  only the CLI is insufficient. If Stop remains unconfirmed, follow recovery
+  rather than clearing the reservation or forcing another Start.
 - `phone_not_idle` or `call_changed`: inspect both handset lines. Never ignore all
   active channels just to make the assistant run.
 - `pbx_deadline_unverified` or `call_admission_mismatch`: the private PBX contexts,

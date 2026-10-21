@@ -6,7 +6,7 @@ This page describes configuration, ownership and recovery.
 ![Finite voice session and explicit Stop](diagrams/voice-operator-flow.svg)
 
 `phone_voice_control.py` manages one attended voice session per physical phone.
-It launches the reviewed [foreground runner](voice-cli-install.md), retains
+It launches the runner selected by the private transport profile, retains
 ownership across separate status and Stop requests, and accepts only private,
 operator-configured profiles. Manual mode handles one request; wake mode can
 return to listening after a successful reply within the same finite session.
@@ -17,6 +17,14 @@ gateway, `cisco LINE voice` command, phone menu and companion Home Assistant
 service share this session owner. Voice remains disabled unless the gateway
 is explicitly started with a private voice registry. Updating client code alone
 does not enable a deployed gateway or start a microphone.
+
+The [foreground runner](voice-cli-install.md), XML/RTP port and display examples,
+and watchdog-specific recovery details on this page describe the stock
+`xml_rtp` transport. For opt-in `sip_audiosocket`, follow the
+[SIP speakerphone setup and cleanup guide](sip-voice-contingency.md): use the
+same gateway owner, an ONNX wake profile and no `display_port`. Start and Stop
+can be remote; no handset button is required. The shared status and exact-session
+control API below still applies, and physical qualification remains separate.
 
 ## Prepare an explicit private registry
 
@@ -127,7 +135,7 @@ or delete active state to work around an ownership refusal.
 A Start request must explicitly confirm all three conditions:
 
 - An attendant is physically present at the selected phone.
-- The phone's XML media path is reserved for this session.
+- The phone's media path is reserved for this session.
 - Microphone capture is authorized for this bounded attempt.
 
 The controller does not infer these confirmations from a previous request,
@@ -246,7 +254,7 @@ speech recognition succeeded. Updated runners report their current phase while
 the session is active; process `state: "running"` alone is not readiness. Wait
 for the reported preparation/warmup to finish before speaking. In wake mode,
 wait for the explicit wake-ready phase/reason, then say the configured phrase
-and request. Manual mode requires no wake phrase. The optional
+and request. Manual mode requires no wake phrase. For XML/RTP profiles, the optional
 [phone display](voice-display.md) shows the session progress; physical capture,
 audible output and microphone closure still require their own acceptance.
 
@@ -278,6 +286,8 @@ frame delivery and drain. A frame already sent cannot be recalled, but later
 frames from that reply must not resume after Stop or certify a completed turn.
 A new playback request remains possible after the stopped request has ended.
 
+### Playback diagnostics
+
 Optional playback diagnostics use the same authenticated status endpoint:
 
 ```bash
@@ -296,19 +306,24 @@ This requests `GET /v1/phones/201/voice_status?include_playback=1`. The optional
 - `completed_pcm_bytes`: source PCM bytes in fully completed playbacks only.
   These are not SIP packet counts, a silence measurement or proof of audibility.
 
-During an in-progress playback, completion counters remain unchanged. A TTS
-offer or completed PCM does not identify the actual synthesis backend, prove
-that Baya ran rather than cached audio being returned, or verify the speaker.
+The counters accumulate within one session; a positive total can belong to an
+earlier reply. During an in-progress playback, completion counters remain
+unchanged. A TTS offer or completed PCM does not identify the actual synthesis
+backend, prove that Baya ran rather than cached audio being returned, or verify
+the speaker.
 The existing provider preflight and separate listening acceptance still apply.
 
 Default status, Start and Stop responses omit this object to preserve the
 installed Home Assistant companion's strict schema. The diagnostics require
-the updated gateway and CLI, including its HTTP worker; HA needs no update.
+the updated gateway and both CLI files, `scripts/cisco.py` and
+`scripts/cisco_http.py`; HA needs no update.
 An older server or a session without these counters reports
 `playback_metadata_unavailable` rather than inventing zeros or retrying a
 mutation. The query is accepted only on GET status, with no body, no duplicate
 parameters and the exact value shown above. Old status/progress documents
 without the optional object remain valid.
+
+### Session state and rearming
 
 In wake mode, successful rearming stays inside the original session ID and
 deadline. Say the wake phrase again when ready for the next request. Stop,

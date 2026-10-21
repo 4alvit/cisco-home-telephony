@@ -19,6 +19,11 @@ microphone and playback paths; there is no handset menu, Speaker or Answer
 button to press for this path. Across-room speech pickup and reply audibility
 still require a physical check in the intended room.
 
+The opt-in [SIP speakerphone transport](sip-voice-contingency.md) uses an ordinary
+bounded call and requires an ONNX wake profile. It has no optional live XML
+assistant display; use CLI or Home Assistant status, or the gateway's phone menu.
+Its setup and physical qualification requirements still apply.
+
 For repeated wake-phrase requests, the administrator must first select a **wake**
 profile with rearming enabled and a session budget of up to 300 seconds. These
 are private server settings, not options on each CLI Start command. A manual
@@ -47,6 +52,8 @@ Do not schedule repeating Start commands to turn the finite session into
 permanent listening.
 
 ## Start at the phone
+
+This menu is an alternative interface, not a prerequisite for remote Start.
 
 1. Make sure neither line is in a call or playing radio. Stay at the phone.
 2. Press **Services**. If a service list appears, choose **Home Apps**. In
@@ -79,10 +86,14 @@ someone heard it. Stop, call preemption, failure and expiry do not restart liste
 
 ## Stop and verify
 
-Press **Stop** on the live assistant screen. For a gateway-owned session you
-can also return to **Home Phone Apps → Voice Assistant** and stop the session
-shown there. Refresh and check its matching ID, **inactive** state and
-**Stop confirmed: Yes**.
+For a gateway-owned session, use the [CLI or Home Assistant](#use-the-cli-or-home-assistant)
+to stop the exact session remotely; no handset button is required. Read status
+again and check the matching ID, **inactive** state and **Stop confirmed: Yes**.
+
+The phone menu is an optional alternative: return to **Home Phone Apps → Voice
+Assistant** and stop the session shown there. Profiles using the optional XML
+assistant display can also use its **Stop** button. SIP transport does not
+enable that live display.
 
 A request acknowledgement, stale Stopped screen or closed menu is not proof of
 microphone closure. If cleanup is unconfirmed or `recovery_required` appears,
@@ -104,17 +115,17 @@ cisco 201 voice status
 cisco 201 voice start --idempotency-key voice-example-001 \
   --attended --exclusive-media --enable-microphone
 cisco 201 voice status
-cisco 201 voice stop
+cisco 201 voice stop --session-id EXACT_SESSION_ID_FROM_START
 cisco 201 voice status
 ```
 
 Start requires all three stated conditions. Add `--dry-run` to validate without
 launching media; that still contacts the gateway and does not prove readiness.
 
-With no ID, `voice stop` reads the current gateway-owned session and stops
-**that exact ID**, never a wildcard or replacement session. To target a recorded
-session, use `voice stop --session-id YOUR_RECORDED_SESSION_ID`. Action/request
-IDs and session IDs are different. Exiting `cisco` does not stop its remote session.
+Replace `EXACT_SESSION_ID_FROM_START` with the returned session ID. Action/request
+keys and session IDs are different. If you omit `--session-id`, `voice stop` reads
+the current gateway-owned session and stops **that exact ID**, never a wildcard
+or replacement session. Exiting `cisco` does not stop its remote session.
 After an uncertain response, [read status before retrying](voice-control.md#if-the-cli-loses-a-start-or-stop-acknowledgement).
 
 Home Assistant uses the administrator-only `cisco_phone_control.voice` response
@@ -124,23 +135,45 @@ Read voice phase and remaining time from that response. The ordinary Call status
 sensor does not show voice-session readiness; the current integration has no
 dedicated voice phase/remaining-time entities or voice Start button.
 
+## Inspect playback progress
+
+With the [playback diagnostics update](voice-control.md#playback-diagnostics)
+installed in the gateway and both CLI files, request a status-only check:
+
+```sh
+cisco --json 201 voice status --playback
+```
+
+Positive `completed_pcm_bytes` means nonempty decoded audio completed delivery
+to the software playback sink. The counters accumulate within the session, so
+a positive total can belong to an earlier reply. It does not prove non-silent
+audio, audible sound, the actual TTS backend or that Baya synthesized the reply.
+Listen to confirm the result. Home Assistant needs no update for this optional
+CLI diagnostic.
+
 ## Speech setup and common problems
 
 Before the first session, run [pipeline preflight](voice-pipeline-preflight.md)
 on the exact private profile. This checks reported availability without audio
 or an intent. Then use a harmless informational question for acoustic acceptance.
 
-Provider choice is explicit: local wake detection does not make recognition
-local. An Echo-style pipeline may retain **cloud STT**, a local conversation
-agent and local Baya TTS. Verify the selected providers and speaker; keep their
-IDs and credentials private. Selecting this profile need not change HA defaults.
+Select the intended HA pipeline explicitly in the private voice profile. To
+reuse an Echo-style setup, select that same pipeline and configured Baya voice;
+changing the phone's transport does not select them automatically or change HA
+defaults. Local wake detection does not make recognition local: the pipeline
+may retain **cloud STT**, a local conversation agent and local Baya TTS. Verify
+the selected providers and speaker; keep their IDs and credentials private.
 
 - **Running but not ready:** inspect `phase` and `phase_reason`. Missing optional
   fields or `model_warmup` do not establish readiness; check the matching runtime.
-- **Packets visible but receive-idle timeout:** compare the application's
+- **XML/RTP: packets visible but receive-idle timeout:** compare the application's
   accepted frames with source-rejection counters. A startup source-port change
   can conflict with first-packet pinning; use the
   [RTP source-port diagnostic](voice-rtp-source-port.md).
+- **SIP: receive-idle timeout:** use the
+  [SIP transport diagnostics](sip-voice-contingency.md#troubleshooting-and-rollback)
+  to check loopback AudioSocket and negotiated phone audio. XML/RTP source-port
+  pinning does not apply to this transport.
 - **Slow or missing reply:** inspect the phase/error and pipeline. Each turn has
   its own timeout; increasing the session does not extend it. Instant replies
   are not promised.
