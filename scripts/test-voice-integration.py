@@ -129,7 +129,9 @@ def fixture_worker(scenario, evidence_path, argv):
             return "idle"
 
     class SyntheticMedia:
-        def __init__(self, bind_ip, bind_port, phone_ip, phone_port, *_):
+        def __init__(self, bind_ip, bind_port, phone_ip, phone_port, *_, max_packets):
+            require(type(max_packets) is int and max_packets == runner.transport.packet_budget(6),
+                    "unexpected_synthetic_packet_budget")
             self.bind_ip = bind_ip
             self.bind_port = bind_port
             self.phone_ip = phone_ip

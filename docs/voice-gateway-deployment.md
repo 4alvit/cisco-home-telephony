@@ -269,7 +269,9 @@ assistant copies. Profiles select distinct physical phones and a finite media
 session of at most 300 seconds. Manual mode completes one turn; an ONNX wake
 profile can rearm after successful playback within the same deadline. Referenced
 HA tokens are private files. An optional `ha.device_id` must identify the actual
-Cisco device, never a copied Echo identity. Check actual host port availability
+Cisco device, never a copied Echo identity. Room-relative Home Assistant tools
+also require the correct area assignment for that device; a device ID alone
+does not provide it. Check actual host port availability
 separately from configured-port collision checks. See
 [voice configuration and controls](voice-control.md).
 

@@ -118,7 +118,7 @@ class IntegratedFixtureTests(unittest.TestCase):
         row = self.runs["stop"]
         self.assertEqual(row["terminal_state"], "stopped")
         self.assertEqual(row["runner_reason"], "shutdown")
-        self.assertEqual(row["runner_exit"], 1, "Runner distinguishes cancellation from completed turn")
+        self.assertEqual(row["runner_exit"], 0, "Confirmed clean Stop is not a runtime failure")
         self.assertGreater(row["output_frames"], 0)
         self.assertLess(row["output_frames"], 150, "Stop must interrupt the three-second fixture reply")
         self.assertIn("speaking", row["assistant_states"])

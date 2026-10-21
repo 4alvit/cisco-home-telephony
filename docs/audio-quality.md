@@ -12,9 +12,11 @@ codec cannot restore frequencies already removed by an 8 kHz decoder.
 corrected Cisco pilot call, with transport observations on another connected
 Cisco. Independent reviews confirmed bidirectional RTP activity with a
 16 kHz backend. The first pilot passed controlled Stop; the second required
-late recovery after a controller timeout. Neither decoded audio at the phone
-nor audible quality has been verified. Keep private runtime evidence outside
-the public repository.
+late recovery after a controller timeout. A later listening check of radio
+708 was user-confirmed as sounding good. This is not an acoustic qualification
+of every handset or of the separate voice-assistant path. Decoded audio at the
+phone remains unmeasured. Keep private runtime evidence outside the public
+repository.
 
 ## What was limiting the sound
 
