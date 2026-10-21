@@ -1,0 +1,487 @@
+import asyncio
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+from unittest.mock import patch
+from uuid import UUID
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'containers/asterisk'))
+from phone_voice_sip import BoundaryError
+from phone_voice_sip_ami import AmiPort, LeaseWitness
+from phone_voice_sip_dialplan import render_dialplan
+from tests.test_phone_voice_control import ControlFixture, control
+from tests import test_phone_voice_control as control_tests
+
+SESSION = UUID('12345678-1234-4234-8234-123456789012')
+PHONE = {'id': '201', 'lines': ['201', '202'], 'device': 'SEP020000000001'}
+
+
+class Witness:
+    def verify(self):
+        return
+
+
+class Gateway:
+    def __init__(self):
+        self.actions, self.keys = [], []
+        self.ringing = self.up = self.hungup = False
+        self.foreign = self.wrong_token = self.missing_deadline = False
+        self.root = 'cisco-voice-' + SESSION.hex
+
+    def own_channels(self, phone, channels):
+        return [item for item in channels if item['Channel'].startswith(('PJSIP/201-', 'PJSIP/202-'))]
+
+    def execute(self, phone, key):
+        self.keys.append(key)
+        self.up, self.ringing = True, False
+
+    def AMI(self, config):
+        parent = self
+        class FakeAMI:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+            def snapshot(self):
+                channels = []
+                if (parent.ringing or parent.up) and not parent.hungup:
+                    channels.append({'Channel': 'PJSIP/201-0001', 'Uniqueid': '99.1',
+                                     'Linkedid': parent.root, 'ChannelStateDesc': 'Up' if parent.up else 'Ringing'})
+                if parent.foreign:
+                    channels.append({'Channel': 'PJSIP/202-0002', 'Uniqueid': '99.2',
+                                     'Linkedid': 'foreign', 'ChannelStateDesc': 'Ringing'})
+                return {'201': 'In use' if channels and not parent.hungup else 'Not in use',
+                        '202': 'Ringing' if parent.foreign else 'Not in use'}, channels
+            def action(self, name, **headers):
+                parent.actions.append((name, headers))
+                if name == 'DBGet':
+                    return [{'Event': 'DBGetResponse', 'Family': headers['Family'], 'Key': headers['Key'], 'Val': '0'}]
+                if name == 'Originate':
+                    parent.ringing = True
+                if name == 'Hangup':
+                    if headers['Channel'] == '99.1':
+                        parent.hungup = True
+                if name == 'Getvar':
+                    var = headers['Variable']
+                    values = {'VOICE_SIP_SESSION': 'wrong' if parent.wrong_token else SESSION.hex,
+                              'VOICE_SIP_END': '1299', 'TIMEOUT(absolute)': '0' if parent.missing_deadline else '298'}
+                    return [{'Value': '0' if var.startswith('DB(') else values[var]}]
+                return [{'Response': 'Success'}]
+        return FakeAMI()
+
+
+class AmiTests(unittest.IsolatedAsyncioTestCase):
+    def make(self):
+        gateway = Gateway()
+        port = AmiPort(gateway, {'ami': {}}, PHONE, '201', SESSION, 1299, 24576,
+                       Witness(), clock=lambda: 100, wall_clock=lambda: 1000)
+        self.addCleanup(port.stop_event.set)
+        return gateway, port
+
+    async def test_scoped_originate_native_timeout_proof_and_single_speaker_attempt(self):
+        gateway, port = self.make()
+        grant = await port.start()
+        self.assertEqual(grant.channel.uniqueid, '99.1')
+        self.assertTrue(port.deadline_armed)
+        self.assertEqual(gateway.keys, ['Key:Speaker'])
+        originate = [value for name, value in gateway.actions if name == 'Originate']
+        self.assertEqual(len(originate), 1)
+        self.assertEqual(originate[0]['Channel'], 'Local/201@cisco-voice-sip/n')
+        self.assertIn('/c(slin16)', originate[0]['Data'])
+        self.assertTrue(await port.validate_admission(grant))
+        self.assertFalse(await port.validate_admission(grant))
+        self.assertTrue(await port.hangup_and_confirm(grant))
+        self.assertEqual([value['Channel'] for name, value in gateway.actions if name == 'Hangup'], ['99.1'])
+        with self.assertRaises(BoundaryError):
+            await port.start()
+
+    async def test_mismatched_token_or_missing_native_timeout_never_answers(self):
+        for option in ('wrong_token', 'missing_deadline'):
+            gateway, port = self.make()
+            setattr(gateway, option, True)
+            with self.assertRaises(BoundaryError):
+                await port.start()
+            self.assertEqual(gateway.keys, [])
+            await port.hangup_and_confirm()
+
+    async def test_other_phone_line_prevents_originate(self):
+        gateway, port = self.make()
+        gateway.foreign = True
+        with self.assertRaises(BoundaryError):
+            await port.start()
+        self.assertFalse(port.originate_attempted)
+        self.assertFalse(any(name == 'Originate' for name, _ in gateway.actions))
+
+    async def test_unseen_async_originate_cannot_claim_cleanup_from_empty_snapshot(self):
+        gateway, port = self.make()
+        port.originate_attempted = True
+        self.assertFalse(await port.hangup_and_confirm())
+
+    async def test_hangup_preserves_unrelated_phone_channel(self):
+        gateway, port = self.make()
+        grant = await port.start()
+        gateway.foreign = True
+        self.assertTrue(await port.hangup_and_confirm(grant))
+        self.assertEqual([value['Channel'] for name, value in gateway.actions if name == 'Hangup'], ['99.1'])
+
+    async def test_sealed_unattempted_port_refuses_late_start(self):
+        gateway, port = self.make()
+        self.assertTrue(port.seal_no_originate())
+        with self.assertRaises(BoundaryError):
+            await port.start()
+        with self.assertRaises(BoundaryError):
+            await asyncio.to_thread(port._start)
+        self.assertEqual(gateway.actions, [])
+        self.assertEqual(gateway.keys, [])
+
+    async def test_queued_start_cannot_dispatch_after_cleanup_seal(self):
+        gateway, port = self.make()
+        entered, release = threading.Event(), threading.Event()
+        original = port._snapshot
+        def snapshot(ami):
+            value = original(ami)
+            entered.set()
+            if not release.wait(2):
+                raise AssertionError('synthetic release timeout')
+            return value
+        port._snapshot = snapshot
+        task = asyncio.create_task(port.start())
+        try:
+            self.assertTrue(await asyncio.to_thread(entered.wait, 1))
+            self.assertFalse(port.seal_no_originate())  # worker has not drained
+        finally:
+            release.set()
+        with self.assertRaises(BoundaryError):
+            await task
+        self.assertTrue(port.seal_no_originate())
+        self.assertFalse(any(name == 'Originate' for name, _ in gateway.actions))
+
+    async def test_ambiguous_originate_stays_attempted_and_excludes_proof(self):
+        gateway, port = self.make()
+        factory = gateway.AMI
+        def ami(config):
+            result = factory(config)
+            original = result.action
+            def action(name, **kwargs):
+                if name == 'Originate':
+                    self.assertTrue(port.originate_attempted)
+                    raise TimeoutError('synthetic ambiguous originate')
+                return original(name, **kwargs)
+            result.action = action
+            return result
+        gateway.AMI = ami
+        with self.assertRaises(TimeoutError):
+            await port.start()
+        self.assertTrue(port.originate_attempted)
+        self.assertFalse(port.seal_no_originate())
+
+    async def test_cancelled_start_drains_before_no_originate_proof(self):
+        gateway, port = self.make()
+        entered, release = threading.Event(), threading.Event()
+        original = port._start
+        def delayed():
+            entered.set()
+            if not release.wait(2):
+                raise AssertionError('synthetic release timeout')
+            return original()
+        port._start = delayed
+        task = asyncio.create_task(port.start())
+        try:
+            self.assertTrue(await asyncio.to_thread(entered.wait, 1))
+            task.cancel()
+            await asyncio.sleep(0)
+            self.assertFalse(task.done())
+            task.cancel()
+            await asyncio.sleep(0)
+            self.assertFalse(task.done())
+            self.assertFalse(port.seal_no_originate())
+        finally:
+            release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertTrue(port.seal_no_originate())
+        self.assertEqual(gateway.actions, [])
+
+    def test_dialplan_arms_actual_phone_leg_before_dial_and_rejects_redirects(self):
+        text = render_dialplan(['201', '202'])
+        self.assertIn('Dial(PJSIP/201,8,ib(cisco-voice-sip-bound^s^1))', text)
+        self.assertIn('Set(TIMEOUT(absolute)=${VOICE_SIP_REMAIN})', text)
+        self.assertIn('Set(VOICE_SIP_REMAIN=$[${VOICE_SIP_END}-${EPOCH}-1])', text)
+        self.assertIn('${VOICE_SIP_REMAIN} > 300', text)
+        self.assertNotIn('[home]', text)
+        for invalid in ('9999', '201,20', '201\nHangup()'):
+            with self.assertRaises(ValueError):
+                render_dialplan([invalid])
+
+    def test_lease_requires_matching_inherited_descriptor_and_reserved_journal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            key = hashlib.sha256(PHONE['device'].encode()).hexdigest()
+            path = Path(directory) / (key + '.lock')
+            fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+            journal = Path(directory) / (key + '.json')
+            journal.write_text(json.dumps({'session_id': SESSION.hex, 'phone': '201',
+                                           'reserved': True, 'state': 'running'}))
+            journal.chmod(0o600)
+            witness = LeaseWitness(fd, directory, PHONE, SESSION)
+            try:
+                with self.assertRaises(BoundaryError):
+                    witness.verify()
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                witness.verify()
+                data = json.loads(journal.read_text())
+                data['reserved'] = False
+                journal.write_text(json.dumps(data))
+                with self.assertRaises(BoundaryError):
+                    witness.verify()
+            finally:
+                os.close(fd)
+
+
+class XmlCompatibilityTests(ControlFixture):
+    def test_manager_snapshot_is_accepted_by_actual_xml_child_for_default_and_explicit_transport(self):
+        for number, selected in enumerate((None, 'xml_rtp')):
+            with self.subTest(media_transport=selected):
+                if selected is not None:
+                    self.transport['media_transport'] = selected
+                self.write_inputs()
+                manager = self.make_control()
+                self.start(manager, request_id=str(number) * 32)
+                live_flags = {'--run', '--attended', '--exclusive-media', '--enable-microphone'}
+                argv = [value for value in self.launches[-1][0] if value not in live_flags]
+                self.assertTrue(argv[1].endswith('/voice_session.py'))
+                result = subprocess.run(argv, cwd=self.workspace, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(json.loads(result.stdout),
+                                 {'valid': True, 'network_actions': 0, 'microphone_started': False})
+                self.runners[-1].finish()
+                manager.tick()
+
+    def test_xml_child_rejects_non_xml_transport_before_reading_gateway(self):
+        transport, _, _ = control._libraries()
+        for selected in ('sip_audiosocket', 'unknown', None):
+            with self.subTest(media_transport=selected):
+                value = dict(self.transport, media_transport=selected,
+                             gateway_config='/must-not-be-read')
+                path = self.write_private('unsupported-transport.json', value)
+                with self.assertRaisesRegex(transport.VoiceTransportError, 'xml_rtp_transport_required'):
+                    transport.load_pilot_config(path)
+
+
+class ManagerTests(ControlFixture):
+    def setUp(self):
+        super().setUp()
+        self.transport['media_transport'] = 'sip_audiosocket'
+        self.voice['wake']['mode'] = 'onnx'
+        self.write_inputs()
+
+    def report(self, session):
+        return {'transport': 'sip_audiosocket', 'session_id': session,
+                'originate_attempted': True, 'pbx_deadline_armed': True,
+                'pbx_call_absent': True, 'safe_no_media_started': False,
+                'cleanup_errors': [], 'error': None, 'turns_completed': 2,
+                'result': {'reason': 'explicit_stop', 'stop_confirmed': True, 'cleanup_errors': []}}
+
+    def test_exact_session_sip_report_releases_without_xml_watchdog_claim(self):
+        manager = self.make_control()
+        state = self.start(manager)
+        argv = self.launches[-1][0]
+        self.assertTrue(any(value.endswith('/voice_session_sip.py') for value in argv))
+        self.assertEqual(argv[argv.index('--session-id') + 1], state['session_id'])
+        self.runners[-1].finish(self.report(state['session_id']))
+        manager.tick()
+        result = self.status(manager)
+        self.assertEqual(result['state'], 'stopped')
+        self.assertTrue(result['stop_confirmed'])
+        with patch.object(self.runners[-1], 'read_result',
+                          side_effect=AssertionError('completed child was polled again')):
+            manager.tick()
+
+    def test_mismatched_session_cannot_release(self):
+        manager = self.make_control()
+        self.start(manager)
+        self.runners[-1].finish(self.report('0' * 32))
+        manager.tick()
+        self.assertEqual(self.status(manager)['state'], 'recovery_required')
+
+    def test_inner_cleanup_failure_or_missing_proof_cannot_release(self):
+        for index, errors in enumerate((['wire_close_failed'], None, 'missing')):
+            self.configuration['state_directory'] = '.local/inner-cleanup-' + str(index)
+            self.write_inputs()
+            manager = self.make_control()
+            state = self.start(manager)
+            report = self.report(state['session_id'])
+            if errors == 'missing':
+                report['result'].pop('cleanup_errors')
+            else:
+                report['result']['cleanup_errors'] = errors
+            self.runners[-1].finish(report)
+            manager.tick()
+            self.assertEqual(self.status(manager)['state'], 'recovery_required')
+            self.assertFalse(manager._sessions[state['session_id']].cleanup_verified)
+
+    def test_legacy_unattempted_boolean_cannot_release(self):
+        manager = self.make_control()
+        state = self.start(manager)
+        report = self.report(state['session_id'])
+        report.update(originate_attempted=False, safe_no_media_started=True,
+                      pbx_deadline_armed=False, pbx_call_absent=False, result=None,
+                      error='voice_session_failed')
+        self.runners[-1].finish(report)
+        manager.tick()
+        result = self.status(manager)
+        self.assertEqual(result['state'], 'recovery_required')
+        self.assertFalse(result['stop_confirmed'])
+        self.assertFalse(manager._sessions[state['session_id']].cleanup_verified)
+
+    def test_unseen_ambiguous_originate_retains_reservation(self):
+        manager = self.make_control()
+        state = self.start(manager)
+        report = self.report(state['session_id'])
+        report.update(result=None, pbx_call_absent=False, error='voice_session_failed')
+        self.runners[-1].finish(report)
+        manager.tick()
+        self.assertEqual(self.status(manager)['state'], 'recovery_required')
+
+    def test_normal_sip_report_rejects_nonstandard_exit_and_incomplete_output(self):
+        for index, code in enumerate((None, True, False, -9, -15, 2)):
+            with self.subTest(code=code):
+                self.configuration['state_directory'] = '.local/exit-' + str(index)
+                self.write_inputs()
+                manager = self.make_control()
+                state = self.start(manager)
+                child = self.runners[-1]
+                child.finish(self.report(state['session_id']), code=code)
+                manager.tick()
+                self.assertFalse(manager._sessions[state['session_id']].cleanup_verified)
+                self.assertTrue(manager._journal(manager.config.profiles[0])['reserved'])
+        self.configuration['state_directory'] = '.local/normal-incomplete'
+        self.write_inputs()
+        manager = self.make_control()
+        state = self.start(manager, request_id='different-request')
+        child = self.runners[-1]
+        child.finish(self.report(state['session_id']))
+        manager._finish(manager._sessions[state['session_id']], child.result + b'\n')
+        self.assertEqual(self.status(manager)['state'], 'recovery_required')
+
+    def test_normal_sip_report_requires_current_owner_before_any_terminal_write(self):
+        manager = self.make_control()
+        state = self.start(manager)
+        session = manager._sessions[state['session_id']]
+        path = manager._paths(session.profile)[1]
+        original = path.read_bytes()
+        changed = json.loads(original)
+        changed['request_id'] = 'other-request'
+        path.write_text(json.dumps(changed))
+        before = path.read_bytes()
+        self.runners[-1].finish(self.report(state['session_id']))
+        try:
+            with self.assertRaises(control.ControlError):
+                manager.tick()
+            self.assertEqual(path.read_bytes(), before)
+            self.assertFalse(session.cleanup_verified)
+            self.assertGreaterEqual(session.lease_fd, 0)
+        finally:
+            path.write_bytes(original)
+
+
+def no_sip_report(session, challenge):
+    return {
+        'transport': 'sip_audiosocket', 'session_id': session, 'recorded_audio': False,
+        'error': 'voice_session_failed', 'result': None, 'cleanup_errors': [],
+        'turns_completed': 0, 'originate_attempted': False, 'speaker_attempted': False,
+        'pbx_deadline_armed': False, 'pbx_call_absent': True, 'safe_no_media_started': True,
+        'input_frames': 0, 'output_frames': 0,
+        'cleanup_proof': {'version': 1, 'kind': 'safe_no_sip_originate', 'transport': 'sip_audiosocket',
+                          'session_id': session, 'challenge': challenge,
+                          'originate_attempted': False, 'cleanup_complete': True},
+    }
+
+
+class SipNoOriginateTests(control_tests.NoMediaCleanupTests):
+    """Run the PR12 owner/EOF/exit/journal durability matrix for SIP as well."""
+    def setUp(self):
+        super().setUp()
+        self.transport['media_transport'] = 'sip_audiosocket'
+        self.voice['wake']['mode'] = 'onnx'
+        self.write_inputs()
+
+    def prepared(self, index=0):
+        manager, session, child, _ = super().prepared(index)
+        return manager, session, child, no_sip_report(session.session_id, session.launch_challenge)
+
+    def test_malformed_or_contradictory_proofs_never_fall_back_to_stop_ack(self):
+        mutations = []
+        for field, values in {
+            'version': (True, 2, '1'), 'kind': ('safe_no_media_started',),
+            'transport': ('xml_rtp', None), 'session_id': ('0' * 32, None),
+            'challenge': ('0' * 64, None, True), 'originate_attempted': (True, 0, None),
+            'cleanup_complete': (False, 1, None),
+        }.items():
+            for value in values:
+                mutations.append(lambda r, f=field, v=value: r['cleanup_proof'].__setitem__(f, v))
+        for field in no_sip_report('', '')['cleanup_proof']:
+            mutations.append(lambda r, f=field: r['cleanup_proof'].pop(f))
+        for field, values in {
+            'transport': ('xml_rtp',), 'session_id': ('0' * 32,), 'recorded_audio': (True, 0),
+            'turns_completed': (1, False), 'input_frames': (1, False), 'output_frames': (1, False),
+            'originate_attempted': (True, 0), 'speaker_attempted': (True, 0),
+            'pbx_deadline_armed': (True, 0), 'pbx_call_absent': (False, 1),
+            'safe_no_media_started': (False, 1), 'cleanup_errors': (['failed'], None),
+            'result': ({'stop_confirmed': True},), 'error': (None,),
+        }.items():
+            for value in values:
+                mutations.append(lambda r, f=field, v=value: r.__setitem__(f, v))
+        mutations += [lambda r: r['cleanup_proof'].update(extra=True),
+                      lambda r: r.update(watchdog_armed=True, watchdog_finished=True,
+                                         watchdog_stop_errors=0, watchdog_stop_confirmed=True),
+                      lambda r: r.pop('cleanup_proof')]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(case=index):
+                manager, session, child, report = self.prepared(index)
+                mutate(report)
+                child.finish(report, code=1)
+                manager.tick()
+                self.assertEqual(self.status(manager)['state'], 'recovery_required')
+                self.assertFalse(session.cleanup_verified)
+                self.assertTrue(manager._journal(session.profile)['reserved'])
+
+    def test_incomplete_output_and_duplicate_json_keys_cannot_release(self):
+        for index, kind in enumerate(('eof', 'top-duplicate', 'proof-duplicate')):
+            manager, session, child, report = self.prepared(index)
+            raw = json.dumps(report)
+            if kind == 'top-duplicate':
+                raw = raw[:-1] + ', "originate_attempted": false}'
+            elif kind == 'proof-duplicate':
+                raw = raw.replace('"version": 1', '"version": 1, "version": 1')
+            child.returncode, child.result = 1, None if kind == 'eof' else raw.encode()
+            manager.tick()
+            self.clock.advance(control.REPORT_GRACE_SECONDS + 1)
+            manager.tick()
+            self.assertFalse(session.cleanup_verified)
+            self.assertTrue(manager._journal(session.profile)['reserved'])
+
+    def test_xml_and_sip_proofs_cannot_cross_profile_boundaries(self):
+        manager, session, child, report = self.prepared()
+        child.finish(control_tests.no_media_report(session.session_id, session.launch_challenge), code=1)
+        manager.tick()
+        self.assertFalse(session.cleanup_verified)
+        self.assertTrue(manager._journal(session.profile)['reserved'])
+        self.transport.pop('media_transport')
+        self.voice['wake']['mode'] = 'manual'
+        manager, session, child, _ = self.prepared(1)
+        child.finish(no_sip_report(session.session_id, session.launch_challenge), code=1)
+        manager.tick()
+        self.assertFalse(session.cleanup_verified)
+        self.assertTrue(manager._journal(session.profile)['reserved'])
+
+
+if __name__ == '__main__':
+    unittest.main()

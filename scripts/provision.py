@@ -32,6 +32,26 @@ softphones = importlib.util.module_from_spec(_softphone_spec)
 _softphone_spec.loader.exec_module(softphones)
 
 
+def sip_voice_dialplan(site, extensions):
+    """Off by default; only inventoried lines get an AMI-only assistant route."""
+    options = site.get('sip_voice', {})
+    if (not isinstance(options, dict) or set(options) - {'enabled', 'lines'}
+            or type(options.get('enabled', False)) is not bool):
+        raise ValueError('sip_voice accepts enabled and inventoried lines')
+    if not options.get('enabled', False):
+        return ''
+    lines = options.get('lines')
+    if (not gateway_settings(site) or not isinstance(lines, list) or not lines
+            or any(not isinstance(line, str) or line not in extensions for line in lines)
+            or len(set(lines)) != len(lines)):
+        raise ValueError('sip_voice requires the gateway and unique inventoried Cisco lines')
+    spec = importlib.util.spec_from_file_location(
+        'cisco_sip_voice_dialplan', Path(__file__).resolve().parents[1] / 'containers/asterisk/phone_voice_sip_dialplan.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return '\n' + module.render_dialplan(lines)
+
+
 def alarm_settings(site):
     alarm = site.get("alarms", {})
     if (not isinstance(alarm, dict) or set(alarm) - {"enabled", "duration_seconds"}
@@ -745,6 +765,8 @@ exten => s,1,Hangup(21)
     configs["extensions.conf"] += intercom_dialplan(
         site, [line["extension"] for phone in phones for line in phone_lines(phone)])
     configs["extensions.conf"] += alert_dialplan(
+        site, [line["extension"] for phone in phones for line in phone_lines(phone)])
+    configs["extensions.conf"] += sip_voice_dialplan(
         site, [line["extension"] for phone in phones for line in phone_lines(phone)])
     service_numbers += external["numbers"]
     for name,body in configs.items():

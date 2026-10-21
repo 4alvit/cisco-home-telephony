@@ -196,6 +196,7 @@ class Profile:
     display_port: int | None = None
     mode: str = 'manual'
     rearm_after_turn: bool = False
+    media_transport: str = 'xml_rtp'
 
 
 @dataclass(frozen=True)
@@ -212,8 +213,9 @@ def _inputs(transport_path, voice_path, workspace):
     transport, validate_voice, settings_type = _libraries()
     config = _json(_private_path(transport_path, workspace))
     allowed = {'gateway_config', 'line', 'bind_ipv4', 'bind_port', 'phone_rtp_port',
-               'duration_seconds', 'receive_idle_seconds', 'volume', 'expected_source_port'}
+               'duration_seconds', 'receive_idle_seconds', 'volume', 'expected_source_port', 'media_transport'}
     _require(not set(config) - allowed)
+    _require(config.get('media_transport', 'xml_rtp') in ('xml_rtp', 'sip_audiosocket'))
     gateway = _json(_private_path(config['gateway_config'], workspace))
     transport._gateway_module().validate(gateway)
     transport.tx_uri(config['bind_ipv4'], config['bind_port'])
@@ -228,6 +230,8 @@ def _inputs(transport_path, voice_path, workspace):
     voice = validate_voice(_json(_private_path(voice_path, workspace)))
     settings = settings_type(**voice['service'])
     _require(settings.enabled, 'voice_control_disabled')
+    _require(config.get('media_transport', 'xml_rtp') != 'sip_audiosocket'
+             or voice['wake']['mode'] == 'onnx', 'sip_requires_wake_mode')
     _require(voice['phones'] == {phone['id']: True}, 'one_selected_phone_required')
     token = _read(_private_path(voice['ha']['token_file'], workspace), 8192).decode('ascii').strip()
     _require(token and all(33 <= ord(c) <= 126 for c in token), 'invalid_voice_token')
@@ -259,9 +263,12 @@ def load_control_config(path, workspace=ROOT):
             config, gateway, phone, _voice, _token = _inputs(transport_path, voice_path, workspace)
             _require(phone['device'] not in identities and phone['ipv4'] not in addresses
                      and not lines.intersection(phone['lines']), 'duplicate_physical_phone')
-            endpoint = (config['bind_ipv4'], config['bind_port'])
+            endpoint = ('127.0.0.1' if config.get('media_transport') == 'sip_audiosocket'
+                        else config['bind_ipv4'], config['bind_port'])
             _require(endpoint not in rtp_endpoints, 'voice_rtp_endpoint_collision')
             port = entry.get('display_port')
+            _require(config.get('media_transport', 'xml_rtp') != 'sip_audiosocket' or port is None,
+                     'sip_display_not_supported')
             if port is not None:
                 _require(type(port) is int and 1024 <= port <= 65535, 'invalid_voice_display_port')
                 _require(port not in {config['bind_port'], config['phone_rtp_port'], gateway['api_port'],
@@ -274,7 +281,8 @@ def load_control_config(path, workspace=ROOT):
                                     transport_path, voice_path, float(config['duration_seconds']),
                                     config['bind_ipv4'], config['bind_port'], port,
                                     'wake' if _voice['wake']['mode'] == 'onnx' else 'manual',
-                                    _voice['service'].get('rearm_after_turn', False)))
+                                    _voice['service'].get('rearm_after_turn', False),
+                                    config.get('media_transport', 'xml_rtp')))
             rtp_endpoints.add(endpoint)
             identities.add(phone['device']); addresses.add(phone['ipv4']); lines.update(phone['lines'])
         return ControlConfig(workspace, state, python, ffmpeg, tuple(profiles), data['enabled'])
@@ -380,13 +388,16 @@ class VoiceControl:
         _require(all(isinstance(p, Profile) and type(p.duration) in (int, float)
                      and math.isfinite(p.duration) and 0 < p.duration <= MAX_SESSION_SECONDS
                      and p.mode in ('manual', 'wake') and type(p.rearm_after_turn) is bool
+                     and p.media_transport in ('xml_rtp', 'sip_audiosocket')
+                     and (p.media_transport != 'sip_audiosocket' or p.mode == 'wake' and p.display_port is None)
                      and p.lines and p.phone_id == p.lines[0] for p in config.profiles))
         all_lines = [line for p in config.profiles for line in p.lines]
         _require(len(all_lines) == len(set(all_lines))
                  and len({p.device for p in config.profiles}) == len(config.profiles)
                  and len({p.ipv4 for p in config.profiles}) == len(config.profiles),
                  'duplicate_physical_phone')
-        _require(len({(p.bind_ipv4, p.bind_port) for p in config.profiles}) == len(config.profiles),
+        _require(len({('127.0.0.1' if p.media_transport == 'sip_audiosocket' else p.bind_ipv4, p.bind_port)
+                      for p in config.profiles}) == len(config.profiles),
                  'voice_rtp_endpoint_collision')
         display_endpoints = [(p.bind_ipv4, p.display_port) for p in config.profiles
                              if p.display_port is not None]
@@ -578,6 +589,7 @@ class VoiceControl:
         _require(('wake' if voice['wake']['mode'] == 'onnx' else 'manual') == p.mode
                  and voice['service'].get('rearm_after_turn', False) == p.rearm_after_turn,
                  'voice_profile_changed')
+        _require(config.get('media_transport', 'xml_rtp') == p.media_transport, 'voice_profile_changed')
 
     def _prepare(self, p, s):
         config, gateway, phone, voice, token = _inputs(p.transport_config, p.voice_config, self.config.workspace)
@@ -601,7 +613,8 @@ class VoiceControl:
         fd = os.open(directory / 'ha-token.txt', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, 'w') as output:
             output.write(token + '\n')
-        argv = [self.config.python_executable, str(ROOT / 'scripts/voice_session.py'),
+        runner = 'voice_session_sip.py' if p.media_transport == 'sip_audiosocket' else 'voice_session.py'
+        argv = [self.config.python_executable, str(ROOT / 'scripts' / runner),
                 '--transport-config', str(directory / 'transport.json'),
                 '--voice-config', str(directory / 'voice.json'), '--workspace', str(self.config.workspace),
                 '--status-file', str(directory / 'progress.json'),
@@ -609,6 +622,10 @@ class VoiceControl:
                 '--run', '--attended', '--exclusive-media', '--enable-microphone']
         if p.display_port is not None:
             argv += ['--display-port', str(p.display_port)]
+        if p.media_transport == 'sip_audiosocket':
+            argv += ['--lease-fd', str(s.lease_fd), '--session-id', s.session_id,
+                     '--state-directory', str(self.config.state_directory),
+                     '--lease-expires-unix', str(time.time() + p.duration)]
         return argv
 
     def start(self, target, request_id, *, context, attended=False, exclusive_media=False,
@@ -779,26 +796,34 @@ class VoiceControl:
                  and journal.get('phone') == s.profile.phone_id,
                  'voice_owner_unavailable')
 
-    def _no_media_proof(self, s, report, raw):
-        proof = report['cleanup_proof']
+    @staticmethod
+    def _completed_child(s, raw, exit_codes):
         code = s.handle.poll()
-        _require(type(code) is int and code == 1 and not s.killed
-                 and not s.stop_requested and s.stop_at is None
+        _require(type(code) is int and code in exit_codes and not s.killed
                  and s.spawn_attempted is True and s.handle.read_result() == raw)
-        _require(type(proof) is dict and set(proof) == {
-            'version', 'kind', 'session_id', 'challenge', 'rtp_start_attempted',
-            'watchdog_arm_attempted', 'watchdog_process_created', 'cleanup_complete'})
+
+    def _launch_proof(self, s, proof, raw):
+        self._completed_child(s, raw, (1,))
+        _require(not s.stop_requested and s.stop_at is None)
         _require(type(proof['version']) is int and proof['version'] == 1
-                 and proof['kind'] == 'safe_no_media_started'
                  and proof['session_id'] == s.session_id
                  and type(proof['challenge']) is str
                  and re.fullmatch(r'[0-9a-f]{64}', proof['challenge'])
                  and type(s.launch_challenge) is str
                  and hmac.compare_digest(proof['challenge'], s.launch_challenge)
+                 and proof['cleanup_complete'] is True)
+
+    def _no_media_proof(self, s, report, raw):
+        _require(s.profile.media_transport == 'xml_rtp')
+        proof = report['cleanup_proof']
+        _require(type(proof) is dict and set(proof) == {
+            'version', 'kind', 'session_id', 'challenge', 'rtp_start_attempted',
+            'watchdog_arm_attempted', 'watchdog_process_created', 'cleanup_complete'})
+        self._launch_proof(s, proof, raw)
+        _require(proof['kind'] == 'safe_no_media_started'
                  and proof['rtp_start_attempted'] is False
                  and proof['watchdog_arm_attempted'] is False
-                 and proof['watchdog_process_created'] is False
-                 and proof['cleanup_complete'] is True)
+                 and proof['watchdog_process_created'] is False)
         _require(set(report) == {'error', 'result', 'states', 'turns_completed', 'capture_observed',
                                 'input', 'output_frames', 'recorded_audio', 'cleanup_errors',
                                 'watchdog_armed', 'cleanup_proof'}
@@ -813,6 +838,31 @@ class VoiceControl:
                  and all(state in ('stopped', 'error') for state in report['states']))
         return True
 
+    def _no_sip_proof(self, s, report, raw):
+        _require(s.profile.media_transport == 'sip_audiosocket')
+        proof = report['cleanup_proof']
+        _require(type(proof) is dict and set(proof) == {
+            'version', 'kind', 'transport', 'session_id', 'challenge',
+            'originate_attempted', 'cleanup_complete'})
+        self._launch_proof(s, proof, raw)
+        _require(proof['kind'] == 'safe_no_sip_originate'
+                 and proof['transport'] == 'sip_audiosocket'
+                 and proof['originate_attempted'] is False)
+        _require(set(report) == {
+            'transport', 'session_id', 'recorded_audio', 'error', 'result', 'cleanup_errors',
+            'turns_completed', 'originate_attempted', 'speaker_attempted', 'pbx_deadline_armed',
+            'pbx_call_absent', 'safe_no_media_started', 'input_frames', 'output_frames', 'cleanup_proof'}
+                 and report['transport'] == 'sip_audiosocket' and report['session_id'] == s.session_id
+                 and report['error'] == 'voice_session_failed' and report['result'] is None
+                 and report['originate_attempted'] is False and report['speaker_attempted'] is False
+                 and report['pbx_deadline_armed'] is False and report['pbx_call_absent'] is True
+                 and report['safe_no_media_started'] is True and report['recorded_audio'] is False
+                 and type(report['cleanup_errors']) is list and report['cleanup_errors'] == []
+                 and s.turns_completed == 0
+                 and all(type(report[key]) is int and report[key] == 0
+                         for key in ('turns_completed', 'input_frames', 'output_frames')))
+        return True
+
     def _finish(self, s, raw):
         with self._lock:
             self._finish_locked(s, raw)
@@ -820,6 +870,8 @@ class VoiceControl:
     def _finish_locked(self, s, raw):
         confirmed, clean, never_started, reason = False, False, False, 'voice_result_unavailable'
         s.cleanup_verified = False
+        if s.profile.media_transport == 'sip_audiosocket':
+            self._proof_owner(s)
         self._progress(s)
         report = None
         try:
@@ -827,14 +879,18 @@ class VoiceControl:
             report = json.loads(raw, object_pairs_hook=_unique_object)
         except Exception:
             pass
-        if isinstance(report, dict) and 'cleanup_proof' in report:
+        if (s.profile.media_transport == 'xml_rtp'
+                and isinstance(report, dict) and 'cleanup_proof' in report):
             self._proof_owner(s)
         try:
             _require(isinstance(report, dict))
             if 'cleanup_proof' in report:
-                never_started = self._no_media_proof(s, report, raw)
+                validate = self._no_sip_proof if s.profile.media_transport == 'sip_audiosocket' else self._no_media_proof
+                never_started = validate(s, report, raw)
                 clean, reason = True, 'voice_session_failed'
                 s.phase_reason = 'start_failed'
+            elif s.profile.media_transport == 'sip_audiosocket':
+                confirmed, clean, reason = self._sip_stop_report(s, report, raw)
             else:
                 confirmed, clean, reason = self._stop_report(s, report)
         except Exception:
@@ -856,6 +912,26 @@ class VoiceControl:
             if s.lease_fd >= 0:
                 os.close(s.lease_fd); s.lease_fd = -1
         s.handle = None
+
+    def _sip_stop_report(self, s, report, raw):
+        self._completed_child(s, raw, (0, 1))
+        _require(report.get('transport') == 'sip_audiosocket'
+                 and report.get('session_id') == s.session_id
+                 and report.get('safe_no_media_started') is False)
+        result = report.get('result')
+        confirmed = (report.get('originate_attempted') is True
+                     and report.get('pbx_deadline_armed') is True
+                     and report.get('pbx_call_absent') is True
+                     and isinstance(result, dict) and result.get('stop_confirmed') is True)
+        clean = (type(report.get('cleanup_errors')) is list and report['cleanup_errors'] == []
+                 and isinstance(result, dict) and type(result.get('cleanup_errors')) is list
+                 and result['cleanup_errors'] == [])
+        completed = (isinstance(result, dict) and result.get('reason') in
+                     ('explicit_stop', 'lease_expired', 'shutdown', 'dtmf_stop', 'peer_ended', 'call_changed'))
+        count = report.get('turns_completed')
+        if type(count) is int and 0 <= count <= MAX_TURNS:
+            s.turns_completed = max(s.turns_completed, count)
+        return confirmed, clean, 'voice_session_failed' if not completed or report.get('error') is not None else None
 
     @staticmethod
     def _stop_report(s, report):

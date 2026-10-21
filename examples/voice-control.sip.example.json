@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "enabled": false,
+  "state_directory": ".local/state/voice-control",
+  "python_executable": "/usr/local/bin/python3",
+  "ffmpeg_executable": "/usr/bin/ffmpeg",
+  "profiles": [
+    {
+      "transport_config": ".local/phone-voice-sip.json",
+      "voice_config": ".local/local-voice-assistant.json"
+    }
+  ]
+}

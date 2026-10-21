@@ -36,9 +36,12 @@ import sys
 root, target = (Path(value).resolve() for value in sys.argv[1:])
 files = (
     'scripts/voice_session.py',
+    'scripts/voice_session_sip.py',
     'containers/asterisk/phone_voice_transport.py',
     'containers/asterisk/phone_voice_controller.py',
     'containers/asterisk/phone_voice_control.py',
+    'containers/asterisk/phone_voice_sip.py',
+    'containers/asterisk/phone_voice_sip_ami.py',
     'containers/asterisk/phone_voice_display.py',
     'containers/asterisk/phone_camera_preview.py',
     'containers/asterisk/phone_gateway.py',

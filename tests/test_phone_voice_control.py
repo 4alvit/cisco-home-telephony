@@ -691,6 +691,9 @@ class ControlLifecycleTests(ControlFixture):
         self.assertFalse(stopped["active"])
         self.assertTrue(stopped["stop_confirmed"])
         self.assertIsNone(stopped["error"])
+        with mock.patch.object(self.runners[0], 'read_result',
+                               side_effect=AssertionError('completed child was polled again')):
+            instance.tick()
         self.stop(instance, started["session_id"])
         self.assertEqual(self.runners[0].terminations, 1)
         self.assert_safe(stopped)

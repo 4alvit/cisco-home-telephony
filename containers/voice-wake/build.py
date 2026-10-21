@@ -27,6 +27,9 @@ CONTEXT_FILES = (
 # requiring unrelated in-progress edits in this checkout to be in that image.
 BASE_FILES = {
     "scripts/voice_session.py": "/workspace/scripts/voice_session.py",
+    "scripts/voice_session_sip.py": "/workspace/scripts/voice_session_sip.py",
+    "containers/asterisk/phone_voice_sip.py": "/workspace/containers/asterisk/phone_voice_sip.py",
+    "containers/asterisk/phone_voice_sip_ami.py": "/workspace/containers/asterisk/phone_voice_sip_ami.py",
     **{f"containers/asterisk/{name}.py": f"/workspace/containers/asterisk/{name}.py"
        for name in ("phone_voice_transport", "phone_voice_controller",
                     "phone_voice_control", "phone_voice_display", "phone_camera_preview", "phone_gateway",
