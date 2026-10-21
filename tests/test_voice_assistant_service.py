@@ -227,6 +227,47 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(event.phone_id == "beta" and event.reason == "wake_ready"
                              for event in self.events))
 
+    async def test_new_owner_immediately_refreshes_other_ready_streams(self):
+        for mode in ("manual", "wake"):
+            with self.subTest(mode=mode):
+                service = self.make(factory=lambda _: WarmingTrigger(),
+                                    phones={"alpha": True, "beta": True, "inactive": True})
+                events = self.events
+                beta_stream = await service.listen("beta")
+                beta = service._sessions["beta"]
+                for _ in range(64):
+                    service.feed_pcm("beta", beta_stream, bytes(640))
+                self.assertEqual(service.status("beta").reason, "wake_ready")
+                resets = beta.detector.resets
+
+                if mode == "manual":
+                    await service.activate("alpha")
+                else:
+                    alpha_stream = await service.listen("alpha")
+                    for _ in range(64):
+                        service.feed_pcm("alpha", alpha_stream, bytes(640))
+                    service.feed_pcm("alpha", alpha_stream, FRAME)
+
+                # No beta audio arrives between owner acquisition and this
+                # observation: its previously published Ready must be revoked.
+                self.assertEqual(service._owner, "alpha")
+                self.assertEqual(service.status("beta").reason, "model_warmup")
+                self.assertEqual([(event.phone_id, event.state) for event in events[-2:]],
+                                 [("beta", "armed"), ("alpha", "listening")])
+                self.assertEqual(beta.stream_id, beta_stream)
+                self.assertTrue(beta.detector.ready)
+                self.assertEqual(beta.detector.frames, 64)
+                self.assertEqual(beta.detector.resets, resets)
+                self.assertEqual([event.reason for event in events
+                                  if event.phone_id == "beta" and event.state == "armed"],
+                                 ["model_warmup", "wake_ready", "model_warmup"])
+                count = len(events)
+                service.feed_pcm("beta", beta_stream, bytes(640))
+                self.assertEqual(len(events), count)
+                self.assertEqual(beta.detector.frames, 65)
+                self.assertEqual(service.status("inactive").state, "stopped")
+                self.assertFalse(any(event.phone_id == "inactive" for event in events))
+
     async def test_new_stream_restarts_warmup_and_rejects_stale_progress(self):
         service = self.make(factory=lambda _: WarmingTrigger())
         old_stream = await service.listen("alpha")

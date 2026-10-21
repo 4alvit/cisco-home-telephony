@@ -312,6 +312,9 @@ class AssistantService:
     def _start_turn(self, phone_id: str, stream_id: str, trigger_frame: bytes | None = None) -> None:
         item = self._sessions[phone_id]
         self._owner = phone_id
+        for other_id, other in self._sessions.items():
+            if other_id != phone_id and other.stream_id is not None and other.state == "armed":
+                self._emit_armed(other_id)
         item.queue = asyncio.Queue(maxsize=self.settings.queue_frames)
         for frame in item.preroll:
             item.queue.put_nowait(frame)
