@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="860" viewBox="0 0 1440 860" role="img" aria-labelledby="title desc">
+  <title id="title">Daily Cisco phone boot: current operation and proposed TFTP separation</title>
+  <desc id="desc">The phone loads firmware from flash, requests configuration from TFTP and establishes fresh SIP registration. Current operation reopens a bounded restricted TFTP window before an authorized reboot. A proposed daily profile-only service has no firmware volume and must pass boot, firewall and exclusive port ownership gates before deployment. One IP allowlist is not per-device or per-file authentication.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#9fb8d8"/></marker>
+    <style>text{font-family:Arial,Helvetica,sans-serif}.body{font-size:19px;fill:#dbe7f6}.small{font-size:17px;fill:#b8c9df}.head{font-size:24px;font-weight:700;fill:#f4f8ff}.arrow{fill:none;stroke:#9fb8d8;stroke-width:3;marker-end:url(#arrow)}</style>
+  </defs>
+  <rect width="1440" height="860" rx="22" fill="#0e1829"/>
+  <text x="48" y="61" font-size="36" font-weight="700" fill="#f4f8ff">A stored firmware image is only part of boot</text>
+  <text x="48" y="98" class="body">Configuration availability and fresh registration must be checked separately.</text>
+
+  <rect x="48" y="134" width="380" height="151" rx="16" fill="#173551" stroke="#5bb1e7"/>
+  <text x="72" y="170" class="head">1. Phone flash</text>
+  <text x="72" y="206" class="body">Stored firmware + preferences</text>
+  <text x="72" y="242" class="small">Not proof of TFTP-free registration</text>
+  <path d="M439 210H504" class="arrow"/>
+  <rect x="516" y="134" width="380" height="151" rx="16" fill="#30274d" stroke="#ae91e4"/>
+  <text x="540" y="170" class="head">2. TFTP configuration</text>
+  <text x="540" y="206" class="body">Profile, dial plan, selected assets</text>
+  <text x="540" y="242" class="small">File request ≠ firmware installation</text>
+  <path d="M908 210H969" class="arrow"/>
+  <rect x="980" y="134" width="412" height="151" rx="16" fill="#173b35" stroke="#69cfb0"/>
+  <text x="1004" y="170" class="head">3. SIP registration</text>
+  <text x="1004" y="206" class="body">Verify both lines after this boot</text>
+  <text x="1004" y="242" class="small">Old contacts and web access are not proof</text>
+
+  <rect x="48" y="326" width="1344" height="145" rx="16" fill="#213246" stroke="#5bb1e7"/>
+  <text x="72" y="361" font-size="17" font-weight="700" fill="#94d5ff">CURRENT OPERATION</text>
+  <text x="72" y="397" class="head">Reopen the reviewed restricted window before an authorized reboot</text>
+  <text x="72" y="432" class="body">Exact accepted files → source-limited UDP → reboot → fresh registration → close and verify cleanup</text>
+
+  <rect x="48" y="510" width="850" height="185" rx="16" fill="#25334b" stroke="#ad96e4" stroke-dasharray="9 6"/>
+  <text x="72" y="547" font-size="17" font-weight="700" fill="#cbbbfa">PROPOSED — NOT IMPLEMENTED OR DEPLOYED</text>
+  <text x="72" y="586" class="head">Daily profiles only</text>
+  <text x="72" y="620" class="body">Read-only file allowlist · no firmware volume · one TFTP port owner</text>
+  <text x="72" y="657" class="small">First prove profile-only boot, guarded owner changes and firewall compatibility.</text>
+  <rect x="932" y="510" width="460" height="185" rx="16" fill="#443622" stroke="#dbb26c"/>
+  <text x="956" y="550" class="head">Firmware maintenance</text>
+  <text x="956" y="588" class="body">Separate bounded window</text>
+  <text x="956" y="623" class="small">Never share the same listening ports.</text>
+  <text x="956" y="655" class="small">Keep verified signed components together.</text>
+
+  <rect x="48" y="735" width="1344" height="84" rx="14" fill="#182438"/>
+  <text x="72" y="767" class="body">Keep default DROP rules. The current external-SIP guard requires TFTP closed; migrate that contract first.</text>
+  <text x="72" y="798" class="small">Source IP is not authentication. An allowed phone can request other profiles in a shared TFTP root.</text>
+</svg>

@@ -14,7 +14,8 @@ table inet cisco_voice_guard {
     # If HA Assist is outside the phone LAN over a trusted private VPN, allow
     # only that HA IP to send SIP/RTP here, before the final UDP drop below.
     # ip saddr 10.50.0.30 udp dport { 5060, 10000-10199 } accept
-    # TEMPORARY: remove these two lines after the provisioning window.
+    # TEMPORARY: remove only the source allow below after provisioning.
+    # Keep the following DROP so the closed-window policy still denies TFTP.
     ip saddr 192.168.50.0/24 udp dport { 69, 20000-20031 } accept
     udp dport { 69, 20000-20031 } drop
     # Both IPv4 and IPv6 traffic from every other source is denied.
