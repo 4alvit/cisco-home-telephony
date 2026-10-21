@@ -250,6 +250,23 @@ may preserve intent; uncertain ownership must fault without starting audio.
 
 ## Troubleshooting and rollback
 
+For a failed owned SIP child, the controller attempts to retain one private
+`<sha256(device)>.last-failure.json` in its configured state directory. The file
+is at most 4 KiB, mode `0600`, and replaced by a later failure for that phone.
+It is outside `run-<session_id>` and survives normal run-directory cleanup.
+Check its session ID before associating it with an attempt; successful sessions
+do not erase the previous failure.
+
+The receipt records the report-validation category and bounded child claims.
+A valid `startup_diagnostic` contains fixed runner/AMI stages, an allowlisted
+error reason/type and sanitized AMI action/error categories. It captures the
+startup exception before cleanup. It contains no raw exception text, AMI
+responses, audio, credentials or launch challenge, and is not exposed in public
+status. A missing receipt can mean persistence failed; a retained receipt does
+not prove that the journal write or lease release completed. Neither diagnostics
+nor the receipt authorize cleanup, retry or recovery. Preserve it as private
+incident evidence alongside the authoritative journal.
+
 - **Stuck in `preparing` after AudioSocket connects:** an early SIP build waited
   for server closure while its accepted stream was still open. The
   [startup lifecycle fix](https://github.com/4alvit/cisco-home-telephony/pull/17)

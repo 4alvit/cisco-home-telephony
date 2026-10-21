@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / 'containers/asterisk'), str(ROOT / 'scripts')]
 import phone_voice_control as control
 import phone_voice_transport as transport
-from phone_voice_sip import Session, Wire
+from phone_voice_sip import BoundaryError, Session, Wire
 from phone_voice_sip_ami import AmiPort, LeaseWitness
 from voice_session import SessionProgress, ProgressPlayback
 from voice_assistant.config import build_service
@@ -39,6 +39,40 @@ class DeferredSink:
     async def stop(self, *args):
         if self.target is not None:
             return await self.target.stop(*args)
+
+
+def startup_diagnostic(error, stage, port=None, *, reason=None):
+    """Only fixed categories cross the private child-report boundary."""
+    gateway_error = getattr(getattr(port, 'gateway', None), 'Refused', ())
+    if isinstance(error, BoundaryError):
+        kind = 'BoundaryError'
+        reason = error.args[0] if len(error.args) == 1 else None
+    elif isinstance(error, gateway_error):
+        kind, reason = 'Refused', error.reason
+    elif isinstance(error, TimeoutError):
+        kind = 'TimeoutError'
+    elif isinstance(error, OSError):
+        kind = 'OSError'
+    elif isinstance(error, RuntimeError):
+        kind = 'RuntimeError'
+    else:
+        kind = 'other'
+
+    def fixed(value, allowed):
+        return value if type(value) is str and value in allowed else 'other'
+
+    return {
+        'version': 1,
+        'reason': fixed(reason, control.STARTUP_DIAGNOSTIC_REASONS),
+        'error_type': kind,
+        'stage': fixed(stage, control.STARTUP_DIAGNOSTIC_STAGES),
+        'ami_stage': fixed(getattr(port, 'startup_stage', 'not_started'),
+                           control.STARTUP_DIAGNOSTIC_AMI_STAGES),
+        'ami_action': fixed(getattr(error, 'ami_action', None),
+                            control.STARTUP_DIAGNOSTIC_AMI_ACTIONS),
+        'ami_error': fixed(getattr(error, 'ami_error', None),
+                           control.STARTUP_DIAGNOSTIC_AMI_ERRORS),
+    }
 
 
 async def run(args, config, private, phone, voice):
@@ -66,6 +100,7 @@ async def run(args, config, private, phone, voice):
     stop_waiter = None
     cancelled = False
     signal_handlers = []
+    stage, failure_reason = 'service_build', None
 
     def cleanup_error(reason):
         if reason not in report['cleanup_errors']:
@@ -119,29 +154,38 @@ async def run(args, config, private, phone, voice):
         service = build_service(voice, Path(args.workspace).resolve(), sink,
                                 on_event=event, compressed_decoder=FFmpegDecoder(args.ffmpeg, max_seconds=30))
         service.playback = ProgressPlayback(service.playback, progress)
+        stage = 'authorize_phone'
         service.ensure_allowed(phone['id'])
         if stopped.is_set():
-            raise RuntimeError('stopped_before_start')
+            failure_reason = 'stopped_before_start'
+            raise RuntimeError(failure_reason)
         # Renew on the same port after closed connections enter TIME_WAIT.
         # SO_REUSEPORT stays disabled: an active listener must remain exclusive.
+        stage = 'listener_bind'
         server = await asyncio.start_server(connected, '127.0.0.1', config['bind_port'],
                                             limit=8192, backlog=1, reuse_address=True,
                                             reuse_port=False)
+        stage = 'sip_start'
         grant = await port.start()
         if stopped.is_set():
-            raise RuntimeError('stopped_during_start')
+            failure_reason = 'stopped_during_start'
+            raise RuntimeError(failure_reason)
+        stage = 'peer_accept'
         stop_waiter = asyncio.create_task(stopped.wait())
         done, _ = await asyncio.wait((accepted, stop_waiter),
             timeout=max(0, min(3, grant.deadline - time.monotonic())),
             return_when=asyncio.FIRST_COMPLETED)
         if stopped.is_set():
-            raise RuntimeError('stopped_before_session')
+            failure_reason = 'stopped_before_session'
+            raise RuntimeError(failure_reason)
         if accepted not in done:
-            raise TimeoutError('accept_timeout')
+            failure_reason = 'accept_timeout'
+            raise TimeoutError(failure_reason)
         reader, writer = accepted.result()
         server.close()
         # wait_closed can wait for this accepted transport too. Consume it
         # before waiting for server closure, otherwise both sides can deadlock.
+        stage = 'wire_session'
         wire = Wire(reader, writer, token)
         session = Session(wire, grant, port)
         sink.target = session.sink
@@ -151,8 +195,10 @@ async def run(args, config, private, phone, voice):
             report['error'] = 'voice_session_failed'
     except asyncio.CancelledError:
         cancelled = True
-    except Exception:
+    except Exception as error:
         report['error'] = 'voice_session_failed'
+        # Capture the first cause before cleanup changes the port state.
+        report['startup_diagnostic'] = startup_diagnostic(error, stage, port, reason=failure_reason)
     finally:
         stop()
 
@@ -251,6 +297,7 @@ def main():
     for flag in ('run', 'attended', 'exclusive-media', 'enable-microphone'):
         parser.add_argument('--' + flag, action='store_true')
     args = parser.parse_args()
+    stage = 'inputs_or_initialization'
     try:
         config, private, phone, voice, _ = control._inputs(args.transport_config, args.voice_config, args.workspace)
         if config.get('media_transport') != 'sip_audiosocket':
@@ -258,11 +305,19 @@ def main():
         if not (args.run and args.attended and args.exclusive_media and args.enable_microphone):
             print(json.dumps({'valid': True, 'network_actions': 0, 'microphone_started': False}))
             return 0
+        stage = 'runner_unhandled'
         result = asyncio.run(run(args, config, private, phone, voice))
         print(json.dumps(result, sort_keys=True))
         return 1 if result['error'] or result['cleanup_errors'] else 0
-    except Exception:
-        print(json.dumps({'error': 'voice_session_failed', 'transport': 'sip_audiosocket'}))
+    except Exception as error:
+        # Input/lease initialization can fail before run creates its full report.
+        result = {'error': 'voice_session_failed', 'transport': 'sip_audiosocket',
+                  'startup_diagnostic': startup_diagnostic(error, stage)}
+        try:
+            result['session_id'] = UUID(hex=args.session_id).hex
+        except (ValueError, AttributeError):
+            pass
+        print(json.dumps(result, sort_keys=True))
         return 1
 
 
