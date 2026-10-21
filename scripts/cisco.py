@@ -215,8 +215,12 @@ class Gateway:
 def validate_inventory(data, line=None):
     require(data.get('ami_fresh') is True, 'gateway_ami_not_fresh')
     observed = data.get('observed_at')
-    require(type(observed) in (int, float) and math.isfinite(observed)
-            and -5 <= time.time() - observed <= 90, 'gateway_inventory_stale')
+    try:
+        fresh = (type(observed) in (int, float) and math.isfinite(observed)
+                 and -5 <= time.time() - observed <= 90)
+    except OverflowError:
+        fresh = False
+    require(fresh, 'gateway_inventory_stale')
     phones = data.get('phones')
     require(isinstance(phones, list) and 1 <= len(phones) <= 32, 'invalid_phone_inventory')
     seen, selected = set(), None
