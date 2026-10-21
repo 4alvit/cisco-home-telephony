@@ -12,18 +12,7 @@ and does not automatically restart after Stop, a failure, or expiry. The current
 implementation provides status through the existing gateway, CLI and Home
 Assistant; the XML status-display option must be omitted for this transport.
 
-```mermaid
-flowchart LR
-  P[Phone speakerphone] <-->|SIP / negotiated audio| A[Asterisk]
-  A <-->|Loopback AudioSocket / PCM 16 kHz| W[Voice worker]
-  W --> K[Local wake detector]
-  K --> H[Selected Home Assistant pipeline]
-  H --> B[Selected Baya TTS]
-  B --> W
-  M[Existing gateway owner and journal] --> W
-  M --> S[Exact-session Stop]
-  A --> L[Native phone-channel expiry]
-```
+![Finite SIP speakerphone voice session](diagrams/sip-voice-topology.svg)
 
 ## Deployment boundary
 
@@ -84,11 +73,24 @@ Persistent auto-answer and other phone preferences are unchanged.
 Use the existing CLI configuration and commands; the manager remains the owner:
 
 ```bash
-cisco --json 201 voice start --dry-run --attended --exclusive-media --enable-microphone
-cisco --json 201 voice start --attended --exclusive-media --enable-microphone
+voice_check_key="voice-check-$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+cisco --json 201 voice start --idempotency-key "$voice_check_key" \
+  --dry-run --attended --exclusive-media --enable-microphone
+
+voice_start_key="voice-start-$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+cisco --json 201 voice start --idempotency-key "$voice_start_key" \
+  --attended --exclusive-media --enable-microphone
 cisco --json 201 voice status
 cisco --json 201 voice stop --session-id EXACT_SESSION_ID_FROM_START
 ```
+
+Both validation and live Start require a key. The dry run checks the profile
+without reserving or replaying an operation; separate keys keep it distinct
+from the live request. Keep the live key when retrying the same logical
+operation and exact request; do not rerun its key-generation assignment for
+that retry. After an uncertain response, read status before retrying. Generate
+a new key for each deliberately new Start. The request key is not the session
+ID used by Stop.
 
 Use the existing exact-session Stop operation with the `session_id` returned by
 Start. Do not invoke `voice_session_sip.py` directly: its live mode additionally

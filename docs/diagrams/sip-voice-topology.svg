@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1130" viewBox="0 0 1440 1130" role="img" aria-labelledby="title description">
+  <title id="title">Finite SIP speakerphone voice session</title>
+  <desc id="description">Experimental candidate architecture, with physical qualification pending. Remote CLI or Home Assistant controls the existing gateway owner. A phone uses an ordinary SIP call with Asterisk. Asterisk and the voice worker share one host network namespace and exchange 16 kHz PCM over loopback-only AudioSocket. Local wake detection sends a turn through the selected Home Assistant pipeline, whose speech recognition may use a cloud provider, and selected Baya text to speech returns audio to the worker. Sessions are opt-in, last no more than 300 seconds including setup, never automatically renew, and stop for an exact-session Stop, expiry or a normal call on either phone line.</desc>
+  <defs>
+    <marker id="audio-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#2860b5"/></marker>
+    <marker id="control-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#087f79"/></marker>
+    <marker id="pipeline-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 Z" fill="#7549b5"/></marker>
+    <style>
+      text { font-family: Arial, Helvetica, sans-serif; fill: #18283f; }
+      .title { font-size: 39px; font-weight: 700; }
+      .subtitle { font-size: 19px; fill: #516079; }
+      .label { font-size: 14px; font-weight: 700; letter-spacing: 1.4px; }
+      .card-title { font-size: 25px; font-weight: 700; }
+      .body { font-size: 18px; fill: #3e4f68; }
+      .small { font-size: 16px; fill: #516079; }
+      .link-label { font-size: 17px; font-weight: 700; fill: #2860b5; }
+      .pipeline-label { font-size: 16px; fill: #7549b5; }
+      .audio { fill: none; stroke: #2860b5; stroke-width: 3; marker-start: url(#audio-arrow); marker-end: url(#audio-arrow); }
+      .control { fill: none; stroke: #087f79; stroke-width: 3; stroke-dasharray: 7 6; marker-end: url(#control-arrow); }
+      .pipeline { fill: none; stroke: #7549b5; stroke-width: 3; marker-end: url(#pipeline-arrow); }
+    </style>
+  </defs>
+
+  <rect width="1440" height="1130" fill="#f6f8fc"/>
+  <text x="60" y="73" class="title">Finite SIP speakerphone voice session</text>
+  <text x="60" y="108" class="subtitle">Remote control · local wake detection · selected voice pipeline</text>
+  <rect x="60" y="135" width="1320" height="48" rx="12" fill="#fff2d2" stroke="#e9c777"/>
+  <text x="83" y="165" font-size="18" font-weight="700" fill="#714c00">EXPERIMENTAL · Physical speakerphone and acoustic qualification pending</text>
+
+  <!-- The owner, PBX and worker share the host network namespace. -->
+  <rect x="415" y="214" width="965" height="480" rx="24" fill="#edf3fd" stroke="#a4bce0" stroke-width="2"/>
+  <text x="440" y="246" class="label" fill="#315a92">SAME HOST · SAME NETWORK NAMESPACE</text>
+  <text x="440" y="675" class="small">AudioSocket stays on loopback. No LAN listener or new public endpoint.</text>
+
+  <!-- Remote control never bypasses the existing owner. -->
+  <rect x="60" y="276" width="300" height="110" rx="18" fill="#e4f5f1" stroke="#8ccbbb"/>
+  <text x="82" y="312" class="label" fill="#086c63">REMOTE CONTROL</text>
+  <text x="82" y="345" class="card-title">CLI or Home Assistant</text>
+  <text x="82" y="373" class="small">Start · status · exact-session Stop</text>
+
+  <rect x="450" y="276" width="420" height="110" rx="18" fill="#ffffff" stroke="#8ccbbb" stroke-width="2"/>
+  <text x="472" y="312" class="card-title">Existing gateway owner</text>
+  <text x="472" y="341" class="body">One phone lock · durable session journal</text>
+  <text x="472" y="368" class="small">Owns admission, cancellation and recovery</text>
+  <path d="M 362 330 H 446" class="control"/>
+  <path d="M 872 330 H 1125 V 450" class="control"/>
+  <text x="922" y="311" font-size="17" font-weight="700" fill="#087f79">Owns the finite session</text>
+
+  <!-- Phone media is a normal negotiated SIP call. -->
+  <rect x="60" y="455" width="300" height="180" rx="20" fill="#ffffff" stroke="#9cb5d7" stroke-width="2"/>
+  <rect x="82" y="478" width="42" height="9" rx="4" fill="#2860b5"/>
+  <text x="82" y="524" class="card-title">Phone speakerphone</text>
+  <text x="82" y="556" class="body">An ordinary call while listening</text>
+  <text x="82" y="587" class="small">Temporary speaker activation</text>
+  <text x="82" y="611" class="small">No persistent auto-answer change</text>
+
+  <rect x="470" y="455" width="280" height="180" rx="20" fill="#eaf6ed" stroke="#91c8a1" stroke-width="2"/>
+  <rect x="492" y="478" width="42" height="9" rx="4" fill="#27824a"/>
+  <text x="492" y="524" class="card-title">Asterisk</text>
+  <text x="492" y="557" class="body">Negotiated phone audio</text>
+  <text x="492" y="588" class="small">Native phone-channel deadline</text>
+  <text x="492" y="612" class="small">Exact owned-channel cleanup</text>
+  <path d="M 370 546 H 460" class="audio"/>
+  <text x="415" y="521" text-anchor="middle" class="link-label">SIP</text>
+  <text x="415" y="578" text-anchor="middle" class="small">audio</text>
+
+  <rect x="930" y="455" width="400" height="180" rx="20" fill="#f1eafb" stroke="#b69bd8" stroke-width="2"/>
+  <rect x="952" y="478" width="42" height="9" rx="4" fill="#7549b5"/>
+  <text x="952" y="524" class="card-title">Voice worker</text>
+  <text x="952" y="557" class="body">Bounded capture and reply playback</text>
+  <line x1="952" y1="574" x2="1308" y2="574" stroke="#d3c2e9"/>
+  <text x="952" y="600" font-size="18" font-weight="700" fill="#624095">Local ONNX wake detection</text>
+  <text x="952" y="624" class="small">Successful turn → rearm within this lease</text>
+  <path d="M 762 546 H 919" class="audio"/>
+  <text x="840" y="494" text-anchor="middle" class="link-label">AudioSocket</text>
+  <text x="840" y="519" text-anchor="middle" class="small">PCM16 · 16 kHz</text>
+  <text x="840" y="578" text-anchor="middle" class="small">Loopback only</text>
+
+  <!-- Selected HA processing is outside the host-topology guarantee. -->
+  <path d="M 999 638 V 716 H 800 V 750" class="pipeline"/>
+  <text x="817" y="740" class="pipeline-label">Wake → voice turn</text>
+  <path d="M 1240 750 V 642" class="pipeline"/>
+  <text x="1260" y="728" class="pipeline-label">Reply audio</text>
+
+  <rect x="60" y="755" width="510" height="130" rx="18" fill="#ffffff" stroke="#d7deea"/>
+  <text x="82" y="792" class="label" fill="#516079">PROVIDER BOUNDARY</text>
+  <text x="82" y="824" class="body">Wake detection is local.</text>
+  <text x="82" y="853" class="body">The selected voice pipeline may use cloud STT.</text>
+  <text x="82" y="877" class="small">The transport does not change the chosen pipeline.</text>
+
+  <rect x="640" y="755" width="320" height="130" rx="18" fill="#e6f4fc" stroke="#90c6e3" stroke-width="2"/>
+  <text x="662" y="794" class="card-title">Selected HA pipeline</text>
+  <text x="662" y="830" class="body">Configured STT + conversation</text>
+  <text x="662" y="862" class="small">Uses the explicitly selected provider</text>
+  <path d="M 964 820 H 1034" class="pipeline"/>
+
+  <rect x="1040" y="755" width="340" height="130" rx="18" fill="#fff3dd" stroke="#e5be74" stroke-width="2"/>
+  <text x="1062" y="794" class="card-title">Selected Baya TTS</text>
+  <text x="1062" y="830" class="body">Reply audio returns to the worker</text>
+  <text x="1062" y="862" class="small">Worker → Asterisk → speakerphone</text>
+
+  <!-- Lifecycle guardrails are properties to qualify, not live acceptance. -->
+  <rect x="60" y="931" width="420" height="132" rx="18" fill="#e4f5f1"/>
+  <text x="82" y="970" font-size="22" font-weight="700" fill="#086c63">Opt-in only · no auto-renewal</text>
+  <text x="82" y="1005" class="body">Up to 300 seconds, including setup</text>
+  <text x="82" y="1035" class="small">Expiry or failure requires a fresh Start.</text>
+
+  <rect x="500" y="931" width="420" height="132" rx="18" fill="#f1eafb"/>
+  <text x="522" y="970" font-size="22" font-weight="700" fill="#624095">Exact-session Stop</text>
+  <text x="522" y="1005" class="body">Cancel assistant · close audio · hang up</text>
+  <text x="522" y="1035" class="small">Only verified channels owned by this session</text>
+
+  <rect x="940" y="931" width="440" height="132" rx="18" fill="#eaf0fb"/>
+  <text x="962" y="970" font-size="22" font-weight="700" fill="#315a92">Normal phone calls take priority</text>
+  <text x="962" y="1005" class="body">A call on either line ends the session.</text>
+  <text x="962" y="1035" class="small">Native PBX expiry is independent of the worker.</text>
+
+  <text x="60" y="1103" font-size="16" fill="#516079">Candidate architecture only · not deployment evidence · no always-listening service or automatic session renewal</text>
+</svg>
