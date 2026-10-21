@@ -339,6 +339,38 @@ class ConfigTests(unittest.TestCase):
         self.value.update(gateway_url='http://192.168.50.10', kubectl={}); self.save()
         with self.assertRaises(cisco.Refused): cisco.load_config(self.path)
 
+    def test_config_rejects_empty_base_query_and_fragment_markers(self):
+        with patch('socket.socket', side_effect=AssertionError('network forbidden')) as sockets, \
+                patch('socket.create_connection', side_effect=AssertionError('network forbidden')) as connections, \
+                patch('subprocess.Popen', side_effect=AssertionError('subprocess forbidden')) as processes:
+            try:
+                for suffix in ('?', '#', '/?', '/#'):
+                    with self.subTest(suffix=suffix):
+                        self.value['gateway_url'] = 'http://192.168.50.10' + suffix
+                        self.save()
+                        with self.assertRaises(cisco.Refused) as caught:
+                            cisco.load_config(self.path)
+                        self.assertEqual(caught.exception.reason, 'invalid_private_config')
+            finally:
+                self.assertEqual((sockets.call_count, connections.call_count, processes.call_count), (0, 0, 0))
+
+    def test_config_retains_private_origins_ports_and_root_slash(self):
+        bases = ('http://10.23.45.67', 'https://10.23.45.67:1',
+                 'http://172.16.5.6:65535', 'https://172.31.5.6',
+                 'http://192.168.50.10:8080', 'https://192.168.50.10:443')
+        with patch('socket.socket', side_effect=AssertionError('network forbidden')) as sockets, \
+                patch('socket.create_connection', side_effect=AssertionError('network forbidden')) as connections, \
+                patch('subprocess.Popen', side_effect=AssertionError('subprocess forbidden')) as processes:
+            try:
+                for base in bases:
+                    for suffix in ('', '/'):
+                        with self.subTest(base=base, root_slash=bool(suffix)):
+                            self.value['gateway_url'] = base + suffix
+                            self.save()
+                            self.assertEqual(cisco.load_config(self.path)['gateway_url'], base)
+            finally:
+                self.assertEqual((sockets.call_count, connections.call_count, processes.call_count), (0, 0, 0))
+
 
 class TransportTests(unittest.TestCase):
     def config(self):
