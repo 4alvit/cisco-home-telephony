@@ -2,7 +2,10 @@
 import asyncio
 from contextlib import ExitStack
 from dataclasses import replace
+import errno
+from pathlib import Path
 import signal
+import sys
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -69,6 +72,7 @@ class LoopbackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.servers, self.writers, self.tasks, self.sessions = [], [], [], []
         self.connections = asyncio.Queue()
         self.listening = asyncio.Event()
+        self.bind_port = 0
         self.signals = {}
         self.real_start_server = asyncio.start_server
         self.real_session = runner.Session
@@ -77,8 +81,9 @@ class LoopbackLifecycleTests(unittest.IsolatedAsyncioTestCase):
             return_value=SimpleNamespace(verify=lambda: None)))
         self.stack.enter_context(patch.object(runner, 'SessionProgress',
             return_value=SimpleNamespace(turns_completed=0, publish=lambda *args: None)))
-        self.stack.enter_context(patch.object(runner, 'AmiPort', return_value=self.port))
-        self.stack.enter_context(patch.object(runner, 'build_service', return_value=self.assistant))
+        self.stack.enter_context(patch.object(runner, 'AmiPort', side_effect=lambda *args: self.port))
+        self.stack.enter_context(patch.object(runner, 'build_service',
+            side_effect=lambda *args, **kwargs: self.assistant))
         self.stack.enter_context(patch.object(runner.transport, '_gateway_module', return_value=None))
         self.stack.enter_context(patch.object(runner.asyncio, 'start_server', side_effect=self.serve))
         self.stack.enter_context(patch.object(runner, 'Session', side_effect=self.make_session))
@@ -120,7 +125,7 @@ class LoopbackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.stack.close()
 
     async def serve(self, callback, host, port, **kwargs):
-        self.assertEqual((host, port), ('127.0.0.1', 0))
+        self.assertEqual((host, port), ('127.0.0.1', self.bind_port))
         self.assertEqual(kwargs['limit'], 8192)
         self.assertEqual(kwargs['backlog'], 1)
 
@@ -142,7 +147,7 @@ class LoopbackLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     def launch(self):
         task = asyncio.create_task(runner.run(self.args,
-            {'line': '201', 'bind_port': 0}, {}, {'id': '201'}, {}))
+            {'line': '201', 'bind_port': self.bind_port}, {}, {'id': '201'}, {}))
         self.tasks.append(task)
         return task
 
@@ -190,6 +195,58 @@ class LoopbackLifecycleTests(unittest.IsolatedAsyncioTestCase):
                          packet(0x12, bytes(640)) * report['silence_frames'])
         self.assertEqual(report['output_frames'], report['silence_frames'])
         self.assertEqual(report['turns_completed'], 0)
+
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux TCP TIME_WAIT regression')
+    async def test_completed_session_rebinds_same_port_in_time_wait(self):
+        for attempt in range(2):
+            self.listening.clear()
+            if attempt:
+                self.port, self.assistant = LifecyclePort(), LifecycleAssistant()
+            task = self.launch()
+            reader, writer, _, _ = await self.connect()
+            self.bind_port = self.address[1]
+            peer_port = writer.get_extra_info('sockname')[1]
+            writer.write(packet(1, TOKEN.bytes) + packet(0x12, FRAME) + packet(3, b'#'))
+            await writer.drain()
+            report = await self.finished(task)
+            self.assertEqual(report['result']['reason'], 'dtmf_stop')
+            self.assertIsNone(report['error'])
+            self.assertEqual(report['cleanup_errors'], [])
+            self.assertTrue(report['pbx_call_absent'])
+            self.assertTrue(self.assistant.close_completed)
+            self.assertEqual(self.assistant.frames, [FRAME])
+            # The runner closes first; only then close the peer so the server
+            # endpoint, rather than the client endpoint, enters TIME_WAIT.
+            await asyncio.wait_for(reader.read(), 1)
+            writer.close()
+            await asyncio.wait_for(writer.wait_closed(), 1)
+            if attempt == 0:
+                local = f'0100007F:{self.bind_port:04X}'
+                remote = f'0100007F:{peer_port:04X}'
+                for _ in range(100):
+                    rows = [line.split() for line in Path('/proc/net/tcp').read_text().splitlines()[1:]]
+                    if any(row[1:4] == [local, remote, '06'] for row in rows):
+                        break
+                    await asyncio.sleep(.01)
+                else:
+                    self.fail('first runner connection did not reach server-side TIME_WAIT')
+
+    async def test_active_listener_cannot_be_replaced_on_same_port(self):
+        task = self.launch()
+        await asyncio.wait_for(self.listening.wait(), 1)
+        try:
+            replacement = await self.real_start_server(
+                lambda reader, writer: writer.close(), *self.address,
+                reuse_address=True, reuse_port=False)
+        except OSError as error:
+            self.assertEqual(error.errno, errno.EADDRINUSE)
+        else:
+            replacement.close()
+            await asyncio.wait_for(replacement.wait_closed(), 1)
+            self.fail('active runner listener was replaced')
+        self.assertFalse(task.done())
+        self.signals[signal.SIGTERM]()
+        self.assert_startup_cleaned(await self.finished(task))
 
     async def test_paused_reader_with_106496_bytes_and_peer_eof_cleans_start_failure(self):
         self.port.release.clear()
