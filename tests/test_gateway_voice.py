@@ -143,6 +143,41 @@ class GatewayVoiceTests(unittest.TestCase):
         for flag in ('attended', 'exclusive_media', 'enable_microphone', 'dry_run'):
             self.assertIs(self.voice.start.call_args.kwargs[flag], True)
 
+    def test_playback_metadata_requires_explicit_status_query_for_ha_compatibility(self):
+        self.attach()
+        counters = dict(playback_requests=4, tts_offers=3, empty_playbacks=1,
+                        incomplete_playbacks=1, completed_pcm_bytes=1280)
+        value = dict(voice_status(), playback=counters)
+        for operation in ('status', 'start', 'stop'):
+            getattr(self.voice, operation).return_value = value
+        for operation, body in (('status', {}),
+                ('start', {'idempotency_key': 'synthetic-start', 'attended': True,
+                           'exclusive_media': True, 'enable_microphone': True}),
+                ('stop', {'idempotency_key': 'synthetic-stop', 'session_id': 'a' * 32})):
+            handler = self.handler(operation, method='GET' if operation == 'status' else 'POST',
+                                   body=b'' if operation == 'status' else json.dumps(body).encode())
+            handler.do_GET()
+            self.assertEqual(handler.reply.call_args.args[0], 200)
+            self.assertNotIn('playback', handler.reply.call_args.args[1]['voice'])
+        handler = self.handler('status?include_playback=1')
+        handler.do_GET()
+        self.assertEqual(handler.reply.call_args.args[0], 200)
+        self.assertEqual(handler.reply.call_args.args[1]['voice']['playback'], counters)
+        self.assertEqual(value['playback'], counters)  # Never alter the manager's snapshot.
+
+    def test_playback_query_is_read_only_exact_and_authenticated(self):
+        self.attach()
+        for operation in ('start?include_playback=1', 'stop?include_playback=1',
+                          'status?include_playback=0', 'status?include_playback=1&extra=1',
+                          'status?include_playback=1&include_playback=1'):
+            handler = self.handler(operation)
+            handler.do_GET()
+            self.assertIn(handler.reply.call_args.args[0], (400, 404))
+        handler = self.handler('status?include_playback=1', headers=[])
+        handler.do_GET()
+        self.assertEqual(handler.reply.call_args.args[0], 403)
+        self.assertEqual(self.voice.method_calls, [])
+
     def test_source_and_bearer_denial_precede_dispatch(self):
         self.attach()
         for headers, source in (([], '192.168.50.11'),

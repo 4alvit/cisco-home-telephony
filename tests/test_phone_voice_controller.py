@@ -421,7 +421,11 @@ class QueuedPlaybackCancellationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(sent, [])
             self.assertEqual(session.state, 'active')
             release.set()
-            await asyncio.wait_for(task, 1)
+            if playback_type is RtpPCMSink:
+                with self.assertRaises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, 1)
+            else:
+                await asyncio.wait_for(task, 1)
             self.assertEqual(sent, [])
             self.assertEqual(sink.frames_sent, 0)
 
