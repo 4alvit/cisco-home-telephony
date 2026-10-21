@@ -6,7 +6,8 @@ import stat
 import unittest
 from unittest import mock
 
-from tests.test_phone_voice_control import ControlFixture, PRIVATE_MARKER, control
+from tests.test_phone_voice_control import (
+    ControlFixture, PRIVATE_MARKER, completed_report, control, no_media_report)
 
 
 def diagnostic():
@@ -270,6 +271,34 @@ class StartupReceiptTests(ControlFixture):
             self.assertIsNotNone(session.handle)
         finally:
             manager._current[session.profile.phone_id] = original
+
+
+class XmlReceiptIsolationTests(ControlFixture):
+    def test_xml_failures_keep_only_the_owner_journal_and_existing_cleanup_result(self):
+        for index, outcome in enumerate(('failed', 'recovery_required', 'no_media')):
+            with self.subTest(outcome=outcome):
+                self.configuration['state_directory'] = '.local/xml-diagnostics-' + str(index)
+                self.write_inputs()
+                manager = self.make_control()
+                state = self.start(manager)
+                session = manager._sessions[state['session_id']]
+                self.assertEqual(session.profile.media_transport, 'xml_rtp')
+                if outcome == 'no_media':
+                    report = no_media_report(session.session_id, session.launch_challenge)
+                else:
+                    report = completed_report('assistant_error', confirmed=outcome == 'failed')
+                    report['error'] = 'voice_session_failed'
+                self.runners[-1].finish(report, code=1)
+                manager.tick()
+                clean = outcome != 'recovery_required'
+                self.assertEqual(session.state, 'failed' if clean else 'recovery_required')
+                self.assertEqual(session.cleanup_verified, clean)
+                self.assertEqual(manager._journal(session.profile)['reserved'], not clean)
+                self.assertEqual(session.stop_confirmed, outcome == 'failed')
+                self.assertIsNone(session.handle)
+                self.assertEqual(list(manager.config.state_directory.glob('*.json')),
+                                 [manager._paths(session.profile)[1]])
+                self.assertEqual(list(manager.config.state_directory.glob('*.last-failure.json')), [])
 
 
 if __name__ == '__main__':

@@ -250,7 +250,7 @@ may preserve intent; uncertain ownership must fault without starting audio.
 
 ## Troubleshooting and rollback
 
-For a failed owned child, the controller attempts to retain one private
+For a failed owned SIP child, the controller attempts to retain one private
 `<sha256(device)>.last-failure.json` in its configured state directory. The file
 is at most 4 KiB, mode `0600`, and replaced by a later failure for that phone.
 It is outside `run-<session_id>` and survives normal run-directory cleanup.

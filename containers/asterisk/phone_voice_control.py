@@ -956,7 +956,8 @@ class VoiceControl:
 
     def _save_failure(self, s, raw, report, *, cleanup_evidence_verified):
         """Best-effort, bounded diagnostic evidence; never a recovery authority."""
-        if s.state not in ('failed', 'recovery_required'):
+        if (s.profile.media_transport != 'sip_audiosocket'
+                or s.state not in ('failed', 'recovery_required')):
             return
         temporary = None
         try:
