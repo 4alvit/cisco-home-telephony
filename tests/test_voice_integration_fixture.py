@@ -180,6 +180,98 @@ class IntegratedFixtureTests(unittest.TestCase):
 
 class FixtureSafetyTests(unittest.TestCase):
     @unittest.skipIf(sys.version_info < (3, 11), "Standalone fixture requires Python 3.11+")
+    def test_failed_scenario_keeps_terminal_state_and_worker_report_before_cleanup(self):
+        expected = fixture.FixtureCoordinator._expected_cli_exit
+
+        def reject_terminal_failure(scenario, code, response):
+            if response["voice"]["state"] == "failed":
+                return False
+            return expected(scenario, code, response)
+
+        with mock.patch.object(fixture.FixtureCoordinator, "_expected_cli_exit",
+                               new=staticmethod(reject_terminal_failure)):
+            summary = fixture.run_fixture(scenario="provider-failure", timeout_seconds=30)
+        self.assertFalse(summary["success"])
+        self.assertEqual(summary["error"], "unexpected_cli_exit")
+        self.assertEqual(summary["runs"], [])
+        terminal = summary["cli_commands"][-1]
+        self.assertEqual((terminal["exit_code"], terminal["status"]), (1, "ok"))
+        self.assertEqual(terminal["voice"]["state"], "failed")
+        self.assertEqual(terminal["voice"]["error"], "voice_session_failed")
+        self.assertEqual(terminal["voice"]["phase"], "error")
+        self.assertFalse(terminal["voice"]["active"])
+        self.assertTrue(terminal["voice"]["stop_confirmed"])
+        self.assertEqual(len(summary["worker_diagnostics"]), 1)
+        worker = summary["worker_diagnostics"][0]
+        self.assertEqual((worker["scenario"], worker["process_exit"], worker["report_state"]),
+                         ("provider-failure", 1, "available"))
+        self.assertEqual(worker["error"], "voice_session_failed")
+        self.assertEqual(worker["reason"], "assistant_error")
+        self.assertEqual(worker["cleanup_errors"], [])
+        self.assertTrue(worker["stop_confirmed"])
+        self.assertTrue(worker["watchdog_stop_confirmed"])
+        self.assertGreater(worker["input_frames"], 0)
+        self.assertEqual(worker["output_frames"], 0)
+        self.assertNotIn("run_snapshots_removed", summary["checks"])
+        self.assertEqual(summary["snapshot_observation"], {"checked": True, "remaining_count": 0})
+        self.assertTrue(all(summary["cleanup"].values()), summary)
+        self.assertEqual(summary["cleanup_errors"], [])
+
+    def test_retained_snapshot_is_observed_before_workspace_cleanup(self):
+        coordinator = fixture.FixtureCoordinator("complete", 30)
+        try:
+            retained = coordinator.local / "owner" / "run-synthetic"
+            retained.mkdir(parents=True, mode=0o700)
+        finally:
+            coordinator.cleanup()
+        summary = coordinator.summary
+        self.assertNotIn("run_snapshots_removed", summary["checks"])
+        self.assertEqual(summary["snapshot_observation"], {"checked": True, "remaining_count": 1})
+        self.assertFalse(summary["cleanup"]["run_snapshots_removed"])
+        self.assertTrue(summary["cleanup"]["workspace_removed"])
+        self.assertFalse(retained.exists())
+        self.assertFalse(summary["success"])
+
+    def test_failure_diagnostics_are_bounded_allowlisted_and_path_free(self):
+        coordinator = fixture.FixtureCoordinator("complete", 30)
+        marker = "synthetic-private-report-detail"
+        try:
+            voice = coordinator._voice_diagnostic({
+                "state": "recovery_required", "error": "voice_stop_unconfirmed",
+                "phase": "error", "phase_reason": "shutdown", "active": False,
+                "stop_requested": True, "stop_confirmed": False,
+                "session_id": marker, "phone": marker, "token": marker,
+            })
+            self.assertEqual(set(voice), {"state", "error", "phase", "phase_reason", "active",
+                                          "stop_requested", "stop_confirmed"})
+            self.assertEqual(coordinator._voice_diagnostic({
+                "state": marker, "error": marker, "phase": marker, "phase_reason": marker,
+                "active": marker, "stop_requested": 1, "stop_confirmed": 0}), {})
+            handle = mock.Mock(overflow=False)
+            handle.poll.return_value = 1
+            handle.read_result.return_value = json.dumps({
+                "error": marker, "token": marker, "output_frames": 10 ** 50,
+                "cleanup_errors": ["assistant_cleanup_failed", marker],
+                "result": {"reason": marker, "input_frames": True, "stop_confirmed": False},
+            }).encode()
+            launch = {"scenario": "complete", "handle": handle}
+            diagnostic = coordinator._worker_diagnostic(launch)
+            self.assertEqual(diagnostic["report_state"], "available")
+            self.assertEqual(diagnostic["error"], "unrecognized")
+            self.assertEqual(diagnostic["reason"], "unrecognized")
+            self.assertEqual(diagnostic["cleanup_errors"], ["assistant_cleanup_failed", "unrecognized"])
+            self.assertNotIn("output_frames", diagnostic)
+            self.assertNotIn("input_frames", diagnostic)
+            self.assertNotIn(marker, json.dumps([voice, diagnostic]))
+            for raw in (None, b"invalid", b"x" * (fixture.DIAGNOSTIC_REPORT_LIMIT + 1)):
+                handle.read_result.return_value = raw
+                row = coordinator._worker_diagnostic(launch)
+                self.assertEqual(row["report_state"], "unavailable" if raw is None else "invalid")
+                self.assertNotIn("error", row)
+        finally:
+            coordinator.cleanup()
+
+    @unittest.skipIf(sys.version_info < (3, 11), "Standalone fixture requires Python 3.11+")
     def test_http_thread_start_failure_closes_unstarted_listener_without_shutdown_wait(self):
         original_load = fixture.load_module
         original_start = threading.Thread.start
