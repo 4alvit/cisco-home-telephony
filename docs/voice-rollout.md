@@ -3,7 +3,10 @@
 This implementation uses the **unmodified SIP45 firmware** on a Cisco 7945G.
 The phone supplies microphone/speaker RTP and renders a small XML interface;
 the local host runs the wake detector and Home Assistant connection. It is a
-bounded, foreground pilot, not an unattended always-listening service.
+finite, explicitly started prototype, not an unattended always-listening service.
+Use the [operator quickstart](voice-quickstart.md) for the updated phone-menu
+and CLI flow. The observations below retain their original scope and do not
+claim that the newer multi-turn revision is deployed or physically accepted.
 
 ![Stock-phone voice architecture and acceptance boundaries](diagrams/voice-rollout.svg)
 
@@ -13,7 +16,9 @@ bounded, foreground pilot, not an unattended always-listening service.
   reordering, explicit stream ownership and a separate cleanup supervisor.
 - A controller connecting 8 kHz phone PCM to 16 kHz wake/STT input, with a
   per-phone permission check before hardware activation, call preemption,
-  input inactivity timeout, explicit Stop and an absolute 30-second ceiling.
+  input inactivity timeout, explicit Stop and a configured absolute ceiling of
+  at most 300 seconds. Manual mode handles one turn; a configured wake mode
+  can rearm after successful replies within the original deadline.
 - Manual activation and the exact frozen EchoMuse ONNX frontend. The private
   classifier, model files, phrase and manifest remain outside Git.
 - Home Assistant Assist WebSocket input, conversation continuity within an
@@ -22,7 +27,8 @@ bounded, foreground pilot, not an unattended always-listening service.
 - An English status display with a generated avatar, one replaceable frame,
   source-restricted HTTP routes, expiring session URLs and a Stop softkey.
 - Optional session Start, status and exact-session Stop through the existing
-  gateway, `cisco LINE voice`, phone Applications and the companion HA action.
+  gateway, `cisco LINE voice`, **Home Phone Apps → Voice Assistant** and the
+  companion HA action.
   See [voice control setup](voice-control.md); these require the matching
   runtime and private registry, not just an updated client.
 - An offline firmware inspector and video-to-still converter. Neither changes
@@ -94,6 +100,18 @@ The earlier base-model candidate was fast but misrecognized both codec
 fixtures; its failed quality gate is retained in the
 [recognition record](local-stt.md). Existing default HA pipelines were preserved.
 
+## Finite-session acceptance still required
+
+The updated controls expose session phase, fixed phase reason and completed-turn
+count when the owning runner supplies them. `running` is not wake readiness,
+and a software-completed reply is not proof of audible output. For the new
+revision, record two distinct spoken requests and audible replies within one
+wake session, return to readiness, measured reply latency, explicit Stop and
+ordinary-call preemption. Verify the selected speech backend and voice at
+deployment; a friendly pipeline name or an earlier Baya test is insufficient.
+No cross-Start conversation memory, barge-in, permanent listening or ten-phone
+acoustic acceptance is claimed.
+
 ## Install and prepare
 
 Use the [voice CLI installation guide](voice-cli-install.md) for a local
@@ -109,7 +127,7 @@ inbound converter. These checks complement the physical acceptance below;
 neither activates a phone.
 
 Keep two private configuration files. The transport file selects a provisioned
-line, its hosting phone, the local bind address/ports and a short lease. The
+line, its hosting phone, the local bind address/ports and a finite lease. The
 assistant file selects the exact HA pipeline and explicit per-phone permission.
 Both example files are intentionally inert and contain synthetic values:
 
@@ -153,7 +171,11 @@ Deploy these files together; independently upgrading one layer is unsupported.
 
 ## Stop, ownership and failure behavior
 
-Use the on-screen **Stop** control or Ctrl-C in the foreground command.
+Use the live screen's **Stop**, or Ctrl-C when using the foreground
+`cisco-voice` runner. For a gateway-owned session, `cisco LINE voice stop`
+reads the current owned session and sends an exact-ID Stop; explicit
+`--session-id` targeting remains available. Exiting the ordinary `cisco`
+client does not stop that remote session.
 The controller also stops for either line becoming busy, a stale/failed AMI
 observation, input inactivity, a provider error or lease expiry. A fresh
 explicit command is required after Stop. No restart policy or reconnect path

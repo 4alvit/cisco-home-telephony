@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="730" viewBox="0 0 1120 730" role="img" aria-labelledby="title desc">
 <title id="title">A private, bounded wake assistant on stock Cisco phones</title>
-<desc id="desc">An optional public-code image receives privately staged wake models. A suspended k3s Job shares the gateway's durable phone reservation. RTP connects the phone to the local assistant pipeline. Stop and the time limit end the session.</desc>
+<desc id="desc">An optional public-code image receives privately staged wake models. A suspended k3s Job shares the gateway's durable phone reservation. RTP connects the phone to the selected assistant pipeline. Recognition may use a cloud provider. Successful replies may rearm within one fixed deadline; Stop and the time limit end the session.</desc>
 <defs>
  <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#91a7c5"/></marker>
  <style>text{font-family:Arial,sans-serif;fill:#eef4ff}.title{font-size:28px;font-weight:700}.head{font-size:20px;font-weight:700}.body{font-size:16px}.small{font-size:14px;fill:#c1cfe2}.arrow{stroke:#91a7c5;stroke-width:2;fill:none;marker-end:url(#arrow)}.box{stroke-width:2;rx:16}</style>
@@ -9,7 +9,7 @@
 <text x="42" y="51" class="title">Wake assistant · private models · one deliberate session</text>
 <text x="42" y="80" class="body" fill="#c1cfe2">Stock firmware stays in place. The server supplies recognition and speech.</text>
 <rect x="42" y="112" width="315" height="134" class="box" fill="#183552" stroke="#59b4ef"/>
-<text x="63" y="146" class="head">Verified optional image</text>
+<text x="63" y="146" class="head">Optional voice image</text>
 <text x="63" y="178" class="body">Public code + NumPy + ONNX</text>
 <text x="63" y="205" class="small">No credentials, phrase or model weights</text>
 <text x="63" y="228" class="small">Immutable image and source receipt</text>
@@ -30,7 +30,7 @@
 <text x="366" y="345" class="head">Suspended wake Job</text>
 <text x="366" y="376" class="body">Explicit start → verify → reserve → listen</text>
 <text x="366" y="405" class="small">Read-only staged models · no automatic retry</text>
-<text x="366" y="428" class="small">One session · no rearm · maximum 30 seconds</text>
+<text x="366" y="428" class="small">Up to 5 minutes · optional successful rearm</text>
 <rect x="42" y="315" width="251" height="128" class="box" fill="#3e3425" stroke="#f3bf64"/>
 <text x="63" y="350" class="head">Gateway + wake Job</text>
 <text x="63" y="379" class="body">Same durable phone lock</text>
@@ -47,10 +47,10 @@
 <text x="64" y="605" class="small">XML status screen + Stop softkey</text>
 <rect x="409" y="508" width="298" height="131" class="box" fill="#263c36" stroke="#77d5b4"/>
 <text x="430" y="545" class="head">Wake + Assist</text>
-<text x="430" y="575" class="body">Frozen frontend → local STT</text>
-<text x="430" y="605" class="small">Selected conversation model</text>
+<text x="430" y="575" class="body">Local wake → selected STT</text>
+<text x="430" y="605" class="small">STT may be local or cloud</text>
 <rect x="758" y="508" width="320" height="131" class="box" fill="#24344c" stroke="#a48cf0"/>
-<text x="779" y="545" class="head">Local speech reply</text>
+<text x="779" y="545" class="head">Speech reply</text>
 <text x="779" y="575" class="body">TTS → decode → paced RTP</text>
 <text x="779" y="605" class="small">Acoustic acceptance still matters</text>
 <path d="M551 448 V508" class="arrow"/>

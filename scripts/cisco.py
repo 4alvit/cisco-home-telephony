@@ -24,7 +24,16 @@ COMMANDS = {
     'alert': 'alert timer|alarm', 'alert_stop': 'stop-alert [--alert-id ID]',
 }
 VOICE_COMMANDS = ['voice status', 'voice start --idempotency-key KEY --attended --exclusive-media --enable-microphone',
-                  'voice stop --session-id ID']
+                  'voice stop [--session-id ID]']
+VOICE_PHASES = frozenset(('preparing', 'armed', 'listening', 'thinking', 'speaking', 'stopped', 'error'))
+VOICE_PHASE_REASONS = frozenset((
+    'model_warmup', 'wake_ready', 'new_session', 'turn_complete', 'user_stop',
+    'explicit_stop', 'display_stop', 'shutdown', 'lease_expired', 'session_finished',
+    'transport_stopped', 'receive_idle_timeout', 'voice_session_failed', 'turn_timeout',
+    'turn_failed', 'audio_backpressure', 'wake_inference_failed', 'playback_stop_failed',
+    'speech_start', 'end_of_speech', 'no_speech', 'utterance_limit',
+    'audio_not_received', 'turn_cancelled', 'duplicate_activation', 'call',
+    'start_failed', 'assistant_error'))
 VOICE_PUBLIC_ERRORS = frozenset((
     'voice_state_unavailable', 'voice_owner_unavailable', 'voice_start_failed',
     'voice_start_uncertain', 'voice_signal_failed', 'voice_session_failed',
@@ -530,12 +539,29 @@ def voice_status(value):
     remaining = value.get('remaining_seconds')
     # Bound integers before float conversion inside isfinite: a hostile large
     # JSON integer must produce the same safe refusal as any malformed status.
-    require(type(remaining) in (int, float) and 0 <= remaining <= 30 and math.isfinite(remaining),
+    require(type(remaining) in (int, float) and 0 <= remaining <= 300 and math.isfinite(remaining),
             'invalid_voice_response')
     result = {key: value[key] for key in ('schema_version', 'phone', 'line', 'session_id', 'state',
               'active', 'remaining_seconds', 'stop_requested', 'stop_confirmed')}
     if isinstance(value.get('error'), str) and value['error'] in VOICE_PUBLIC_ERRORS:
         result['error'] = value['error']
+    for field in ('phase', 'phase_reason', 'turns_completed', 'mode', 'session_seconds'):
+        if field not in value:
+            continue
+        item = value[field]
+        if field == 'phase':
+            valid = item is None or isinstance(item, str) and item in VOICE_PHASES
+        elif field == 'phase_reason':
+            item = item if isinstance(item, str) and item in VOICE_PHASE_REASONS else None
+            valid = True
+        elif field == 'turns_completed':
+            valid = type(item) is int and 0 <= item <= 10000
+        elif field == 'mode':
+            valid = isinstance(item, str) and item in ('manual', 'wake')
+        else:
+            valid = type(item) in (int, float) and 0 < item <= 300 and math.isfinite(item)
+        require(valid, 'invalid_voice_response')
+        result[field] = item
     return result
 
 
@@ -544,16 +570,31 @@ def voice_command(args, config, *, on_dispatch=None):
     operation = args.voice_action
     path = '/v1/phones/' + args.extension + '/voice_'
     key = None
+    session_id = getattr(args, 'session_id', None)
+    response = None
     if operation == 'stop':
-        require(re.fullmatch(r'[0-9a-f]{32}', args.session_id), 'unknown_voice_session')
+        if session_id is None:
+            response = client.request(path + 'status')
+            require(isinstance(response, dict) and response.get('status') == 'ok', 'invalid_voice_response')
+            current = voice_status(response.get('voice'))
+            if (current['state'] == 'external_owner'
+                    or current.get('error') == 'voice_owner_unavailable'):
+                return {'status': 'unavailable', 'action': 'voice_stop', 'voice': current,
+                        'selected_line': args.extension, 'session_id': current['session_id'],
+                        'gateway_stop_available': False, 'reason': 'voice_owner_unavailable',
+                        'note': VOICE_EXTERNAL_OWNER_NOTE}
+            session_id = current['session_id']
+        require(isinstance(session_id, str) and re.fullmatch(r'[0-9a-f]{32}', session_id),
+                'unknown_voice_session')
     read_only = operation == 'status' or operation == 'stop' and args.dry_run
     if read_only:
-        response = client.request(path + 'status')
+        if response is None:
+            response = client.request(path + 'status')
         require(isinstance(response, dict) and response.get('status') == 'ok', 'invalid_voice_response')
     else:
         key = args.idempotency_key
         if operation == 'stop' and key is None:
-            key = 'voice-stop-' + args.session_id
+            key = 'voice-stop-' + session_id
         require(isinstance(key, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{8,128}', key),
                 'voice_request_id_required')
         body = {'idempotency_key': key}
@@ -562,7 +603,7 @@ def voice_command(args, config, *, on_dispatch=None):
                     'explicit_voice_start_required')
             body.update(attended=True, exclusive_media=True, enable_microphone=True, dry_run=args.dry_run)
         else:
-            body['session_id'] = args.session_id
+            body['session_id'] = session_id
         if not args.dry_run and on_dispatch is not None:
             client.on_dispatch = lambda: on_dispatch(key)
         response = client.request(path + operation, body)
@@ -575,7 +616,7 @@ def voice_command(args, config, *, on_dispatch=None):
         require(type(value.get('schema_version')) is int and value['schema_version'] == 1
                 and value.get('valid') is True and value.get('microphone_started') is False
                 and type(value.get('network_actions')) is int and value['network_actions'] == 0
-                and type(duration) in (int, float) and 0 < duration <= 30 and math.isfinite(duration)
+                and type(duration) in (int, float) and 0 < duration <= 300 and math.isfinite(duration)
                 and isinstance(value.get('phone'), str) and re.fullmatch(r'2[0-9]{2}', value['phone'])
                 and value.get('line') == args.extension, 'invalid_voice_response')
         return {'status': 'dry_run', 'action': 'voice_start', 'action_id': key,
@@ -589,14 +630,14 @@ def voice_command(args, config, *, on_dispatch=None):
     guidance = ({'gateway_stop_available': False, 'reason': 'voice_owner_unavailable',
                  'note': VOICE_EXTERNAL_OWNER_NOTE} if external_owner else {})
     if operation == 'stop':
-        require(value['session_id'] == args.session_id, 'voice_session_changed')
+        require(value['session_id'] == session_id, 'voice_session_changed')
         if args.dry_run:
             if external_owner:
                 return {'status': 'unavailable', 'action': 'voice_stop',
-                        'session_id': args.session_id, 'selected_line': args.extension,
+                        'session_id': session_id, 'selected_line': args.extension,
                         'voice': value, **guidance}
             return {'status': 'dry_run', 'action': 'voice_stop',
-                    'session_id': args.session_id, 'selected_line': args.extension}
+                    'session_id': session_id, 'selected_line': args.extension}
     elif operation == 'start':
         require(value['session_id'] is not None, 'invalid_voice_response')
     result = {'status': 'ok' if operation == 'status' else 'accepted', 'voice': value}
@@ -605,6 +646,54 @@ def voice_command(args, config, *, on_dispatch=None):
     if key is not None:
         result['action_id'] = key
     return result
+
+
+def voice_readiness(value):
+    if value['stop_confirmed']:
+        return 'Session ended; cleanup confirmed.'
+    if value['stop_requested'] or value['state'] == 'stopping':
+        return 'Stop requested; waiting for cleanup confirmation.'
+    if not value['active']:
+        return ('No active session.' if value['state'] == 'idle'
+                else 'Session is not running; cleanup is unconfirmed.')
+    return {
+        'preparing': 'Preparing; wait before speaking.',
+        'armed': 'Wake listener ready; say the wake phrase.',
+        'listening': 'Listening; speak now.',
+        'thinking': 'Processing your request; please wait.',
+        'speaking': 'Playing the reply.',
+        'stopped': 'Session ended; waiting for cleanup confirmation.',
+        'error': 'Voice processing failed; check Stop confirmation.',
+    }.get(value.get('phase'), 'Readiness not reported; use the live assistant screen.')
+
+
+def display_voice(result, args):
+    value = result['voice']
+    print('Voice: ' + value['state'])
+    print('Phone: ' + value['phone'] + '; session line: ' + value['line'])
+    print('Session: ' + (value['session_id'] or 'none'))
+    print('Remaining: ' + str(value['remaining_seconds']) + ' seconds')
+    print('Readiness: ' + voice_readiness(value))
+    if 'mode' in value:
+        print('Mode: ' + value['mode'])
+    if 'session_seconds' in value:
+        print('Session limit: ' + str(value['session_seconds']) + ' seconds')
+    if 'turns_completed' in value:
+        print('Turns completed: ' + str(value['turns_completed']))
+    print('Stop requested: ' + str(value['stop_requested']))
+    print('Stop confirmed: ' + str(value['stop_confirmed']))
+    for field, label in (('error', 'Reason'), ('phase_reason', 'Phase reason')):
+        if value.get(field):
+            print(label + ': ' + value[field])
+    if 'action_id' in result:
+        print('Action: ' + result['action_id'])
+    if result.get('gateway_stop_available') is False:
+        print('Gateway Stop available: False')
+        print(result['note'])
+    elif value['session_id'] and not value['stop_confirmed']:
+        prefix = ['cisco', '--config', args.config, '--timeout', str(args.timeout), args.extension, 'voice']
+        print('Stop this session: ' + shlex.join([*prefix, 'stop', '--session-id', value['session_id']]))
+        print('Refresh status: ' + shlex.join([*prefix, 'status']))
 
 
 def global_options(p, *, inherited=False):
@@ -695,7 +784,7 @@ def parser():
     voice_start = voice_sub.add_parser('start', help='Requires --idempotency-key and all explicit microphone gates')
     for flag in ('attended', 'exclusive-media', 'enable-microphone'):
         voice_start.add_argument('--' + flag, action='store_true')
-    voice_sub.add_parser('stop').add_argument('--session-id', required=True)
+    voice_sub.add_parser('stop', help='Stop the current session, or an exact supplied session ID').add_argument('--session-id')
     for command_parser in dict.fromkeys(sub.choices.values()):
         global_options(command_parser, inherited=True)
     for command_parser in (*timer_sub.choices.values(), *alarm_sub.choices.values(), *voice_sub.choices.values()):
@@ -827,17 +916,7 @@ def main(argv=None):
             if args.json or 'voice' not in result:
                 print(json.dumps(result, sort_keys=True))
             else:
-                value = result['voice']
-                print('Voice: ' + value['state'])
-                print('Session: ' + (value['session_id'] or 'none'))
-                print('Stop confirmed: ' + str(value['stop_confirmed']))
-                if value.get('error'):
-                    print('Reason: ' + value['error'])
-                if 'action_id' in result:
-                    print('Action: ' + result['action_id'])
-                if result.get('gateway_stop_available') is False:
-                    print('Gateway Stop available: False')
-                    print(result['note'])
+                display_voice(result, args)
             return int(result.get('gateway_stop_available') is False
                        or result.get('voice', {}).get('state') in {
                 'failed', 'recovery_required', 'external_owner'})

@@ -33,14 +33,15 @@ def dry_value():
 
 class VoiceCLITests(unittest.TestCase):
     def invoke(self, args, *, value=None, envelope=None, failure=None, prefix=None,
-               line='202', human=False):
+               line='202', human=False, response_values=None):
         calls = []
         def request(path, body=None):
             calls.append((path, copy.deepcopy(body)))
             if failure:
                 raise failure
             result = {'status': 'ok' if body is None else 'accepted',
-                      'voice': status_value() if value is None else value}
+                      'voice': (response_values[len(calls) - 1] if response_values is not None
+                                else status_value() if value is None else value)}
             if body is not None:
                 result['action_id'] = body['idempotency_key']
             return result if envelope is None else envelope
@@ -208,7 +209,7 @@ class VoiceCLITests(unittest.TestCase):
         self.assertTrue(calls[0][1]['dry_run'])
         bad = ({'schema_version': True}, {'valid': 1}, {'network_actions': False},
                {'network_actions': 0.0}, {'microphone_started': 0}, {'duration_seconds': 0},
-               {'duration_seconds': 31}, {'duration_seconds': 10 ** 1000},
+               {'duration_seconds': 301}, {'duration_seconds': 10 ** 1000},
                {'duration_seconds': float('nan')}, {'line': '201'})
         for changes in bad:
             with self.subTest(field=next(iter(changes))):
@@ -272,6 +273,95 @@ class VoiceCLITests(unittest.TestCase):
     def test_dynamic_commands_only_advertise_configured_voice_capability(self):
         self.assertNotIn('voice status', cisco.commands({'capabilities': []}))
         self.assertIn('voice status', cisco.commands({'capabilities': ['voice']}))
+
+    def test_optional_phase_fields_and_five_minute_bounds_preserve_old_status(self):
+        for phase in (*sorted(cisco.VOICE_PHASES), None):
+            value = dict(status_value(), state='running', active=True, stop_requested=False,
+                         stop_confirmed=False, remaining_seconds=300, phase=phase,
+                         phase_reason='wake_ready', turns_completed=10000,
+                         mode='wake', session_seconds=300)
+            code, result, calls = self.invoke(['status'], value=value)
+            self.assertEqual(code, 0)
+            for field in ('phase', 'phase_reason', 'turns_completed', 'mode', 'session_seconds'):
+                self.assertEqual(result['voice'][field], value[field])
+            self.assertEqual(len(calls), 1)
+        code, result, _ = self.invoke(self.start_args(dry=True),
+                                      value=dict(dry_value(), duration_seconds=300))
+        self.assertEqual((code, result['status']), (0, 'dry_run'))
+
+    def test_optional_phase_fields_reject_malformed_values_and_filter_reason(self):
+        for field, values in {
+            'phase': (PRIVATE, [], False), 'mode': (None, 'onnx', False),
+            'turns_completed': (None, False, -1, 1.0, 10001, 10 ** 1000),
+            'session_seconds': (None, False, 0, 301, float('nan'), 10 ** 1000),
+            'remaining_seconds': (301,),
+        }.items():
+            for value in values:
+                with self.subTest(field=field, kind=type(value).__name__):
+                    code, result, _ = self.invoke(['status'], value=dict(status_value(), **{field: value}))
+                    self.assertEqual((code, result['reason']), (1, 'invalid_voice_response'))
+                    self.assertNotIn(PRIVATE, json.dumps(result))
+        for reason in (PRIVATE, {'private': PRIVATE}, [], False, None):
+            code, result, _ = self.invoke(['status'], value=dict(status_value(), phase_reason=reason))
+            self.assertEqual(code, 0)
+            self.assertIsNone(result['voice']['phase_reason'])
+            self.assertNotIn(PRIVATE, json.dumps(result))
+        for reason in ('audio_not_received', 'turn_cancelled', 'duplicate_activation',
+                       'call', 'start_failed', 'assistant_error'):
+            code, result, _ = self.invoke(['status'], value=dict(status_value(), phase_reason=reason))
+            self.assertEqual(code, 0)
+            self.assertEqual(result['voice']['phase_reason'], reason)
+
+    def test_human_phase_guidance_and_exact_stop_command_preserve_config(self):
+        value = dict(status_value(), state='running', active=True, stop_requested=False,
+                     stop_confirmed=False, phase='listening', phase_reason='speech_start',
+                     turns_completed=2, mode='wake', session_seconds=180, remaining_seconds=90)
+        prefix = ['--config', 'private config/voice.json', '--timeout', '7']
+        code, output, calls = self.invoke(['status'], prefix=prefix, human=True, value=value)
+        self.assertEqual(code, 0)
+        self.assertIn('Listening; speak now.', output)
+        self.assertIn('Turns completed: 2', output)
+        self.assertIn('Phone: 201; session line: 202', output)
+        stop = next(line.removeprefix('Stop this session: ') for line in output.splitlines()
+                    if line.startswith('Stop this session: '))
+        self.assertEqual(shlex.split(stop), ['cisco', *prefix, '202', 'voice', 'stop', '--session-id', SESSION])
+        self.assertEqual(len(calls), 1)
+        for update in ({'stop_requested': True}, {'state': 'stopped', 'active': False, 'stop_confirmed': True}):
+            _, output, _ = self.invoke(['status'], human=True, value=dict(value, **update))
+            self.assertNotIn('speak now', output)
+        _, output, _ = self.invoke(['status'], human=True,
+                                  value=dict(value, phase=None, phase_reason=None))
+        self.assertIn('Readiness not reported', output)
+
+    def test_stop_without_id_reads_once_then_posts_exact_captured_session(self):
+        for dry in (False, True):
+            with self.subTest(dry_run=dry):
+                code, result, calls = self.invoke(['stop', *(['--dry-run'] if dry else [])])
+                self.assertEqual(code, 0)
+                self.assertEqual(calls[0], ('/v1/phones/202/voice_status', None))
+                self.assertEqual(len(calls), 1 if dry else 2)
+                if not dry:
+                    self.assertEqual(calls[1], ('/v1/phones/202/voice_stop', {
+                        'session_id': SESSION, 'idempotency_key': 'voice-stop-' + SESSION}))
+                else:
+                    self.assertEqual(result['session_id'], SESSION)
+
+    def test_stop_without_id_never_mutates_idle_or_external_owner(self):
+        for state, session in (('idle', None), ('external_owner', SESSION)):
+            value = dict(status_value(), state=state, session_id=session, stop_confirmed=False)
+            code, result, calls = self.invoke(['stop'], value=value)
+            self.assertEqual(code, 1)
+            self.assertEqual(calls, [('/v1/phones/202/voice_status', None)])
+            self.assertNotIn('action_id', result)
+        self.assertFalse(result['gateway_stop_available'])
+
+    def test_stop_without_id_never_rebinds_after_session_race(self):
+        code, result, calls = self.invoke(['stop'], response_values=[
+            status_value(), dict(status_value(), session_id='b' * 32)])
+        self.assertEqual((code, result['reason']), (1, 'voice_session_changed'))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1][1]['session_id'], SESSION)
+        self.assertEqual(calls[1][1]['idempotency_key'], 'voice-stop-' + SESSION)
 
 
 class VoiceTransportReasonTests(unittest.TestCase):
@@ -382,7 +472,7 @@ class VoiceOutcomeTests(unittest.TestCase):
     def test_read_only_and_dry_run_errors_are_not_reported_as_physical_dispatch(self):
         start, _key = self.mutations()[0]
         for args in (['status'], [*start, '--dry-run'],
-                     ['stop', '--session-id', SESSION, '--dry-run']):
+                     ['stop', '--session-id', SESSION, '--dry-run'], ['stop'], ['stop', '--dry-run']):
             with self.subTest(args=args):
                 code, result, http, _child = self.invoke(
                     args, worker=[{'ok': False, 'reason': 'network_outcome_unknown'}])
@@ -402,6 +492,16 @@ class VoiceOutcomeTests(unittest.TestCase):
             self.assertNotIn('action_id', result)
             self.assertEqual(http.call_count, 0)
             self.assertEqual(child.call_count, 0)
+
+    def test_current_session_stop_lost_reply_keeps_captured_key_without_retry(self):
+        code, result, http, child = self.invoke(['stop'], worker=[
+            {'ok': True, 'data': {'status': 'ok', 'voice': status_value()}},
+            {'ok': False, 'reason': 'network_outcome_unknown'}])
+        self.assertEqual(code, 1)
+        self.assert_uncertain(result, 'voice-stop-' + SESSION)
+        self.assertEqual((http.call_count, child.call_count), (2, 0))
+        self.assertEqual(http.call_args_list[0].args[0]['body'], None)
+        self.assertEqual(http.call_args_list[1].args[0]['body']['session_id'], SESSION)
 
 
 if __name__ == '__main__':

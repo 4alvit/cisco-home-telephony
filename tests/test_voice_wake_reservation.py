@@ -261,15 +261,23 @@ class ReservationTests(unittest.TestCase):
         self.assertNotIn("a" * 48, json.dumps(gateway))
         self.assertEqual({path.name for path in snapshot.iterdir()},
                          {"voice.json", "gateway.json", "transport.json", "ha-token.txt"})
+        command = self.launches[-1][0]
+        self.assertEqual(command[command.index("--status-file") + 1], str(snapshot / "progress.json"))
+        self.assertEqual(wake.inputs.profile.mode, "wake")
+        self.assertIs(wake.inputs.profile.rearm_after_turn, False)
 
-    def test_owner_lease_is_30_seconds_and_killed_child_cannot_confirm_cleanup(self):
+    def test_300_second_rearming_lease_keeps_fixed_deadline_and_kill_grace(self):
+        self.transport["duration_seconds"] = 300
+        self.voice["service"]["rearm_after_turn"] = True
+        self.write(self.local / "transport.json", self.transport)
+        self.write(self.local / "voice.json", self.voice)
         wake = self.manager()
         self.start(wake)
         child = self.children[-1]
-        self.now = 129.99
+        self.now = 399.99
         wake.tick()
         self.assertEqual(child.terminations, 0)
-        self.now = 130.0
+        self.now = 400.0
         wake.tick()
         self.assertEqual(child.terminations, 1)
         self.now += control.STOP_GRACE_SECONDS
@@ -290,8 +298,8 @@ class ReservationTests(unittest.TestCase):
             self.manager()
         self.assertFalse(self.state.exists())
 
-    def test_rearm_long_lease_and_state_symlink_are_rejected(self):
-        self.transport["duration_seconds"] = 31
+    def test_excess_lease_and_state_symlink_are_rejected(self):
+        self.transport["duration_seconds"] = 301
         self.write(self.local / "transport.json", self.transport)
         with self.assertRaises(ValueError):
             self.manager()
@@ -299,12 +307,40 @@ class ReservationTests(unittest.TestCase):
         self.write(self.local / "transport.json", self.transport)
         self.voice["service"]["rearm_after_turn"] = True
         self.write(self.local / "voice.json", self.voice)
-        with self.assertRaisesRegex(control.ControlError, "bounded_wake"):
-            self.manager()
+        wake = self.manager()
+        self.assertIs(wake.inputs.voice["service"]["rearm_after_turn"], True)
+        self.assertEqual(self.launches, [])
         self.args.state_directory = str(self.local / "alias")
         (self.local / "alias").symlink_to(self.state, target_is_directory=True)
         with self.assertRaisesRegex(control.ControlError, "symlink"):
             self.manager()
+
+    def test_long_rearming_snapshot_keeps_models_and_stop_does_not_wait_for_lease(self):
+        self.transport["duration_seconds"] = 300
+        self.voice["service"]["rearm_after_turn"] = True
+        self.voice["ha"]["device_id"] = "synthetic-originating-cisco-device"
+        self.write(self.local / "transport.json", self.transport)
+        self.write(self.local / "voice.json", self.voice)
+        model_hashes = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                        for path in self.models.iterdir()}
+        wake = self.manager()
+        value = self.start(wake)
+        snapshot = next(self.state.glob("run-*"))
+        voice = json.loads((snapshot / "voice.json").read_text())
+        config = json.loads((snapshot / "transport.json").read_text())
+        self.assertIs(voice["service"]["rearm_after_turn"], True)
+        self.assertEqual(voice["wake"]["mode"], "onnx")
+        self.assertEqual(voice["ha"]["device_id"], "synthetic-originating-cisco-device")
+        self.assertEqual(config["duration_seconds"], 300)
+        self.assertEqual(model_hashes, {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                                      for path in self.models.iterdir()})
+        self.now += 1
+        wake.stop("201", value["session_id"], context=None)
+        self.assertEqual(self.children[-1].terminations, 1)
+        self.assertEqual(self.children[-1].kills, 0)
+        self.assertEqual(len(self.launches), 1)
+        self.finish(wake, report(reason="explicit_stop"))
+        self.assertTrue(wake.result_summary("202")["cleanup_success"])
 
     def test_completion_and_clean_stop_have_different_success_semantics(self):
         for index, reason in enumerate(("turn_complete", "display_stop", "explicit_stop", "shutdown",
@@ -327,6 +363,41 @@ class ReservationTests(unittest.TestCase):
         result = wake.result_summary("202")
         self.assertTrue(result["cleanup_success"])
         self.assertFalse(result["turn_success"])
+
+    def test_completed_rearming_turns_survive_clean_stop_or_lease_expiry(self):
+        self.voice["service"]["rearm_after_turn"] = True
+        self.write(self.local / "voice.json", self.voice)
+        for index, reason in enumerate(("explicit_stop", "display_stop", "shutdown", "lease_expired")):
+            with self.subTest(reason=reason):
+                wake = self.manager()
+                self.start(wake, "rearm-result-" + str(index))
+                value = json.loads(report(reason=reason))
+                value["turns_completed"] = 2
+                self.finish(wake, json.dumps(value).encode())
+                result = wake.result_summary("202")
+                self.assertTrue(result["cleanup_success"])
+                self.assertTrue(result["turn_success"])
+                self.assertEqual(result["turns_completed"], 2)
+                self.assertEqual(result["reason"], reason)
+
+    def test_invalid_turn_count_or_failed_cleanup_cannot_claim_completed_reply(self):
+        for index, count in enumerate((True, -1, 10001, "2")):
+            with self.subTest(count=count):
+                wake = self.manager()
+                self.start(wake, "bad-count-" + str(index))
+                value = json.loads(report(reason="lease_expired"))
+                value["turns_completed"] = count
+                self.finish(wake, json.dumps(value).encode())
+                result = wake.result_summary("202")
+                self.assertTrue(result["cleanup_success"])
+                self.assertFalse(result["turn_success"])
+                self.assertEqual(result["turns_completed"], 0)
+        wake = self.manager()
+        self.start(wake, "unconfirmed-count")
+        value = json.loads(report(confirmed=False, reason="lease_expired"))
+        value["turns_completed"] = 2
+        self.finish(wake, json.dumps(value).encode())
+        self.assertFalse(wake.result_summary("202")["turn_success"])
 
     def test_readonly_configuration_with_writable_state_supports_real_child_validation(self):
         # Directory permissions model the renderer's RO runtime plus RW state

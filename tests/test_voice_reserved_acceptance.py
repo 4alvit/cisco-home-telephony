@@ -149,7 +149,8 @@ class ReservedScenarios(unittest.TestCase):
         child = result["child"]
         self.assertIs(result["turn_success"], False)
         self.assertEqual(result["wrapper"]["exit_code"], 1)
-        self.assertEqual(child["entrypoint_exit_code"], 1)
+        self.assertEqual(child["entrypoint_exit_code"], 0)
+        self.assertEqual(child["turns_completed"], 0)
         self.assertGreaterEqual(child["detector_frames"], child["minimum_silence_frames"])
         self.assertGreater(child["decoded_input_bytes"], 0)
         self.assertIs(child["decoded_input_nonzero"], False)
@@ -165,6 +166,8 @@ class ReservedScenarios(unittest.TestCase):
                 child = result["child"]
                 self.assertIs(result["turn_success"], False)
                 self.assertEqual(result["wrapper"]["exit_code"], 1)
+                self.assertEqual(child["entrypoint_exit_code"], 1 if scenario == "ha-timeout" else 0)
+                self.assertEqual(child["turns_completed"], 0)
                 self.assertEqual(child["ha_sessions"], 1)
                 self.assertGreater(child["ha_audio_bytes"], 0)
                 self.assertEqual(child["ha_eos"], 1)
@@ -177,7 +180,7 @@ class ReservedScenarios(unittest.TestCase):
         expired = self.results["slow-ha"]["child"]
         self.assertEqual(timed_out["reason"], "assistant_error")
         self.assertIn("turn_timeout", timed_out["assistant_errors"])
-        self.assertIn(expired["reason"], ("shutdown", "lease_expired", "transport_stopped"))
+        self.assertIn(expired["reason"], ("shutdown", "lease_expired"))
         self.assertNotEqual(expired["reason"], timed_out["reason"])
 
     def test_fixture_rescue_cannot_make_failed_child_cleanup_acceptable(self):

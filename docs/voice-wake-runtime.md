@@ -112,13 +112,14 @@ existing small Secret. [Kubernetes Secret size limit](https://kubernetes.io/docs
 
 Set the selected assistant profile's `wake.mode` to `onnx` and
 `wake.bundle_file` to the staged manifest. Keep the model threshold unchanged
-from its qualification receipt. A wake-capable image alone does not make the
-manual-only deployment renderers accept ONNX profiles; use the corresponding
-wake Job renderer and reviewed private volume configuration.
+from its qualification receipt. For repeatable phone/CLI Start, use the
+[gateway renderer with a model PVC](voice-gateway-deployment.md#enable-repeatable-wake-sessions).
+The separately owned wake Job remains available for bounded acceptance attempts.
 
 Keep the bounded foreground session and visible Stop control. No background
-listening, automatic rearm or restart behavior is added by this image. A full
-speech test must still verify the linked microphone → wake → local STT →
+listening starts merely by installing this image. A configured finite wake session
+may rearm after successful playback; Stop, error and expiry do not restart it. A full
+speech test must still verify the linked microphone → wake → selected STT →
 conversation → speech playback path on the chosen physical phone.
 
 ## Diagnose a failed build or start

@@ -115,7 +115,7 @@ def load_inputs(args) -> Inputs:
     phone = phones[0]
     validate_config(voice)
     settings = ServiceSettings(**voice["service"])
-    control._require(settings.enabled and not settings.rearm_after_turn
+    control._require(settings.enabled
                      and voice["phones"] == {phone["id"]: True}
                      and voice["wake"]["mode"] == "onnx", "bounded_wake_profile_required")
     _, raw_token = read(voice["ha"]["token_file"], 8192)
@@ -148,6 +148,7 @@ def load_inputs(args) -> Inputs:
         phone["id"], tuple(phone["lines"]), phone["device"], phone["ipv4"],
         transport_path, voice_path, float(config["duration_seconds"]),
         config["bind_ipv4"], config["bind_port"], port,
+        mode="wake", rearm_after_turn=settings.rearm_after_turn,
     )
     return Inputs(workspace, state, profile, config, gateway, voice, token, fingerprints)
 
@@ -193,7 +194,7 @@ class ReservedWakeControl(control.VoiceControl):
                          "wake_inputs_changed")
         config, gateway, voice = copy.deepcopy((latest.transport, latest.gateway, latest.voice))
         phone = next(item for item in gateway["phones"] if item["id"] == profile.phone_id)
-        self._check_profile(profile, config, phone)
+        self._check_profile(profile, config, phone, voice)
         directory = self.config.state_directory / ("run-" + session.session_id)
         directory.mkdir(mode=0o700)
         session.directory = directory
@@ -218,6 +219,7 @@ class ReservedWakeControl(control.VoiceControl):
             "--transport-config", str(directory / "transport.json"),
             "--voice-config", str(directory / "voice.json"),
             "--workspace", str(self.config.workspace), "--ffmpeg", self.config.ffmpeg_executable,
+            "--status-file", str(directory / "progress.json"),
             "--run", "--attended", "--exclusive-media", "--enable-microphone",
         ]
         if profile.display_port is not None:
@@ -229,9 +231,15 @@ class ReservedWakeControl(control.VoiceControl):
         # conversation completed. Keep that protocol and distinguish the two
         # outcomes in this one-shot command's result.
         reason, exit_code = "result_unavailable", session.handle.poll()
+        turns, valid_count = 0, True
         try:
             if type(raw) is bytes and len(raw) <= control.MAX_REPORT and not session.handle.overflow:
                 value = json.loads(raw)
+                if "turns_completed" in value:
+                    turns = value["turns_completed"]
+                    valid_count = type(turns) is int and 0 <= turns <= 10000
+                    if not valid_count:
+                        turns = 0
                 candidate = value["result"]["reason"]
                 if candidate in ("turn_complete", "explicit_stop", "display_stop", "shutdown",
                                  "lease_expired", "receive_idle_timeout", "assistant_error",
@@ -242,15 +250,22 @@ class ReservedWakeControl(control.VoiceControl):
         super()._finish(session, raw)
         cleanup = (session.stop_confirmed and session.lease_fd < 0
                    and session.state in ("stopped", "failed"))
-        complete = cleanup and session.state == "stopped" and reason == "turn_complete" and exit_code == 0
+        # A rearming session normally ends on Stop or its original deadline.
+        # Clean shutdown alone is not evidence that any reply completed.
+        replied = (reason == "turn_complete" or turns > 0 and reason in
+                   ("explicit_stop", "display_stop", "shutdown", "lease_expired"))
+        complete = (cleanup and session.state == "stopped" and exit_code == 0
+                    and valid_count and replied)
         self.outcomes[session.session_id] = {
             "cleanup_success": cleanup, "turn_success": complete, "reason": reason,
+            "turns_completed": turns,
         }
 
     def result_summary(self, line):
         value = self.status(line, context=None)
         outcome = self.outcomes.get(value["session_id"], {
             "cleanup_success": False, "turn_success": False, "reason": "result_unavailable",
+            "turns_completed": 0,
         })
         return {"success": outcome["turn_success"], **outcome, "voice": value}
 

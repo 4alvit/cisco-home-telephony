@@ -1,5 +1,9 @@
 # Install and run the foreground voice CLI
 
+For an already deployed gateway, use the [phone/CLI quickstart](voice-quickstart.md).
+This guide installs the separate foreground `cisco-voice` runner, whose terminal
+owns the session. The ordinary `cisco` client controls a gateway-owned session.
+
 `cisco-voice` runs [`scripts/voice_session.py`](../scripts/voice_session.py)
 from a stable checkout using a selected Python interpreter. It validates
 configuration by default. A live invocation runs one attended, bounded voice
@@ -219,8 +223,8 @@ In `.local/phone-voice-transport.json`:
   32768 for `bind_port` and `phone_rtp_port`. Do not reuse a documentation
   address or guess the phone's transmit source port.
 - Keep `duration_seconds` short for a first trial; the controller permits at
-  most 30 seconds including setup. `receive_idle_seconds` permits at most
-  10 seconds without accepted microphone audio. Start playback volume low.
+  most 300 seconds including setup, wake waiting, requests and playback.
+  `receive_idle_seconds` permits at most 10 seconds without accepted microphone audio. Start playback volume low.
   Leave `expected_source_port` null unless a specific source port has been
   established for this phone.
 
@@ -236,9 +240,10 @@ In `.local/voice/config.json`:
   from the gateway inventory, with value `true`. This can differ from the
   selected `line` when that line is the phone's second line.
 - Set `service.enabled` to `true` only when preparing an authorized trial.
-  Keep `rearm_after_turn` false for this foreground workflow. Retain bounded
-  utterance and turn settings; a longer HA timeout does not extend the
-  transport's 30-second limit.
+  Keep `rearm_after_turn` false for manual mode. A reviewed ONNX wake profile
+  may enable it to accept another wake phrase after a successful reply in the
+  same session. Retain bounded utterance and turn settings; a longer HA timeout
+  does not extend the transport's configured deadline, at most 300 seconds.
 - Set the private HA `base_url`, an explicitly reviewed Assist `pipeline_id`,
   and a `token_file` path. Put the existing HA token in that private file using
   your editor or secret tooling, with access restricted to your user. A
@@ -312,18 +317,31 @@ requests capture shutdown. No shared gateway restart or deployment is
 performed. See [the display guide](voice-display.md) for screen, refresh and
 expiry limits; a page still visible on the phone does not prove audio is live.
 
+The runner requests a display lifetime of
+`max(5, ceil(duration_seconds) + 30)` seconds: at most 330 seconds for a
+300-second session. The display module accepts up to 360 seconds; its standalone
+default remains 120 seconds. Display expiry is not the session lease and does
+not establish microphone closure.
+
 For private wake mode, change only the reviewed private configuration to
 `wake.mode: "onnx"` and provide its frozen bundle under `.local/`. Follow the
 [bundle contract](local-voice-assistant.md#exact-private-onnx-bundle), including
 all three models, digests and matching frontend. ONNX mode waits for local
-detection within this same short attended session. It is not a background
-service, an infinite listening mode or proof of telephony wake accuracy.
-There is no automatic rearm after a stop or failure.
+detection within the same finite attended session. Wait for actual microphone
+history to finish warming the detector and for the wake-ready invitation before
+saying the phrase. With `rearm_after_turn: true`, a successful reply returns to
+wake listening; say the phrase again for the next request. The original deadline
+is not renewed. Stop, failure, call preemption and expiry never rearm.
+
+This is not a background service or proof of telephony wake accuracy.
+Conversation context belongs to this running session and does not persist
+across separate `cisco-voice` invocations.
 
 ## Stop, inspect and keep the result private
 
-Press **Ctrl+C** in the foreground terminal to request cancellation. The
-controller attempts remote capture/playback Stop and cancels the Assist turn;
+Press **Ctrl+C** in the foreground terminal or the live screen's **Stop** to
+request cancellation. This differs from the gateway client: exiting an ordinary
+`cisco` command does not stop its gateway-owned session. The controller attempts remote capture/playback Stop and cancels the Assist turn;
 the independent watchdog also handles owned or uncertain streams. Allow
 cleanup to finish. A second terminal close or process kill is not a substitute
 for confirming that the phone stopped.
@@ -344,8 +362,9 @@ and any `watchdog_stop_confirmed`, `watchdog_finished` and stop-error fields.
 No recording or transcript log is created by this command, but the configured
 HA providers have their own data handling.
 
-Exit zero requires a completed turn and a confirmed Stop path in the current
-CLI. A deliberate Ctrl+C can return nonzero even after successful cleanup;
+Inspect completed-turn information separately from the terminal reason and
+confirmed Stop path. A deliberate Ctrl+C or session expiry can return nonzero
+even after an earlier successful reply and successful cleanup;
 an error or nonzero result is not permission for an automatic retry. Keep run
 output under `.local/` if retaining it and record physical observations
 separately. The complete acoustic HA conversation path, sustained wake accuracy,

@@ -104,9 +104,11 @@ def render(site, transport_config, gateway_config, voice_config, token, bundle, 
         (site, transport_config, gateway_config, voice_config))
     manual.validate_voice_config(voice)
     require(voice["wake"]["mode"] == "onnx", "onnx_profile_required")
-    common = copy.deepcopy(voice)
-    common["wake"]["mode"] = "manual"
-    phone = manual._validate(site, transport, gateway, common, token, display_port)
+    phone = manual._validate(site, transport, gateway, voice, token, display_port,
+                             wake_mode="onnx")
+    # Retain preparation/finish time beyond the fixed media lease, with the
+    # previous 120-second floor. SIGTERM cleanup grace remains independent.
+    active_deadline = max(120, math.ceil(transport["duration_seconds"]) + 90)
     bundle = models._validate_bundle(bundle)
     require(isinstance(name, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,29}[a-z0-9]|[a-z]", name),
             "invalid_job_name")
@@ -149,6 +151,7 @@ def render(site, transport_config, gateway_config, voice_config, token, bundle, 
         "files": files, "image": voice_image, "claim": models_claim,
         "state": state_host_path, "site": site, "display": display_port,
         "name": name, "prepare": PREPARE, "stage": STAGE,
+        "active_deadline_seconds": active_deadline,
     })[:16]
     labels = {"app": "phone-wake-pilot", "app.kubernetes.io/part-of": "cisco-home-telephony",
               "wake-pilot-revision": revision}
@@ -217,7 +220,7 @@ def render(site, transport_config, gateway_config, voice_config, token, bundle, 
         "metadata": {"name": name + "-" + revision, "namespace": namespace, "labels": labels},
         "spec": {"suspend": True, "parallelism": 1, "completions": 1, "backoffLimit": 0,
                  "podReplacementPolicy": "Failed",
-                 "activeDeadlineSeconds": 120, "ttlSecondsAfterFinished": 300,
+                 "activeDeadlineSeconds": active_deadline, "ttlSecondsAfterFinished": 300,
                  "template": {"metadata": {"labels": labels}, "spec": pod}},
     }
     return {"apiVersion": "v1", "kind": "List", "items": [secret, job]}

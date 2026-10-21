@@ -266,7 +266,7 @@ class VoiceMenuTests(unittest.TestCase):
         for change in ({'schema_version': True}, {'phone': '203'}, {'line': '204'}, {'state': []},
                        {'active': 1}, {'stop_confirmed': 'yes'}, {'session_id': None},
                        {'remaining_seconds': float('nan')}, {'remaining_seconds': 10 ** 1000},
-                       {'remaining_seconds': 31}, {'error': 'private token'}, {'transcript': 'private'}):
+                       {'remaining_seconds': 301}, {'error': 'private token'}, {'transcript': 'private'}):
             with self.subTest(change=change):
                 self.gateway.value = status(**change)
                 with self.assertRaises(apps.AppError) as raised:
@@ -279,6 +279,55 @@ class VoiceMenuTests(unittest.TestCase):
         self.gateway.response_filter = lambda result: {**result, 'voice': status(session_id='b' * 32)}
         with self.assertRaises(apps.AppError):
             self.get('/voice-stop', 'line=202&session=' + 'a' * 32)
+
+    def test_phase_and_budget_show_readiness_without_changing_ownership(self):
+        self.gateway._voice_profiles = (SimpleNamespace(phone_id='201', duration=300),)
+        phases = {'preparing': 'wait before speaking', 'armed': 'say the wake phrase',
+                  'listening': 'speak now', 'thinking': 'Processing your request',
+                  'speaking': 'Playing the reply', 'stopped': 'waiting for cleanup',
+                  'error': 'check Stop confirmation'}
+        for phase, message in phases.items():
+            with self.subTest(phase=phase):
+                self.gateway.value = status(phase=phase, phase_reason='new_session', mode='wake',
+                                            turns_completed=2, remaining_seconds=300, session_seconds=300)
+                root = self.get()
+                self.assertIn(message, root.find('Text').text)
+                self.assertIn('Turns completed: 2', root.find('Text').text)
+                self.assertIn('300s', root.find('Prompt').text)
+                self.assertIn('session=' + 'a' * 32, self.key(root, 'Stop'))
+        self.assertEqual([row[1] for row in self.gateway.voice_calls], ['status'] * len(phases))
+        root = self.get('/voice-start')
+        self.assertIn('Microphone <=300s', root.find('MenuItem/Name').text)
+        self.assertEqual(len(self.gateway.voice_calls), len(phases))
+
+    def test_stop_and_absent_phase_never_claim_ready(self):
+        for updates in ({'stop_requested': True}, {'state': 'stopping'},
+                        {'stop_confirmed': True}):
+            self.gateway.value = status(phase='listening', **updates)
+            root = self.get()
+            self.assertNotIn('speak now', root.find('Text').text)
+        self.gateway.value = status(phase=None, phase_reason=None)
+        self.assertIn('not a readiness signal', self.get().find('Text').text)
+
+    def test_optional_phase_metadata_rejects_invalid_fields_without_leaking(self):
+        cases = {'phase': ('private transcript', [], False), 'mode': (None, 'onnx', False),
+                 'turns_completed': (None, False, -1, 1.0, 10001, 10 ** 1000),
+                 'session_seconds': (None, False, 0, 301, float('nan'), 10 ** 1000)}
+        for field, values in cases.items():
+            for value in values:
+                with self.subTest(field=field, kind=type(value).__name__):
+                    self.gateway.value = status(**{field: value})
+                    with self.assertRaises(apps.AppError) as caught:
+                        self.get()
+                    self.assertEqual(caught.exception.reason, 'voice_response_invalid')
+        for reason in ('private transcript', {'private': 'secret'}, [], False, None):
+            self.gateway.value = status(phase='listening', phase_reason=reason)
+            value = self.app.voice('201', '202')
+            self.assertIsNone(value['phase_reason'])
+            self.assertNotIn('private', str(value))
+        for reason in apps.VOICE_PHASE_REASONS:
+            self.gateway.value = status(phase='listening', phase_reason=reason)
+            self.assertEqual(self.app.voice('201', '202')['phase_reason'], reason)
 
 
 if __name__ == '__main__':
