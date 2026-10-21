@@ -14,7 +14,7 @@ from uuid import UUID
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'containers/asterisk'))
-from phone_voice_sip import BoundaryError
+from phone_voice_sip import BoundaryError, Channel, Grant, focus
 from phone_voice_sip_ami import AmiPort, LeaseWitness
 from phone_voice_sip_dialplan import render_dialplan
 from tests.test_phone_voice_control import ControlFixture, control
@@ -243,6 +243,65 @@ class AmiTests(unittest.IsolatedAsyncioTestCase):
                     witness.verify()
             finally:
                 os.close(fd)
+
+
+class SnapshotTests(unittest.TestCase):
+    def setUp(self):
+        self.gateway = Gateway()
+        self.port = AmiPort(self.gateway, {'ami': {}}, PHONE, '201', SESSION, 1299, 24576,
+                            Witness(), clock=lambda: 100, wall_clock=lambda: 1000)
+        self.channel = {'Channel': 'PJSIP/201-0001', 'Uniqueid': '99.1',
+                        'Linkedid': self.gateway.root, 'ChannelStateDesc': 'Up'}
+        self.grant = Grant(SESSION, '201', Channel('PJSIP/201-0001', '99.1', '201'), 99, 110)
+
+    def snapshot(self, endpoints, channels=None):
+        with self.gateway.AMI({}) as ami:
+            ami.snapshot = lambda: (endpoints, [self.channel] if channels is None else channels)
+            self.port._snapshot(ami)
+        return self.port.snapshot()
+
+    def test_known_conflict_blocks_even_owned_only_channel_snapshot(self):
+        for line in PHONE['lines']:
+            for state in ('Ringing', 'Ring+Inuse', 'Busy', 'On Hold'):
+                with self.subTest(line=line, state=state):
+                    endpoints = {'201': 'In use', '202': 'Not in use', line: state}
+                    snapshot = self.snapshot(endpoints)
+                    self.assertTrue(snapshot.registered)
+                    self.assertTrue(snapshot.conflicting_call_state)
+                    self.assertEqual(snapshot.channels, (self.grant.channel,))
+                    self.assertEqual(focus(self.grant, snapshot, 100), 'call_changed')
+
+    def test_unknown_missing_or_unavailable_line_takes_priority_over_ringing(self):
+        for line in PHONE['lines']:
+            for state in ('Unknown', 'Unavailable', 'Invalid', None):
+                with self.subTest(line=line, state=state):
+                    endpoints = {'201': 'Ringing', '202': 'Ringing'}
+                    if state is None:
+                        del endpoints[line]
+                    else:
+                        endpoints[line] = state
+                    snapshot = self.snapshot(endpoints)
+                    self.assertFalse(snapshot.registered)
+                    self.assertTrue(snapshot.conflicting_call_state)
+                    self.assertEqual(focus(self.grant, snapshot, 100), 'disconnected')
+
+    def test_freshness_and_deadline_take_priority_over_known_conflict(self):
+        snapshot = self.snapshot({'201': 'In use', '202': 'Ringing'})
+        self.assertEqual(focus(self.grant, snapshot, 101.01), 'unknown')
+        self.assertEqual(focus(self.grant, snapshot, 99.5), 'unknown')
+        self.assertEqual(focus(self.grant, snapshot, 110), 'lease_expired')
+
+    def test_exact_channel_and_occupancy_requirements_remain_in_force(self):
+        endpoints = {'201': 'In use', '202': 'Not in use'}
+        snapshot = self.snapshot(endpoints)
+        self.assertFalse(snapshot.conflicting_call_state)
+        self.assertEqual(focus(self.grant, snapshot, 100), 'owned_call')
+        foreign = dict(self.channel, Channel='PJSIP/202-0002', Uniqueid='99.2', Linkedid='foreign')
+        for channels in ([], [dict(self.channel, Uniqueid='replacement')], [self.channel, foreign]):
+            with self.subTest(channels=channels):
+                self.assertEqual(focus(self.grant, self.snapshot(endpoints, channels), 100), 'call_changed')
+        self.assertEqual(focus(self.grant, self.snapshot({'201': 'In use', '202': 'In use'}), 100),
+                         'call_changed')
 
 
 class XmlCompatibilityTests(ControlFixture):

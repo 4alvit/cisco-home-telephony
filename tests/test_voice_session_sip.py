@@ -1,5 +1,6 @@
 """Runner wiring tests with every socket, PBX action and provider replaced."""
 import asyncio
+from dataclasses import replace
 import importlib.util
 from pathlib import Path
 import sys
@@ -13,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'containers/asterisk'))
 from phone_voice_sip import Channel, Grant, Snapshot
 from tests.test_phone_voice_sip import Writer, packet, FRAME
+from tests.test_phone_voice_control import ControlFixture
 
 SPEC = importlib.util.spec_from_file_location('sip_runner_test', ROOT / 'scripts/voice_session_sip.py')
 runner = importlib.util.module_from_spec(SPEC)
@@ -174,6 +176,128 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.progress.turns_completed = 1
         result = await self.failure_report(env=self.identity())
         self.assertNotIn('cleanup_proof', result)
+
+
+class PreemptionTests(ControlFixture):
+    """Real snapshot, session, runner progress and manager; synthetic external I/O."""
+    def setUp(self):
+        super().setUp()
+        self.transport['media_transport'] = 'sip_audiosocket'
+        self.voice['wake']['mode'] = 'onnx'
+        self.write_inputs()
+
+    async def run_child(self, state, endpoint_state, *, unavailable=False, stale=False):
+        from tests.test_phone_voice_sip_ami import Gateway
+        argv, _, env, lease_fd = self.launches[-1]
+        argument = lambda name: argv[argv.index('--' + name) + 1]
+        args = SimpleNamespace(session_id=state['session_id'], lease_fd=lease_fd,
+            state_directory=argument('state-directory'), workspace=argument('workspace'),
+            status_file=argument('status-file'),
+            lease_expires_unix=float(argument('lease-expires-unix')), ffmpeg=argument('ffmpeg'))
+        token = UUID(args.session_id)
+        gateway = Gateway()
+        gateway.root = 'cisco-voice-' + token.hex
+        factory = gateway.AMI
+        changed = False
+        ports = []
+
+        def ami(config):
+            connection = factory(config)
+            original_action, original_snapshot = connection.action, connection.snapshot
+            def action(name, **headers):
+                result = original_action(name, **headers)
+                if name == 'Getvar':
+                    values = {'VOICE_SIP_SESSION': token.hex,
+                              'VOICE_SIP_END': str(int(args.lease_expires_unix)),
+                              'TIMEOUT(absolute)': '1'}
+                    return [{'Value': values[headers['Variable']]}]
+                return result
+            def snapshot():
+                endpoints, channels = original_snapshot()
+                if changed:
+                    endpoints['202'] = endpoint_state
+                    if unavailable:
+                        endpoints['201'] = 'Unavailable'
+                return endpoints, channels
+            connection.action, connection.snapshot = action, snapshot
+            return connection
+        gateway.AMI = ami
+        actual_port = runner.AmiPort
+        def port_factory(*args, **kwargs):
+            port = actual_port(*args, **kwargs)
+            ports.append(port)
+            return port
+
+        assistant = Assistant()
+        def feed(phone, stream, pcm):
+            nonlocal changed
+            assistant.frames.append(pcm)
+            changed = gateway.foreign = True
+            with gateway.AMI({}) as connection:
+                ports[0]._snapshot(connection)
+            if stale:
+                ports[0].observation = replace(ports[0].observation,
+                    request_started_at=runner.time.monotonic() - 2)
+        assistant.feed_pcm = feed
+        reader, writer = asyncio.StreamReader(), Writer()
+        writer.get_extra_info = lambda *args: ('127.0.0.1', 12345)
+        reader.feed_data(packet(1, token.bytes) + packet(0x12, FRAME))
+        async def serve(callback, *args, **kwargs):
+            callback(reader, writer)
+            return SimpleNamespace(close=lambda: None, wait_closed=mock.AsyncMock())
+
+        # Drive snapshots at exact frame boundaries instead of a background
+        # schedule. Every observation still passes through the real AMI adapter.
+        with patch.object(actual_port, '_observe'), \
+             patch.object(runner, 'AmiPort', side_effect=port_factory), \
+             patch.object(runner, 'build_service', return_value=assistant), \
+             patch.object(runner.asyncio, 'start_server', side_effect=serve), \
+             patch.object(runner.transport, '_gateway_module', return_value=gateway), \
+             patch.dict(runner.os.environ, env, clear=True):
+            report = await runner.run(args, self.transport, {'ami': {}}, self.gateway['phones'][0], {})
+        ports[0].thread.join(timeout=1)
+        self.assertFalse(ports[0].thread.is_alive())
+        self.assertEqual(assistant.frames, [FRAME])
+        self.assertTrue(writer.closed)
+        self.assertTrue(report['result']['stop_confirmed'])
+        self.assertTrue(report['pbx_call_absent'])
+        self.assertEqual(report['cleanup_errors'], [])
+        self.assertEqual([value['Channel'] for name, value in gateway.actions if name == 'Hangup'], ['99.1'])
+        with gateway.AMI({}) as connection:
+            _, remaining = connection.snapshot()
+        self.assertEqual([item['Uniqueid'] for item in remaining], ['99.2'])
+        return report
+
+    def test_known_preemption_reaches_public_call_and_preserves_foreign_channel(self):
+        manager = self.make_control()
+        for index, endpoint in enumerate(('Ringing', 'Ring+Inuse', 'Busy', 'On Hold')):
+            with self.subTest(endpoint=endpoint):
+                state = self.start(manager, request_id=f'known-preemption-{index}')
+                report = asyncio.run(self.run_child(state, endpoint))
+                self.assertEqual(report['result']['reason'], 'call_changed')
+                self.assertIsNone(report['error'])
+                self.runners[-1].finish(report)
+                manager.tick()
+                status = self.status(manager)
+                self.assertEqual((status['state'], status['phase_reason'], status['error']),
+                                 ('stopped', 'call', None))
+                self.assertTrue(status['stop_confirmed'])
+                self.assertTrue(manager._sessions[state['session_id']].cleanup_verified)
+
+    def test_unavailable_or_stale_preemption_remains_failed_after_clean_owned_hangup(self):
+        manager = self.make_control()
+        for index, options in enumerate(({'unavailable': True}, {'stale': True})):
+            with self.subTest(options=options):
+                state = self.start(manager, request_id=f'unknown-preemption-{index}')
+                report = asyncio.run(self.run_child(state, 'Ringing', **options))
+                self.assertEqual(report['result']['reason'], 'disconnected' if index == 0 else 'unknown')
+                self.assertEqual(report['error'], 'voice_session_failed')
+                self.runners[-1].finish(report, code=1)
+                manager.tick()
+                status = self.status(manager)
+                self.assertEqual((status['state'], status['error']), ('failed', 'voice_session_failed'))
+                self.assertNotEqual(status['phase_reason'], 'call')
+                self.assertTrue(status['stop_confirmed'])
 
 
 if __name__ == '__main__':

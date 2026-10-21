@@ -59,6 +59,9 @@ class Snapshot:
     # All endpoint lines reporting a non-idle state. Unknown states must produce
     # registered=False or an unknown snapshot in the eventual observer adapter.
     occupied_lines: frozenset[str]
+    # Known busy/ringing/held endpoint states conflict even if the channel list
+    # still contains only our call. This is separate from endpoint availability.
+    conflicting_call_state: bool = False
 
 
 def focus(grant: Grant, snapshot: Snapshot | None, now: float) -> str:
@@ -71,6 +74,8 @@ def focus(grant: Grant, snapshot: Snapshot | None, now: float) -> str:
         return 'unknown'
     if not snapshot.registered:
         return 'disconnected'
+    if snapshot.conflicting_call_state:
+        return 'call_changed'
     if snapshot.channels != (grant.channel,):
         # Do not exempt other calls merely because they share the line/linkedid.
         return 'call_changed'
