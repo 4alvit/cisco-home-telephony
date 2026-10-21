@@ -1,5 +1,8 @@
 # Use the voice assistant on a Cisco phone
 
+Already configured? The [daily-use guide](voice-daily-use.md) covers questions,
+ordinary calls, and Enable/Disable from Home Assistant or the CLI.
+
 Choose **hands-free mode** to intentionally keep the assistant available, or
 **one session** to start and stop a finite attempt yourself. Both can be controlled
 remotely without pressing a phone button. Hands-free mode is off by default.
@@ -121,11 +124,13 @@ profile accepts one request and then ends.
    Confirm it is online with neither line in a call or playing radio, then check
    `voice status` for existing session ownership.
 2. Send one explicit Start with a fresh request key and all three confirmations.
-3. Read the matching session's status. In wake mode, require `state: running`,
-   `active: true`, `error: null`, `stop_requested: false`,
-   `stop_confirmed: false`, positive `remaining_seconds`, `phase: armed` and
-   `phase_reason: wake_ready` together. An accepted request, running process
-   or stale phase alone does not establish readiness.
+3. Read the matching session's status. For this finite wake session,
+   `cisco --json 201 voice status` must report top-level `voice_wake_ready: true`.
+   The CLI checks the [raw readiness fields](voice-control.md#hands-free-policy-and-status)
+   before reporting that result; null errors are omitted from its displayed
+   `voice` object. This finite flag alone does not establish hands-free policy
+   enablement. An accepted request, running process or stale phase alone does
+   not establish readiness.
    There is no audible ready cue; read the CLI or Home Assistant response before
    speaking.
 4. Say the configured wake phrase and question. Wait for playback to finish and
