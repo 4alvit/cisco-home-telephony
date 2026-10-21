@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1080" viewBox="0 0 1440 1080" role="img" aria-labelledby="title description">
+  <title id="title">Hands-free voice: persistent intent and bounded listening</title>
+  <desc id="description">Hands-free is off by default. Deliberate Enable authorizes a gateway supervisor to start bounded SIP wake sessions. Actual readiness requires matching policy and session IDs, running and active status, no error or Stop, positive remaining time, and the armed wake_ready phase. The supervisor stops its own session five seconds before its deadline, confirms cleanup and observes all lines idle twice before renewing. Setup and warmup can leave capture gaps. Only positively observed ordinary-call preemption permits resumption. Uncertain cleanup faults without retry. Disable turns off desired intent before stopping the current session; a historical session Stop cannot disable a newer generation.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 Z" fill="#2860b5"/>
+    </marker>
+    <style>
+      text { font-family: Arial, Helvetica, sans-serif; fill: #18283f; }
+      .title { font-size: 39px; font-weight: 700; }
+      .subtitle { font-size: 20px; fill: #516079; }
+      .label { font-size: 14px; font-weight: 700; letter-spacing: 1.3px; }
+      .heading { font-size: 25px; font-weight: 700; }
+      .body { font-size: 18px; fill: #3e4f68; }
+      .small { font-size: 16px; fill: #516079; }
+      .code { font-family: Menlo, Consolas, monospace; font-size: 17px; }
+      .flow { fill: none; stroke: #2860b5; stroke-width: 3; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1440" height="1080" fill="#f6f8fc"/>
+  <text x="60" y="72" class="title">Hands-free: enabled is intent, ready is a live state</text>
+  <text x="60" y="108" class="subtitle">Remote control · stock SIP phone · local wake detection · selected Home Assistant voice pipeline</text>
+
+  <rect x="60" y="140" width="1320" height="115" rx="20" fill="#eaf2ff" stroke="#a4bce0" stroke-width="2"/>
+  <text x="84" y="170" class="label" fill="#315a92">1 · DELIBERATE ENABLE · OFF BY DEFAULT</text>
+  <text x="84" y="208" class="code">cisco 201 voice enable</text>
+  <text x="84" y="235" class="small">Synthetic example line. Enable grants persistent microphone operation.</text>
+  <text x="825" y="182" class="heading">Desired: enabled</text>
+  <text x="825" y="213" class="body">The gateway owns renewal; no CLI loop.</text>
+  <text x="825" y="239" class="small">Enabled alone never proves active listening.</text>
+
+  <text x="60" y="294" class="label" fill="#315a92">2 · ACTUAL SESSION · CHECK CURRENT STATUS</text>
+
+  <rect x="60" y="315" width="300" height="230" rx="20" fill="#ffffff" stroke="#a4bce0" stroke-width="2"/>
+  <text x="82" y="354" class="heading">Wait for idle</text>
+  <text x="82" y="383" class="code">waiting_idle</text>
+  <text x="82" y="420" class="body">Every line registered + idle</text>
+  <text x="82" y="450" class="body">No phone channels</text>
+  <text x="82" y="488" class="small">This state alone does not prove</text>
+  <text x="82" y="512" class="small">an ordinary call is in progress.</text>
+
+  <path d="M 369 430 H 391" class="flow"/>
+  <rect x="400" y="315" width="300" height="230" rx="20" fill="#f2ecfc" stroke="#bca4df" stroke-width="2"/>
+  <text x="422" y="354" class="heading">Start and warm up</text>
+  <text x="422" y="383" class="code">starting → running</text>
+  <text x="422" y="420" class="body">Admit one owned SIP call</text>
+  <text x="422" y="450" class="body">Prepare model and stream</text>
+  <text x="422" y="488" class="small">A running process is not enough.</text>
+  <text x="422" y="512" class="small">Wait for the wake-ready phase.</text>
+
+  <path d="M 709 430 H 731" class="flow"/>
+  <rect x="740" y="315" width="300" height="230" rx="20" fill="#e6f7f1" stroke="#79bba7" stroke-width="2"/>
+  <text x="762" y="354" class="heading">Ready for wake</text>
+  <text x="762" y="383" class="code">armed + wake_ready</text>
+  <text x="762" y="420" class="body">Matching current session ID</text>
+  <text x="762" y="450" class="body">Running + active; time left</text>
+  <text x="762" y="480" class="body">No errors or Stop flags</text>
+  <text x="762" y="512" class="small">Speak → reply → ready again.</text>
+
+  <path d="M 1049 430 H 1071" class="flow"/>
+  <rect x="1080" y="315" width="300" height="230" rx="20" fill="#edf3fd" stroke="#a4bce0" stroke-width="2"/>
+  <text x="1102" y="354" class="heading">End the inner lease</text>
+  <text x="1102" y="383" class="code">stopping</text>
+  <text x="1102" y="420" class="body">Configured limit: 30–300 s</text>
+  <text x="1102" y="450" class="body">Renewal Stop: 5 s early</text>
+  <text x="1102" y="480" class="body">Confirm owned cleanup</text>
+  <text x="1102" y="512" class="small">Never overlap or clear a lease.</text>
+
+  <path d="M 1230 545 V 590 H 210 V 552" class="flow"/>
+  <rect x="431" y="572" width="579" height="36" rx="12" fill="#f6f8fc"/>
+  <text x="451" y="596" class="body">Renew only after cleanup + two fresh idle observations</text>
+  <text x="280" y="636" class="subtitle">New call and model warmup can leave capture gaps. Renewal is not seamless listening.</text>
+
+  <rect x="60" y="674" width="640" height="180" rx="20" fill="#fff3d9" stroke="#e2bf73" stroke-width="2"/>
+  <text x="84" y="711" class="heading">Ordinary calls have priority</text>
+  <text x="84" y="747" class="body">Positive competing-call evidence permits later resumption.</text>
+  <text x="84" y="777" class="body">Wait for confirmed cleanup and fresh idle observations.</text>
+  <text x="84" y="811" class="small">Peer hangup, DTMF Stop or an ambiguous call change disables</text>
+  <text x="84" y="835" class="small">intent instead. Do not infer permission to redial from a missing call.</text>
+
+  <rect x="740" y="674" width="640" height="180" rx="20" fill="#f2ecfc" stroke="#bca4df" stroke-width="2"/>
+  <text x="764" y="711" class="heading">Failures do not justify endless retries</text>
+  <text x="764" y="747" class="body">backoff: bounded retries after clean transient failures</text>
+  <text x="764" y="777" class="body">faulted: resolve the cause, then deliberately Enable again</text>
+  <text x="764" y="811" class="small">Uncertain cleanup or ownership fails closed.</text>
+  <text x="764" y="835" class="small">A restart does not erase unresolved state.</text>
+
+  <rect x="60" y="885" width="1320" height="145" rx="20" fill="#ffeceb" stroke="#d9a09e" stroke-width="2"/>
+  <text x="84" y="918" class="label" fill="#8e3935">3 · DISABLE · STOP AUTOMATIC RESUMPTION</text>
+  <text x="84" y="958" class="code">cisco 201 voice disable</text>
+  <text x="84" y="995" class="body">Desired off first, then Stop the owned session.</text>
+  <text x="704" y="929" class="body">Check disabled intent AND confirmed session cleanup.</text>
+  <text x="704" y="960" class="small">Stop of the current supervised session also disables intent.</text>
+  <text x="704" y="986" class="small">A historical Stop cannot disable a newer generation.</text>
+  <text x="704" y="1012" class="small">Disabled intent alone is not proof the microphone is off.</text>
+
+  <text x="60" y="1061" class="small">Implementation flow, not physical acceptance. No barge-in, nearest-microphone election or guaranteed acoustic performance.</text>
+</svg>

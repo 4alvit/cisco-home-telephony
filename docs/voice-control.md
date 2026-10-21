@@ -1,4 +1,4 @@
-# Bounded voice session controls
+# Voice sessions and hands-free controls
 
 For normal use, start with the [phone and CLI quickstart](voice-quickstart.md).
 This page describes configuration, ownership and recovery.
@@ -10,7 +10,9 @@ It launches the runner selected by the private transport profile, retains
 ownership across separate status and Stop requests, and accepts only private,
 operator-configured profiles. Manual mode handles one request; wake mode can
 return to listening after a successful reply within the same finite session.
-Neither mode starts on boot or changes the phone's SIP setup.
+Finite Start does not enable boot activation or change the phone's SIP setup.
+An explicitly enabled hands-free policy can supervise successive finite SIP
+sessions and survive a clean gateway restart. It is off by default.
 
 The controller runs inside the existing authenticated phone gateway. The
 gateway, `cisco LINE voice` command, phone menu and companion Home Assistant
@@ -25,6 +27,163 @@ and watchdog-specific recovery details on this page describe the stock
 same gateway owner, an ONNX wake profile and no `display_port`. Start and Stop
 can be remote; no handset button is required. The shared status and exact-session
 control API below still applies, and physical qualification remains separate.
+
+## Hands-free policy and status
+
+Hands-free requires a SIP AudioSocket profile with ONNX wake detection and
+`rearm_after_turn: true`, with a configured session length of 30–300 seconds.
+Registry capability enablement and persistent operator
+intent are separate. Loading a capable registry alone does not authorize capture.
+The deliberate Enable operation grants persistent microphone operation through
+the same physical-phone owner, shared by both line aliases. The gateway runs
+one supervisor; no recurring CLI process is needed.
+
+```sh
+cisco --json 201 voice enable --idempotency-key handsfree-example-001
+cisco --json 201 voice status
+cisco --json 201 voice disable --idempotency-key handsfree-disable-001
+cisco --json 201 voice status
+```
+
+Replace the example line and keys. Enable and Disable generate a fresh key once
+when none is supplied. `voice enable` supplies the required consent booleans;
+it does not use `--attended`, `--exclusive-media` or `--enable-microphone` flags.
+Enable supports `--dry-run`, which validates eligibility without changing intent
+or starting media. Disable has no dry run and needs no session ID.
+
+Disable stores disabled intent before requesting Stop, including between
+sessions and during startup/backoff. A valid finite `voice stop` of the **current
+supervised session** also disables that intent. Repeating a historical Stop
+cannot disable a newer persistent generation; `voice disable` is phone-wide.
+Finite Start is refused while hands-free is enabled; use
+Disable first. Replaying an old Enable cannot undo a newer Disable. After a
+lost acknowledgement, inspect status before considering another mutation.
+
+The CLI's `voice status` reads finite status and hands-free status. The two API
+objects remain separate; `hands_free` is not added inside the strict `voice`
+object. Hands-free status contains only:
+
+- `schema_version`, `phone`, `line`, `enabled` (durable desired state);
+- `state`, `session_id` (owned inner session or null), `session_seconds`;
+- `consecutive_failures`, `retry_after_seconds`, and fixed-category `error`.
+
+`phone` is the canonical handset and `line` is the effective line selected by
+Enable. Querying a sibling alias does not change that selection. Ordinary status
+also works for an ineligible profile; Enable and its dry run refuse that profile.
+
+Its states mean:
+
+- `disabled`: automatic starts are disabled; check any former session's cleanup
+  separately before claiming its microphone is off.
+- `waiting_idle`: waiting for all lines to be registered and idle, without phone
+  channels. It is not proof of a particular cause such as an ordinary call.
+- `starting`: admission/preparation is in progress.
+- `running`: an inner session is running, not necessarily ready for a wake phrase.
+- `stopping`: owned-session shutdown is in progress.
+- `backoff`: waiting before a bounded retry after a clean transient failure.
+- `faulted`: no automatic retry; resolve the cause and explicitly Enable again.
+
+To display **Ready for wake phrase**, require enabled intent, policy
+`state: running` with no error, the same non-null `session_id` in both objects,
+and a finite session with `state: running`,
+`active: true`, `error: null`, both Stop flags false, positive `remaining_seconds`,
+`phase: armed` and `phase_reason: wake_ready`. Do not combine a newer hands-free
+session with a stale finite phase. Missing fields or a changed ID are not ready.
+Absence of readiness does not prove microphone closure: capture can already be
+active during preparation, while uncertain cleanup needs separate recovery.
+
+Each inner session retains its configured limit of at most 300 seconds and its
+existing native deadline, reservation and cleanup proof. Intentional renewal
+requests exact Stop of the owned session five seconds before its deadline, then
+requires confirmed terminal cleanup and two fresh idle observations separated
+by a quiet period; SIP admission checks races again. There is no overlap or forced lease
+clearing. Call setup and warmup can leave gaps in capture; no fixed renewal
+latency or memory across new session IDs is promised.
+
+Only positively observed competing-call preemption permits resumption after
+idle. Peer hangup, DTMF Stop, explicit Stop of the current supervised session
+and ambiguous call changes disable intent. A generic `call_changed` outcome is not sufficient
+proof of an ordinary call and must not authorize automatic renewal.
+
+Transient clean failures use bounded exponential backoff and a consecutive-
+failure limit. Unconfirmed cleanup, uncertain ownership, invalid configuration
+or exhausted retries fault without further automatic attempts. Unknown or
+unavailable observations do not start capture; repeated observation failures
+are bounded. A short successful turn does not reset failure limits; clean full
+lease/renewal completion does.
+
+Shutdown prevents new starts before stopping owned sessions. Enabled intent
+can survive a clean gateway restart, but an unresolved journal fails closed
+and is never erased automatically. A disabled intent and an unconfirmed Stop
+must be shown together; neither an empty channel list nor process exit proves
+physical microphone closure.
+
+### Unconfirmed ordinary calls
+
+Before dispatching an ordinary call, the gateway saves a durable pending-call
+record and pauses hands-free renewal. A successful dispatch acknowledgement
+does not prove that the call has appeared or finished. If no positive call
+observation arrives within 30 seconds, the policy faults with
+`hands_free_recovery_required` and retains the record. A lost response after
+dispatch can also leave this uncertainty; restarting the gateway preserves it.
+
+Disable still removes hands-free intent, but it does not cancel or prove the
+absence of a previously queued ordinary call. A fresh Enable remains refused
+while that pending record is unresolved. Investigate the original operation
+using gateway and PBX evidence; do not repeatedly place calls, delete the record
+or clear ownership to force renewal. The supervisor can reconcile the record
+after positively observing a call followed by two fresh idle observations
+separated by the quiet period. If the policy already faulted, reconciliation
+does not re-enable it: check status and deliberately Enable again only after
+the pending operation is resolved.
+
+### Hands-free API
+
+The authenticated endpoints are:
+
+- `GET /v1/phones/<line>/voice_hands_free_status`: no body; reads policy status
+  without phone or network activity initiated by the status handler.
+- `POST /v1/phones/<line>/voice_hands_free_enable`: `idempotency_key`, literal
+  `enable_microphone: true`, literal `exclusive_media: true`; optional `dry_run`.
+- `POST /v1/phones/<line>/voice_hands_free_disable`: `idempotency_key` only.
+
+Responses retain the `status`/`action_id` envelope with a separate `hands_free`
+object. The underlying finite session API and its exact-session identity checks
+remain in place. See the [operator quickstart](voice-quickstart.md#enable-hands-free-mode)
+for the shorter workflow.
+
+## Shared wake phrase admission
+
+The optional `wake.phrase` field lets ONNX wake turns use Home Assistant’s native
+duplicate-wake filter. Add it to the existing **private** wake configuration,
+preserving the bundle and every other field, only after the participating
+integrations agree on the transmitted phrase:
+
+```json
+{"wake": {"mode": "onnx", "bundle_file": ".local/wake-bundle.json", "phrase": "Hello Example"}}
+```
+
+This synthetic example is a configuration fragment, not a complete profile or
+a change to the trained wake model. The optional phrase must be nonempty text
+of at most 128 characters, without leading/trailing whitespace or ASCII control
+characters. It is accepted only in ONNX mode. No case, punctuation or Unicode
+normalization is applied.
+
+Home Assistant 2026.10 matches the **exact string** within a two-second window.
+The first admitted request wins, regardless of microphone distance. A matching
+later detection in that window is quietly discarded; with rearming enabled,
+Cisco returns to listening on the same still-valid stream after its cooldown.
+It does not fabricate a reply or completed turn. Stop and lease limits still
+apply. After the two-second window, another device can start a request while
+the first conversation is still active: this is not a whole-conversation lock,
+nearest-microphone selection or cross-HA coordination.
+
+A coherent Show/Echo setup requires the VACA integration to forward Wyoming
+`Info` so Core resolves model IDs to the same phrase, plus the EchoMuse update
+that handles native duplicate rejection quietly. Matching visible labels alone
+do not prove matching wire values. Keep real phrases and device mappings
+private, and verify those updates are loaded before setting Cisco’s phrase.
+These are protocol capabilities, not a claim of deployment or acoustic success.
 
 ## Prepare an explicit private registry
 
@@ -321,15 +480,18 @@ An older server or a session without these counters reports
 `playback_metadata_unavailable` rather than inventing zeros or retrying a
 mutation. The query is accepted only on GET status, with no body, no duplicate
 parameters and the exact value shown above. Old status/progress documents
-without the optional object remain valid.
+without the optional object remain valid. Adding hands-free supervision does
+not turn playback counters into proof of audible speech.
 
 ### Session state and rearming
 
 In wake mode, successful rearming stays inside the original session ID and
 deadline. Say the wake phrase again when ready for the next request. Stop,
-failure, call preemption and expiry do not rearm. Manual mode ends after one
-turn. A later explicit Start creates a new session; do not expect conversation
-context to survive it.
+failure, call preemption and expiry end that inner session. Manual mode ends
+after one turn. One-session mode needs another explicit Start; hands-free can
+create a new session only under its cleanup, idle and retry rules above. Valid
+Stop of the current supervised session also disables persistent intent. Do not expect conversation context to
+survive a new session ID.
 
 States are `idle`, `starting`, `running`, `stopping`, `stopped`, `cancelled`,
 `failed` and `recovery_required`; `external_owner` is reserved. `cancelled` means
@@ -432,8 +594,9 @@ Missing, contradictory or unconfirmed evidence leaves persistent
 `recovery_required` state. A watchdog arm attempt, any RTP Start attempt, a
 signal, forced termination or incomplete child output excludes the early-failure
 release path.
-There is no automatic retry or automatic restart into capture. A new Start must
-not replace an active, stopping or unresolved session. State survives separate
+Finite Start does not retry or restart automatically. Hands-free supervision
+may renew only after its confirmed-cleanup and idle checks; it never bypasses
+an active, stopping or unresolved session. State survives separate
 requests and controller restarts so a restart cannot silently forget an
 uncertain microphone session.
 
@@ -558,14 +721,30 @@ The integration must already be loaded with a known phone mapping. A Home
 Assistant restart during an AMI outage can prevent that initial load; use the
 gateway CLI or the phone's Voice menu for Stop in that case.
 
+The updated companion also exposes the separate administrator-only
+`cisco_phone_control.hands_free` response service. It requires `entry_id`,
+canonical `phone`, an owned `line`, and `operation: status|enable|disable`.
+Enable additionally requires a retained `request_id`, literal
+`enable_microphone: true` and `exclusive_media: true`; it accepts `dry_run`.
+Disable requires `request_id` but no session ID or consent flags. Status needs
+no request key. Its result has the existing envelope and a separate
+`hands_free` object; finite `voice` responses remain unchanged. Updating the
+companion is required for this new service, unlike the CLI-only playback query.
+Use current matching finite status to determine readiness; policy enablement
+alone does not establish active listening.
+
 ## Validation and acceptance
 
-The finite-session controls above describe implementation capability, not a
-claim that the new revision is deployed or acoustically accepted. Confirm the
+The controls above describe implementation capability, not a claim that the
+new revision is deployed or acoustically accepted. Confirm the
 installed runtime and client together. A usable wake-session acceptance must
 include two distinct spoken requests and audible replies under one session ID,
 return to wake readiness, explicit Stop, and ordinary-call preemption. The
 following records describe earlier pilots; they do not replace that check.
+Hands-free additionally needs verified renewal across an inner lease, ordinary-
+call pause/resumption, and Disable during preparation or renewal with no later
+capture. Check audible effects of call setup/renewal on the stock phone rather
+than assuming seamless operation.
 
 The deployed manual pilot passed image/configuration checks, authenticated
 directory checks, and status → Start dry-run → status through both line aliases.

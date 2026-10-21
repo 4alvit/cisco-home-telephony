@@ -158,9 +158,92 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         pbx.channels += (other,)
         pbx.occupied |= frozenset(('second-line',))
         result = await task
-        self.assertEqual(result.reason, 'call_changed')
+        self.assertEqual(result.reason, 'call_preempted')
         self.assertEqual(pbx.hangups, [CALL])
         self.assertNotIn(other, pbx.hangups)
+
+    async def test_manual_hangup_is_not_resumable_preemption(self):
+        for replacement in ((), (Channel('PJSIP/other-00000002', '2.2', 'second-line'),)):
+            with self.subTest(replacement=replacement):
+                reader, writer, grant, pbx, wire, session = self.setup_session()
+                reader.feed_data(packet(1, TOKEN.bytes))
+                assistant = Assistant()
+                task = asyncio.create_task(session.run(assistant))
+                await asyncio.sleep(.01)
+                pbx.channels = replacement
+                pbx.occupied = frozenset(channel.line for channel in replacement)
+                result = await task
+                self.assertEqual(result.reason, 'call_changed')
+                self.assertTrue(result.reservation_may_release)
+                self.assertEqual(pbx.hangups, [CALL])
+
+    async def test_completed_manual_termination_dominates_simultaneous_competing_call(self):
+        for payload, expected in ((packet(3, b'#'), 'dtmf_stop'),
+                                  (packet(0), 'peer_ended'), (b'', 'peer_closed')):
+            with self.subTest(expected=expected):
+                reader, writer, grant, pbx, wire, session = self.setup_session()
+                reader.feed_data(packet(1, TOKEN.bytes) + payload)
+                reader.feed_eof()
+                read_pcm = wire.read_pcm
+
+                async def simultaneous_read():
+                    try:
+                        return await read_pcm()
+                    finally:
+                        # Both facts are visible when the main loop wakes:
+                        # terminal input and a positively identified other call.
+                        pbx.channels += (Channel('PJSIP/other-00000002', '2.2', 'second-line'),)
+                        pbx.occupied |= frozenset(('second-line',))
+
+                wire.read_pcm = simultaneous_read
+                assistant = Assistant()
+                result = await session.run(assistant)
+                self.assertEqual(result.reason, expected)
+                self.assertEqual(assistant.frames, [])
+                self.assertTrue(result.reservation_may_release)
+                self.assertTrue(writer.closed)
+                self.assertEqual(pbx.hangups, [CALL])
+
+    async def test_preemption_requires_simultaneous_complete_distinct_identities(self):
+        reader, writer, grant, pbx, wire, session = self.setup_session()
+        other = Channel('PJSIP/other-00000002', '2.2', 'second-line')
+        for candidate in (replace(other, name=''), replace(other, uniqueid=''),
+                          replace(other, line=''), replace(other, name=CALL.name),
+                          replace(other, uniqueid=CALL.uniqueid)):
+            with self.subTest(candidate=candidate):
+                pbx.channels = (CALL, candidate)
+                with self.assertRaisesRegex(BoundaryError, '^call_changed$'):
+                    session.guard()
+        # A competing channel on the same line still has a distinct identity.
+        pbx.channels = (CALL, replace(other, line=CALL.line))
+        with self.assertRaisesRegex(BoundaryError, '^call_preempted$'):
+            session.guard()
+
+    async def test_endpoint_only_conflict_is_not_resumable_preemption(self):
+        reader, writer, grant, pbx, wire, session = self.setup_session()
+        snapshot = replace(pbx.snapshot(), conflicting_call_state=True)
+        pbx.snapshot = lambda: snapshot
+        with self.assertRaisesRegex(BoundaryError, '^call_changed$'):
+            session.guard()
+
+    async def test_preemption_evidence_does_not_override_safety_boundaries(self):
+        now = [100.0]
+        reader, writer, grant, pbx, wire, session = self.setup_session(clock=lambda: now[0])
+        other = Channel('PJSIP/other-00000002', '2.2', 'second-line')
+        snapshot = replace(pbx.snapshot(), channels=(CALL, other))
+        for current, expected in ((replace(snapshot, request_started_at=98.99), 'unknown'),
+                                  (replace(snapshot, registered=False), 'disconnected')):
+            with self.subTest(expected=expected):
+                pbx.snapshot = lambda: current
+                with self.assertRaisesRegex(BoundaryError, '^' + expected + '$'):
+                    session.guard()
+        pbx.snapshot = lambda: snapshot
+        now[0] = grant.deadline
+        with self.assertRaisesRegex(BoundaryError, '^lease_expired$'):
+            session.guard()
+        session.request_stop()
+        with self.assertRaisesRegex(BoundaryError, '^explicit_stop$'):
+            session.guard()
 
     async def test_reused_channel_name_different_uniqueid_not_exempt(self):
         reader, writer, grant, pbx, wire, session = self.setup_session()

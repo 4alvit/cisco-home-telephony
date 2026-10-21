@@ -419,7 +419,8 @@ class FixtureCoordinator:
         class RecordingHandler(self.gateway_module.Handler):
             def reply(self, status, data, content_type="application/json"):
                 request_log.append({"method": self.command,
-                                    "operation": self.path.rsplit("_", 1)[-1], "status": status})
+                                    "operation": self.path.rsplit("/", 1)[-1].removeprefix(
+                                        "voice_").split("?", 1)[0], "status": status})
                 return super().reply(status, data, content_type)
 
         self.listener = self.gateway_module.ThreadingHTTPServer(("127.0.0.1", 0), RecordingHandler)
@@ -678,14 +679,27 @@ class FixtureCoordinator:
     def verify_owner_cleanup(self):
         owner_directory = self.local / "owner"
         self.checks["run_snapshots_removed"] = not list(owner_directory.glob("run-*"))
-        locks = list(owner_directory.glob("*.lock"))
-        journals = list(owner_directory.glob("*.json"))
+        policy_locks = list(owner_directory.glob("*.hands-free.lock"))
+        policy_journals = list(owner_directory.glob("*.hands-free.json"))
+        locks = [path for path in owner_directory.glob("*.lock") if path not in policy_locks]
+        journals = [path for path in owner_directory.glob("*.json") if path not in policy_journals]
         require(len(locks) == 1 and len(journals) == 1, "missing_physical_owner_files")
+        require(len(policy_locks) == 1 and not policy_journals, "unexpected_persistent_voice_state")
         self.summary["owner_files"] = {"locks": len(locks), "journals": len(journals)}
+        self.summary["policy_files"] = {"locks": len(policy_locks), "journals": len(policy_journals)}
         self.checks["lease_released"] = False
-        for path in locks:
+        release_deadline = min(self.deadline, time.monotonic() + 2)
+        for path in locks + policy_locks:
             with path.open("r+b") as stream:
-                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                while True:
+                    try:
+                        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        # Finite replay also checks the persistent-policy
+                        # fence; its independent monitor releases it shortly.
+                        require(time.monotonic() < release_deadline, "owner_lease_not_released")
+                        time.sleep(.01)
                 fcntl.flock(stream, fcntl.LOCK_UN)
         self.checks["lease_released"] = True
         self.checks["owner_journal_unreserved"] = all(

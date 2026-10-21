@@ -407,7 +407,7 @@ before replacing an existing schedule.
   timeout. If it was a mutation, read status before deciding to try again.
   Check the [selected API endpoint](#keep-the-kubernetes-connection-usable),
   especially if the shell inherited a temporary rollout `KUBECONFIG`.
-  For a voice Start or Stop with an uncertain acknowledgement, follow
+  For a voice Start, Stop, Enable or Disable with an uncertain acknowledgement, follow
   [voice recovery](voice-control.md#if-the-cli-loses-a-start-or-stop-acknowledgement);
   a transport timeout does not prove that the microphone is off.
 

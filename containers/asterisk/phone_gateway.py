@@ -365,6 +365,7 @@ class Gateway:
         self.db.commit()
 
         self.voice = None
+        self.hands_free = None
         self._voice_profiles = ()
         self._voice_shutdown_reservations = ExitStack()
         self._voice_shutdown_phones = set()
@@ -453,7 +454,8 @@ class Gateway:
         self._voice_module = module
 
         def authorize(context, action, canonical_phone_id):
-            if action not in ('start', 'status', 'stop', 'control'):
+            if action not in ('start', 'status', 'stop', 'control',
+                              'hands_free_enable', 'hands_free_disable', 'hands_free_status'):
                 return False
             if canonical_phone_id not in self.phones:
                 return False
@@ -468,6 +470,36 @@ class Gateway:
             phone['id'], tuple(phone['lines']), phone['device'])
             for phone in self.phones.values())
         self.voice = module.VoiceControl(config, authorize=authorize, control_phones=control_phones)
+        supervisor = app_module('phone_voice_hands_free')
+        self.hands_free = supervisor.HandsFreeSupervisor(
+            self.voice, self._hands_free_observe, self._phone_voice_context)
+        self.voice.hands_free = self.hands_free
+
+    def _hands_free_observe(self, phone_id):
+        """Fresh read-only admission observation; the child rechecks before I/O."""
+        phone = self.phones.get(phone_id)
+        if phone is None or self.stopped.is_set():
+            return 'unknown'
+        try:
+            with self.lock:
+                held = self.preference(phone_id)['dnd'] or any(
+                        row['phone'] == phone_id and row['state'] != 'ended'
+                        for row in self.alerts())
+            started = time.monotonic()
+            with AMI(self.config['ami']) as ami:
+                endpoints, channels = ami.snapshot()
+            if self.stopped.is_set() or time.monotonic() - started > 1:
+                return 'unknown'
+            known = {'Not in use', 'In use', 'Busy', 'Ringing', 'Ring+Inuse', 'On Hold'}
+            if not all(endpoints.get(line) in known for line in phone['lines']):
+                return 'unknown'
+            owned = own_channels(phone, channels)
+            if owned and all(isinstance(item.get('Uniqueid'), str) and item['Uniqueid'] for item in owned):
+                return 'call'
+            return ('idle' if not held and not owned and all(
+                endpoints.get(line) == 'Not in use' for line in phone['lines']) else 'busy')
+        except Exception:
+            return 'unknown'
 
     def _phone_voice_context(self, phone_id):
         # Call only from the already source-checked per-phone listener or shutdown.
@@ -477,6 +509,9 @@ class Gateway:
 
     def voice_request(self, target, operation, body, context, *, include_playback=False):
         require(self.voice is not None, 'voice_control_unavailable', 503)
+        if operation.startswith('hands_free_'):
+            require(not include_playback, 'invalid_voice_request', 400)
+            return self.hands_free_request(target, operation[11:], body, context)
         require(operation in ('status', 'start', 'stop'), 'unknown_action', 404)
         require(type(include_playback) is bool and (not include_playback or operation == 'status'),
                 'invalid_voice_request', 400)
@@ -527,6 +562,58 @@ class Gateway:
         except self._voice_module.ControlError as error:
             raise Refused(error.reason, error.status) from None
 
+    def hands_free_request(self, target, operation, body, context):
+        require(self.hands_free is not None, 'hands_free_unavailable', 503)
+        require(operation in ('status', 'enable', 'disable'), 'unknown_action', 404)
+        require(isinstance(body, dict), 'json_object_required', 400)
+        allowed = {'status': set(), 'enable': {'idempotency_key', 'enable_microphone',
+                   'exclusive_media', 'dry_run'}, 'disable': {'idempotency_key'}}[operation]
+        require(set(body) <= allowed, 'invalid_voice_request', 400)
+        key = body.get('idempotency_key')
+        if operation != 'status':
+            require(isinstance(key, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{8,128}', key),
+                    'idempotency_key_required', 400)
+        try:
+            if operation == 'status':
+                return {'status': 'ok', 'hands_free': self.hands_free.status(target, context=context)}
+            if operation == 'enable':
+                for flag in ('enable_microphone', 'exclusive_media', 'dry_run'):
+                    require(flag not in body or type(body[flag]) is bool,
+                            'invalid_voice_request', 400)
+                value = self.hands_free.enable(target, key, context=context,
+                    enable_microphone=body.get('enable_microphone', False),
+                    exclusive_media=body.get('exclusive_media', False),
+                    dry_run=body.get('dry_run', False))
+            else:
+                value = self.hands_free.disable(target, key, context=context)
+            return {'status': 'accepted', 'action_id': key, 'hands_free': value}
+        except self._voice_module.ControlError as error:
+            raise Refused(error.reason, error.status) from None
+
+    @contextmanager
+    def suspend_hands_free(self, *phones, resume=True, wait_for_call=False):
+        """Keep new supervised starts inhibited through an ordinary phone action."""
+        managed = False
+        with ExitStack() as suspensions:
+            if self.hands_free is not None:
+                for phone_id in sorted({phone['id'] for phone in phones}):
+                    try:
+                        managed |= bool(suspensions.enter_context(
+                            self.hands_free.suspend_for_control(
+                                phone_id, resume=resume, wait_for_call=wait_for_call,
+                                defer_ticket=wait_for_call)))
+                    except self._voice_module.ControlError as error:
+                        raise Refused(error.reason, error.status) from None
+            yield managed
+
+    def _mark_hands_free_call(self, *phones):
+        """Record potential dispatch only after validation, before external I/O."""
+        if self.hands_free is not None:
+            try:
+                self.hands_free.mark_control_dispatch([phone['id'] for phone in phones])
+            except self._voice_module.ControlError as error:
+                raise Refused(error.reason, error.status) from None
+
     @contextmanager
     def reserve_phone_controls(self, *phones):
         """Hold shared phone reservations throughout direct media/key/display I/O.
@@ -559,8 +646,11 @@ class Gateway:
                     self._voice_module.EXTERNAL_OWNER_GRACE_SECONDS)
         deadline = time.monotonic() + grace
         while time.monotonic() < deadline:
+            policy_quiet = self.hands_free is None
             try:
                 self.voice.tick()
+                if self.hands_free is not None:
+                    policy_quiet = self.hands_free.settle_shutdown() is True
             except Exception:
                 uncertain = True
             for phone_id in self.phones:
@@ -578,7 +668,7 @@ class Gateway:
             # Recovery can mean the runner died while its watchdog still owns
             # a delayed Stop sweep. Keep authentication available for the full
             # bounded grace even though that state is no longer active.
-            if not uncertain and len(self._voice_shutdown_phones) == len(self.phones):
+            if not uncertain and policy_quiet and len(self._voice_shutdown_phones) == len(self.phones):
                 return True
             time.sleep(0.05)
         # Never unlink a lease, journal or snapshot to force a clean shutdown.
@@ -753,7 +843,7 @@ class Gateway:
         require(len(targets) == 1, 'intercom_requires_cisco_destination')
         target = targets[0]
         require(target['id'] != phone['id'], 'intercom_requires_two_phones')
-        with self.reserve_phone_controls(phone, target):
+        with self.suspend_hands_free(phone, target, wait_for_call=True), self.reserve_phone_controls(phone, target):
             # Both devices are fenced before taking the observation used for
             # origination and before either speaker key can be sent.
             endpoints, channels = ami.snapshot()
@@ -773,6 +863,7 @@ class Gateway:
         self.db.execute('INSERT INTO intercoms VALUES (?, ?, ?)', (root, 'starting', time.time()))
         self.db.commit()
         try:
+            self._mark_hands_free_call(phone, target)
             # Both source and destination use Dial(...,i). A direct PJSIP
             # Originate can follow a source redirect and discard its assigned ID.
             # Allow Local optimization so the final physical legs share a bridge;
@@ -907,12 +998,17 @@ class Gateway:
     def _mutate(self, phone, action, body):
         line = body.get('line', phone['id'])
         require(line in phone['lines'], 'line_does_not_belong_to_phone', 400)
-        # Ring/alert originate ordinary incoming calls, whose higher priority
-        # must interrupt voice listening. Only direct phone media/key/display
-        # mutations need a reservation. Intercom reserves both endpoints itself.
+        # Ordinary calls first retire only a supervised leg, then retain the
+        # existing physical reservation and fresh call checks. Finite sessions
+        # keep their existing behavior. Intercom suspends both endpoints itself.
         phones = (phone,) if action in ('dial', 'speaker', 'message', 'image', 'answer') else ()
-        with self.reserve_phone_controls(*phones):
-            return self._mutate_reserved(phone, action, body, line)
+        handoff = (phone,) if action in ('dial', 'answer', 'ring', 'alert', 'speaker') else ()
+        with self.suspend_hands_free(*handoff, resume=action != 'speaker',
+                                    wait_for_call=action in ('dial', 'ring', 'alert')) as managed:
+            if managed and action in ('ring', 'alert'):
+                phones = (phone,)
+            with self.reserve_phone_controls(*phones):
+                return self._mutate_reserved(phone, action, body, line)
 
     def _mutate_reserved(self, phone, action, body, line):
         if action in ('dnd', 'autoanswer'):
@@ -966,6 +1062,7 @@ class Gateway:
                                     (alert_id, phone['id'], line, kind, 'starting', time.time()))
                     self.db.commit()  # Durable identity exists before the async originate.
                     try:
+                        self._mark_hands_free_call(phone)
                         ami.action('Originate', Channel='Local/' + line + '@cisco-alert/n',
                                    Application='WaitForSignal', Data='cisco-alert-' + alert_id,
                                    Timeout='5000', Async='true', CallerID=kind.title() + ' <640>',
@@ -980,6 +1077,7 @@ class Gateway:
                 if action == 'ring':
                     destination = body.get('destination', '640')
                     require(destination in self.config.get('ring_allowlist', ['640']), 'ring_destination_not_allowed', 400)
+                    self._mark_hands_free_call(phone)
                     ami.action('Originate', Channel='PJSIP/' + line, Context='home', Exten=destination, Priority='1',
                                Timeout='20000', Async='true', CallerID='Home alarm <640>')
                     return {'ring_timeout_seconds': 20, 'destination': destination}
@@ -988,6 +1086,7 @@ class Gateway:
                 index = phone['lines'].index(line) + 1
                 # The Dial URI has NO line-selector suffix. Select the real
                 # line key first, then submit only a numeric dial sequence.
+                self._mark_hands_free_call(phone)
                 execute(phone, 'Key:Line' + str(index))
                 execute(phone, 'Dial:' + number)
                 return {'line': line, 'number': number}
@@ -1184,11 +1283,11 @@ class Handler(BaseHTTPRequestHandler):
         require(len(self.headers.get_all('Authorization', [])) == 1
                 and constant(self.headers.get('Authorization', ''), 'Bearer ' + gateway.config['api_token']), 'forbidden', 403)
         voice_match = re.fullmatch(
-            r'/v1/phones/(2[0-9]{2})/voice_(status|start|stop)(\?include_playback=1)?', self.path)
+            r'/v1/phones/(2[0-9]{2})/voice_(status|start|stop|hands_free_status|hands_free_enable|hands_free_disable)(\?include_playback=1)?', self.path)
         if voice_match:
             target, operation, playback_query = voice_match.groups()
             require(not playback_query or operation == 'status', 'invalid_voice_request', 400)
-            if operation == 'status':
+            if operation in ('status', 'hands_free_status'):
                 require(self.command == 'GET' and not self.body(0), 'bad_voice_method', 400)
                 data = {}
             else:

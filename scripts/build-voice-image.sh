@@ -40,6 +40,7 @@ files = (
     'containers/asterisk/phone_voice_transport.py',
     'containers/asterisk/phone_voice_controller.py',
     'containers/asterisk/phone_voice_control.py',
+    'containers/asterisk/phone_voice_hands_free.py',
     'containers/asterisk/phone_voice_sip.py',
     'containers/asterisk/phone_voice_sip_ami.py',
     'containers/asterisk/phone_voice_display.py',

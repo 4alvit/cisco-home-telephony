@@ -11,6 +11,7 @@ import time
 from typing import Any, AsyncIterator, Callable, Protocol
 
 from .audio import UtteranceEndpoint
+from .ha import AssistError, validate_wake_word_phrase
 
 
 FRAME_BYTES = 640  # 20 ms, signed little-endian int16, mono, 16 kHz
@@ -40,7 +41,8 @@ class Detector(Protocol):
 
 class Assist(Protocol):
     async def run(self, audio: AsyncIterator[bytes], *,
-                  conversation_id: str | None = None, on_event: Any = None) -> Any: ...
+                  conversation_id: str | None = None, on_event: Any = None,
+                  wake_word_phrase: str | None = None) -> Any: ...
 
 
 class Playback(Protocol):
@@ -121,12 +123,15 @@ class AssistantService:
                  detector_factory: Callable[[str], Detector], assist: Assist,
                  playback: Playback, on_event: Callable[[VoiceEvent], None] | None = None,
                  clock: Callable[[], float] = time.monotonic, *,
-                 on_reply: Callable[[str, str, str], None] | None = None):
+                 on_reply: Callable[[str, str, str], None] | None = None,
+                 wake_word_phrase: str | None = None):
         if not phones or len(phones) > 100 or any(
                 not isinstance(key, str) or not key or len(key) > 128 or type(value) is not bool
                 for key, value in phones.items()):
             raise ValueError("phones must map bounded opaque IDs to boolean permissions")
         self.settings, self.assist, self.playback = settings, assist, playback
+        validate_wake_word_phrase(wake_word_phrase)
+        self._wake_word_phrase = wake_word_phrase
         self._clock, self._on_event = clock, on_event
         self._on_reply = on_reply
         self._sessions = {key: _Session(detector_factory(key), value,
@@ -415,9 +420,15 @@ class AssistantService:
                 self.end_utterance(phone_id, stream_id)
                 self._emit(phone_id, "thinking")
 
+        result_received = False
+
         async def turn() -> None:
-            result = await self.assist.run(self._audio(item), conversation_id=item.conversation_id,
-                                           on_event=event)
+            nonlocal result_received
+            arguments = {"conversation_id": item.conversation_id, "on_event": event}
+            if item.wake_detection and self._wake_word_phrase is not None:
+                arguments["wake_word_phrase"] = self._wake_word_phrase
+            result = await self.assist.run(self._audio(item), **arguments)
+            result_received = True
             if item.stream_id != stream_id:
                 return
             item.conversation_id = result.conversation_id or item.conversation_id
@@ -448,6 +459,7 @@ class AssistantService:
         watcher = (asyncio.create_task(self._watch_capture(phone_id, stream_id))
                    if item.endpoint is not None else None)
         completed = False
+        duplicate = False
         try:
             await asyncio.wait_for(turn(), self.settings.turn_timeout_seconds)
             completed = True
@@ -455,6 +467,14 @@ class AssistantService:
             pass
         except asyncio.TimeoutError:
             item.error = "turn_timeout"
+        except AssistError as error:
+            # Only HA's exact typed rejection is a benign competing wake. Never
+            # replay this audio or convert other provider failures into success.
+            if (error.code == "duplicate_wake_up_detected" and not result_received and item.wake_detection
+                    and self._wake_word_phrase is not None):
+                duplicate = True
+            else:
+                item.error = "turn_failed"
         except Exception:
             # Provider exceptions can contain URLs, credentials or transcript text.
             item.error = "turn_failed"
@@ -471,7 +491,8 @@ class AssistantService:
             item.preroll.clear()
             item.detector.reset()
             self._owner = None
-            self._quiet_until = self._clock() + self.settings.duplicate_window_seconds
+            self._quiet_until = self._clock() + max(
+                self.settings.duplicate_window_seconds, 2.0 if duplicate else 0.0)
             for other_id, other in self._sessions.items():
                 other.preroll.clear()
                 other.detector.reset()
@@ -480,7 +501,7 @@ class AssistantService:
             if item.error:
                 item.stream_id = None
                 self._emit(phone_id, "error", item.error)
-            elif (completed and item.stream_id == stream_id and item.wake_detection
+            elif ((completed or duplicate) and item.stream_id == stream_id and item.wake_detection
                   and self.settings.rearm_after_turn):
                 self._emit_armed(phone_id)
             else:

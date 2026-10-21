@@ -57,6 +57,14 @@ PHASE_REASONS = frozenset(('model_warmup', 'wake_ready', 'new_session', 'turn_co
                           'playback_stop_failed', 'speech_start', 'end_of_speech',
                           'no_speech', 'utterance_limit', 'audio_not_received', 'turn_cancelled',
                           'duplicate_activation', 'call', 'start_failed', 'assistant_error'))
+SIP_CLEAN_REASONS = frozenset(('explicit_stop', 'lease_expired', 'shutdown', 'dtmf_stop',
+                             'peer_ended', 'call_changed', 'call_preempted'))
+SIP_COMPLETION_REASONS = SIP_CLEAN_REASONS | frozenset((
+    'peer_closed', 'peer_error', 'oversized_packet', 'single_use_wire',
+    'stream_identity_mismatch', 'wire_not_admitted', 'unsupported_audio_packet',
+    'wire_not_ready', 'start_failed', 'admission_unverified', 'assistant_stopped',
+    'silence_sender_stopped', 'receive_idle_timeout', 'session_failed',
+    'observation_unavailable', 'stale_observation', 'voice_session_failed'))
 
 
 def _safe_playback(value):
@@ -387,6 +395,10 @@ class _Session:
     phase_reason: str | None = None
     turns_completed: int = 0
     playback: dict | None = None
+    # Internal lifecycle evidence; deliberately absent from finite wire status.
+    requested_reason: str | None = None
+    completion_reason: str | None = None
+    supervised: bool = False
 
 
 class VoiceControl:
@@ -443,6 +455,7 @@ class VoiceControl:
         self._sessions, self._requests = OrderedDict(), {}
         self._current, self._lock, self._wake = {}, threading.RLock(), threading.Event()
         self._closed = False
+        self.hands_free = None
         self._thread = None
         if monitor:
             self._thread = threading.Thread(target=self._monitor, name='voice-control', daemon=True)
@@ -647,7 +660,7 @@ class VoiceControl:
         return argv
 
     def start(self, target, request_id, *, context, attended=False, exclusive_media=False,
-              enable_microphone=False, dry_run=False):
+              enable_microphone=False, dry_run=False, _hands_free_generation=None):
         p = self._profile(target, context, 'start')
         _require(isinstance(request_id, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{8,128}', request_id),
                  'voice_request_id_required')
@@ -666,6 +679,8 @@ class VoiceControl:
                 return {'schema_version': 1, 'phone': p.phone_id, 'line': target,
                         'valid': True, 'network_actions': 0, 'microphone_started': False,
                         'duration_seconds': p.duration}
+            if self.hands_free is not None:
+                self.hands_free.admit(p.phone_id, _hands_free_generation)
             previous = self._requests.get(request_id)
             if previous:
                 _require(previous.profile.phone_id == p.phone_id, 'voice_request_id_conflict')
@@ -680,8 +695,11 @@ class VoiceControl:
                 fd = self._acquire(p)
             except OSError:
                 raise ControlError('voice_state_unavailable', 503) from None
-            s = _Session(p, secrets.token_hex(16), request_id, target, fd)
+            s = _Session(p, secrets.token_hex(16), request_id, target, fd,
+                         supervised=_hands_free_generation is not None)
             self._sessions[s.session_id] = s; self._requests[request_id] = s; self._current[p.phone_id] = s
+            if self.hands_free is not None:
+                self.hands_free.started(s, _hands_free_generation)
             try:
                 self._write(s)
             except Exception:
@@ -731,6 +749,7 @@ class VoiceControl:
     def _no_launch(self, s, state, error):
         s.state, s.error = state, error
         s.phase = 'error' if error else 'stopped'
+        s.completion_reason = 'start_failed' if error else s.requested_reason
         self._write(s)
         s.cleanup_verified = True
         self._release(s)
@@ -775,11 +794,14 @@ class VoiceControl:
                     'phase': None, 'phase_reason': None, 'turns_completed': 0,
                     'mode': p.mode, 'session_seconds': p.duration}
 
-    def _request_stop(self, s):
+    def _request_stop(self, s, reason='explicit_stop'):
+        _require(reason in ('explicit_stop', 'lease_expired', 'call_preempted', 'shutdown'),
+                 'invalid_voice_stop_reason')
         if s.state not in ('starting', 'running', 'stopping'):
             return
         s.stop_requested = True
         if s.stop_at is None:
+            s.requested_reason = reason
             s.stop_at = self.clock()
             s.state = 'stopping'
             if s.handle is not None:
@@ -797,6 +819,8 @@ class VoiceControl:
         with self._lock:
             s = self._sessions.get(session_id) if isinstance(session_id, str) else None
             _require(s is not None and s.profile.phone_id == p.phone_id, 'unknown_voice_session', 404)
+            if self.hands_free is not None and self._current.get(p.phone_id) is s:
+                self.hands_free.manual_stop(p.phone_id, session_id=s.session_id)
             self._request_stop(s)
             return self._view(s)
 
@@ -907,6 +931,7 @@ class VoiceControl:
                 never_started = validate(s, report, raw)
                 clean, reason = True, 'voice_session_failed'
                 s.phase_reason = 'start_failed'
+                s.completion_reason = 'start_failed'
             elif s.profile.media_transport == 'sip_audiosocket':
                 confirmed, clean, reason = self._sip_stop_report(s, report, raw)
             else:
@@ -944,8 +969,19 @@ class VoiceControl:
         clean = (type(report.get('cleanup_errors')) is list and report['cleanup_errors'] == []
                  and isinstance(result, dict) and type(result.get('cleanup_errors')) is list
                  and result['cleanup_errors'] == [])
-        completed = (isinstance(result, dict) and result.get('reason') in
-                     ('explicit_stop', 'lease_expired', 'shutdown', 'dtmf_stop', 'peer_ended', 'call_changed'))
+        terminal = result.get('reason') if isinstance(result, dict) else None
+        completed = isinstance(terminal, str) and terminal in SIP_CLEAN_REASONS
+        s.completion_reason = (terminal if isinstance(terminal, str)
+                               and terminal in SIP_COMPLETION_REASONS else 'voice_session_failed')
+        # SIGTERM intentionally has no public reason payload. Recover only the
+        # manager's own first stop cause; independent peer/DTMF evidence wins.
+        if terminal == 'explicit_stop' and s.requested_reason in (
+                'lease_expired', 'call_preempted', 'shutdown'):
+            s.completion_reason = s.requested_reason
+        public_reason = {'call_changed': 'call', 'call_preempted': 'call',
+                         'peer_ended': 'transport_stopped', 'peer_closed': 'transport_stopped',
+                         'dtmf_stop': 'explicit_stop'}.get(s.completion_reason, s.completion_reason)
+        s.phase_reason = public_reason if public_reason in PHASE_REASONS else 'voice_session_failed'
         count = report.get('turns_completed')
         if type(count) is int and 0 <= count <= MAX_TURNS:
             s.turns_completed = max(s.turns_completed, count)
@@ -980,8 +1016,13 @@ class VoiceControl:
                     continue
                 code = s.handle.poll()
                 if code is None:
-                    if (s.started is not None and now - s.started >= s.profile.duration) or s.handle.overflow:
+                    if s.handle.overflow:
                         self._request_stop(s)
+                    # The independent owner monitor enforces early rotation;
+                    # slow observations for another phone cannot delay it.
+                    elif s.started is not None and now - s.started >= (
+                            s.profile.duration - (5 if s.supervised else 0)):
+                        self._request_stop(s, reason='lease_expired')
                     if s.stop_at is not None and now - s.stop_at >= STOP_GRACE_SECONDS and not s.killed:
                         s.handle.kill(); s.killed = True
                     continue
@@ -1009,9 +1050,14 @@ class VoiceControl:
         failed = False
         with self._lock:
             self._closed = True
+            if self.hands_free is not None:
+                try:
+                    self.hands_free.close()
+                except Exception:
+                    failed = True
             for s in self._sessions.values():
                 try:
-                    self._request_stop(s)
+                    self._request_stop(s, reason='shutdown')
                 except Exception:
                     # A journal/OS failure for one phone must not prevent
                     # sending Stop to the other owned runners.

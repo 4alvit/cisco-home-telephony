@@ -36,6 +36,10 @@ class VoiceCLITests(unittest.TestCase):
                line='202', human=False, response_values=None):
         calls = []
         def request(path, body=None):
+            # Preserve these finite-session fixtures as a legacy gateway. The
+            # hands-free tests separately assert the complete two-read sequence.
+            if path.endswith('/voice_hands_free_status'):
+                raise cisco.Refused('unknown_action', http_status=404)
             calls.append((path, copy.deepcopy(body)))
             if failure:
                 raise failure

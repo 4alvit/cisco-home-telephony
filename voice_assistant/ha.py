@@ -40,6 +40,13 @@ class AssistTimeout(AssistError):
         super().__init__("timeout")
 
 
+def validate_wake_word_phrase(value: str | None) -> None:
+    """Keep the shared HA deduplication key explicit and byte-for-byte stable."""
+    if value is not None and (type(value) is not str or not 1 <= len(value) <= 128
+            or value != value.strip() or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+        raise ValueError("invalid wake word phrase")
+
+
 def _timeout(seconds: float):
     """Use stdlib timeouts on 3.11+, loading the 3.10 extra only when needed."""
     factory = getattr(asyncio, "timeout", None)
@@ -285,6 +292,7 @@ class HAClient:
         audio: AsyncIterator[bytes],
         conversation_id: str | None = None,
         on_event: EventCallback | None = None,
+        *, wake_word_phrase: str | None = None,
     ) -> AssistResult:
         """Send a bounded turn and return its answer; task cancellation aborts it.
 
@@ -295,6 +303,7 @@ class HAClient:
         """
         if conversation_id is not None and not isinstance(conversation_id, str):
             raise ValueError("conversation_id must be a string or None")
+        validate_wake_word_phrase(wake_word_phrase)
         ws = None
         try:
             async with _timeout(self.timeout):
@@ -307,7 +316,7 @@ class HAClient:
                     auth = await self._receive(ws)
                     if auth.get("type") != "auth_ok":
                         raise AssistError("authentication-rejected")
-                return await self._exchange(ws, audio, conversation_id, on_event)
+                return await self._exchange(ws, audio, conversation_id, on_event, wake_word_phrase)
         except (TimeoutError, asyncio.TimeoutError):
             raise AssistTimeout() from None
         except AssistError:
@@ -398,12 +407,15 @@ class HAClient:
                 await ws.send(prefix + chunk[offset:offset + 16384])
         await ws.send(prefix)
 
-    async def _exchange(self, ws, audio, conversation_id, on_event) -> AssistResult:
+    async def _exchange(self, ws, audio, conversation_id, on_event,
+                        wake_word_phrase=None) -> AssistResult:
         command = {
             "id": 1, "type": "assist_pipeline/run", "start_stage": "stt",
             "end_stage": "tts", "input": {"sample_rate": 16000},
             "timeout": self.timeout,
         }
+        if wake_word_phrase is not None:
+            command["input"]["wake_word_phrase"] = wake_word_phrase
         for key, value in (("pipeline", self.pipeline_id), ("device_id", self.device_id), ("conversation_id", conversation_id)):
             if value is not None:
                 command[key] = value

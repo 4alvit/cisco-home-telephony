@@ -32,7 +32,7 @@ BASE_FILES = {
     "containers/asterisk/phone_voice_sip_ami.py": "/workspace/containers/asterisk/phone_voice_sip_ami.py",
     **{f"containers/asterisk/{name}.py": f"/workspace/containers/asterisk/{name}.py"
        for name in ("phone_voice_transport", "phone_voice_controller",
-                    "phone_voice_control", "phone_voice_display", "phone_camera_preview", "phone_gateway",
+                    "phone_voice_control", "phone_voice_hands_free", "phone_voice_display", "phone_camera_preview", "phone_gateway",
                     "phone_apps", "phone_apps_ha")},
     **{f"voice_assistant/{name}.py": f"/workspace/voice_assistant/{name}.py"
        for name in ("__init__", "config", "audio", "service", "ha", "pipeline", "playback")},

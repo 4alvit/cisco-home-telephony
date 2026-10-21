@@ -39,7 +39,11 @@ voice_request_id_required explicit_voice_start_required voice_control_closed
 voice_control_disabled voice_request_id_conflict voice_phone_busy
 voice_recovery_required voice_state_unavailable voice_start_failed
 voice_profile_changed voice_rtp_endpoint_collision
-voice_display_port_collision invalid_voice_ffmpeg'''.split())
+voice_display_port_collision invalid_voice_ffmpeg
+hands_free_unavailable hands_free_not_supported hands_free_enabled
+hands_free_start_cancelled hands_free_state_unavailable hands_free_owner_unavailable
+hands_free_recovery_required hands_free_observation_failed hands_free_retry_exhausted
+hands_free_start_failed'''.split())
 SAFE_REASONS = SAFE_REASONS | VOICE_REASONS
 ERROR_REASONS = SAFE_REASONS | frozenset(('invalid_gateway_response', 'gateway_http_error',
     'network_outcome_unknown', 'invalid_gateway_response_or_request', 'invalid_worker_input',

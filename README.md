@@ -1,6 +1,6 @@
 # Cisco 7945G: home telephony with Asterisk and k3s
 
-For the finite voice prototype, start with the [phone and CLI voice quickstart](docs/voice-quickstart.md).
+For voice sessions and opt-in hands-free operation, start with the [phone and CLI voice quickstart](docs/voice-quickstart.md).
 
 A practical guide to converting **Cisco 7945G** phones to SIP and running them
 with Asterisk on k3s, integrated with Home Assistant.
@@ -44,9 +44,11 @@ conversion to MPP is not required.
 - **Try the optional wake pilot:** [build the CPU wake runtime](docs/voice-wake-runtime.md)
   and [prepare a suspended one-shot k3s Job](docs/voice-wake-k3s.md).
   Private models remain outside the image; activation is explicit and bounded.
-- **Control bounded voice sessions:** [gateway, CLI and phone menu setup](docs/voice-control.md).
+- **Control voice sessions and hands-free mode:** [gateway, CLI and phone menu setup](docs/voice-control.md).
   These optional controls require the matching voice runtime and private registry;
-  updating a client alone does not enable capture.
+  `voice enable` grants automatic sessions and `voice disable` stops that intent.
+  Each media session remains bounded; renewal includes cleanup and preparation gaps.
+  Updating a client alone does not enable capture.
 - **Deploy the voice gateway:** [installation, upgrade and rollback](docs/voice-gateway-deployment.md)
   preserve the existing gateway configuration and persistent state.
 - **Check the selected voice services:** [read-only pipeline preflight](docs/voice-pipeline-preflight.md)

@@ -144,8 +144,7 @@ async def run(args, config, private, phone, voice):
         sink.target = session.sink
         report['result'] = asdict(await session.run(service))
         report['cleanup_errors'].extend(report['result']['cleanup_errors'])
-        if report['result']['reason'] not in ('explicit_stop', 'lease_expired', 'shutdown',
-                                             'dtmf_stop', 'peer_ended', 'call_changed'):
+        if report['result']['reason'] not in control.SIP_CLEAN_REASONS:
             report['error'] = 'voice_session_failed'
     except asyncio.CancelledError:
         cancelled = True
@@ -212,7 +211,7 @@ async def run(args, config, private, phone, voice):
         if session is not None:
             report['silence_frames'] = session.sink.silence_frames
         reason = (report['result'] or {}).get('reason')
-        public_reason = {'call_changed': 'call', 'peer_ended': 'transport_stopped',
+        public_reason = {'call_changed': 'call', 'call_preempted': 'call', 'peer_ended': 'transport_stopped',
                          'dtmf_stop': 'explicit_stop'}.get(reason, reason)
         if cancelled:
             public_reason = 'shutdown'

@@ -24,7 +24,12 @@ COMMANDS = {
     'alert': 'alert timer|alarm', 'alert_stop': 'stop-alert [--alert-id ID]',
 }
 VOICE_COMMANDS = ['voice status', 'voice start --idempotency-key KEY --attended --exclusive-media --enable-microphone',
-                  'voice stop [--session-id ID]']
+                  'voice stop [--session-id ID]', 'voice enable', 'voice disable']
+HANDS_FREE_STATES = frozenset(('disabled', 'waiting_idle', 'starting', 'running',
+                             'stopping', 'backoff', 'faulted'))
+HANDS_FREE_ERRORS = frozenset(('hands_free_state_unavailable', 'hands_free_owner_unavailable',
+    'hands_free_recovery_required', 'hands_free_observation_failed',
+    'hands_free_retry_exhausted', 'hands_free_start_failed'))
 VOICE_PHASES = frozenset(('preparing', 'armed', 'listening', 'thinking', 'speaking', 'stopped', 'error'))
 VOICE_PHASE_REASONS = frozenset((
     'model_warmup', 'wake_ready', 'new_session', 'turn_complete', 'user_stop',
@@ -574,10 +579,75 @@ def voice_status(value):
     return result
 
 
+def hands_free_status(value):
+    """Validate supervisor intent separately from the finite session schema."""
+    require(type(value) is dict and type(value.get('schema_version')) is int
+            and value['schema_version'] == 1, 'invalid_hands_free_response')
+    require(all(isinstance(value.get(key), str) and re.fullmatch(r'2[0-9]{2}', value[key])
+                for key in ('phone', 'line')),
+            'invalid_hands_free_response')
+    require(type(value.get('enabled')) is bool and isinstance(value.get('state'), str)
+            and value['state'] in HANDS_FREE_STATES, 'invalid_hands_free_response')
+    session = value.get('session_id')
+    require('session_id' in value and (session is None or isinstance(session, str)
+            and re.fullmatch(r'[0-9a-f]{32}', session)), 'invalid_hands_free_response')
+    duration, failures, retry = (value.get(key) for key in
+                                ('session_seconds', 'consecutive_failures', 'retry_after_seconds'))
+    require(type(duration) in (int, float) and 0 < duration <= 300 and math.isfinite(duration)
+            and type(failures) is int and 0 <= failures <= 3
+            and type(retry) in (int, float) and 0 <= retry <= 10 and math.isfinite(retry),
+            'invalid_hands_free_response')
+    require(value['state'] == 'backoff' or retry == 0, 'invalid_hands_free_response')
+    require('error' in value and (value['error'] is None or isinstance(value['error'], str)
+            and value['error'] in HANDS_FREE_ERRORS), 'invalid_hands_free_response')
+    return {key: value[key] for key in ('schema_version', 'phone', 'line', 'enabled', 'state',
+            'session_id', 'session_seconds', 'consecutive_failures', 'retry_after_seconds', 'error')}
+
+
+def voice_wake_ready(value):
+    return (value.get('state') == 'running' and value.get('active') is True
+            and value.get('stop_requested') is False and value.get('stop_confirmed') is False
+            and value.get('error') is None and value.get('remaining_seconds', 0) > 0
+            and value.get('phase') == 'armed' and value.get('phase_reason') == 'wake_ready')
+
+
+def hands_free_command(args, client, path, *, on_dispatch=None):
+    operation = args.voice_action
+    require(not (operation == 'disable' and args.dry_run), 'hands_free_disable_dry_run_unsupported')
+    key = args.idempotency_key or 'cli-' + secrets.token_hex(16)
+    require(isinstance(key, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{8,128}', key),
+            'voice_request_id_required')
+    body = {'idempotency_key': key}
+    if operation == 'enable':
+        body.update(enable_microphone=True, exclusive_media=True, dry_run=args.dry_run)
+    if not args.dry_run and on_dispatch is not None:
+        client.on_dispatch = lambda: on_dispatch(key)
+    response = client.request(path + 'hands_free_' + operation, body)
+    require(type(response) is dict and response.get('status') == 'accepted'
+            and response.get('action_id') == key, 'unconfirmed_gateway_response')
+    value = response.get('hands_free')
+    if args.dry_run:
+        require(type(value) is dict and type(value.get('schema_version')) is int
+                and value['schema_version'] == 1 and value.get('valid') is True
+                and value.get('line') == args.extension
+                and isinstance(value.get('phone'), str) and re.fullmatch(r'2[0-9]{2}', value['phone'])
+                and value.get('microphone_started') is False
+                and type(value.get('network_actions')) is int and value['network_actions'] == 0
+                and type(value.get('duration_seconds')) in (int, float)
+                and 30 <= value['duration_seconds'] <= 300 and math.isfinite(value['duration_seconds']),
+                'invalid_hands_free_response')
+        return {'status': 'dry_run', 'action': 'voice_enable', 'action_id': key,
+                'selected_line': args.extension, 'microphone_started': False}
+    return {'status': 'accepted', 'action': 'voice_' + operation, 'action_id': key,
+            'hands_free': hands_free_status(value), 'selected_line': args.extension}
+
+
 def voice_command(args, config, *, on_dispatch=None):
     client = Gateway(config, args.timeout)
     operation = args.voice_action
     path = '/v1/phones/' + args.extension + '/voice_'
+    if operation in ('enable', 'disable'):
+        return hands_free_command(args, client, path, on_dispatch=on_dispatch)
     key = None
     session_id = getattr(args, 'session_id', None)
     response = None
@@ -641,6 +711,7 @@ def voice_command(args, config, *, on_dispatch=None):
         return {'status': 'dry_run', 'action': 'voice_start', 'action_id': key,
                 'selected_line': args.extension, 'microphone_started': False}
     require('valid' not in value, 'invalid_voice_response')
+    raw_voice = value
     value = voice_status(value)
     # Use only validated public fields; a foreign journal is not a local child
     # that this gateway can signal. Recovery alone does not imply foreign ownership.
@@ -659,15 +730,36 @@ def voice_command(args, config, *, on_dispatch=None):
                     'session_id': session_id, 'selected_line': args.extension}
     elif operation == 'start':
         require(value['session_id'] is not None, 'invalid_voice_response')
-    result = {'status': 'ok' if operation == 'status' else 'accepted', 'voice': value}
+    result = {'status': 'ok' if operation == 'status' else 'accepted', 'voice': value,
+              'voice_wake_ready': 'error' in raw_voice and voice_wake_ready(raw_voice)}
     if operation == 'status':
         result.update(guidance)
+        try:
+            response = client.request(path + 'hands_free_status')
+        except Refused as exc:
+            legacy = (exc.http_status == 404 and exc.reason in
+                      ('gateway_http_error', 'unknown_action', 'not_found'))
+            result.update(hands_free=None, hands_free_available=False,
+                          hands_free_error='hands_free_unavailable' if legacy else exc.reason,
+                          hands_free_status_failed=not legacy, hands_free_listening=False)
+        else:
+            require(type(response) is dict and response.get('status') == 'ok',
+                    'invalid_hands_free_response')
+            intent = hands_free_status(response.get('hands_free'))
+            require(intent['phone'] == value['phone'], 'invalid_hands_free_response')
+            listening = (intent['enabled'] and intent['state'] == 'running'
+                         and intent['error'] is None and intent['session_id'] is not None
+                         and intent['session_id'] == value['session_id']
+                         and 'error' in raw_voice
+                         and voice_wake_ready(raw_voice))
+            result.update(hands_free=intent, hands_free_available=True,
+                          hands_free_listening=listening)
     if key is not None:
         result['action_id'] = key
     return result
 
 
-def voice_readiness(value):
+def voice_readiness(value, *, wake_ready=False):
     if value['stop_confirmed']:
         return 'Session ended; cleanup confirmed.'
     if value['stop_requested'] or value['state'] == 'stopping':
@@ -677,7 +769,8 @@ def voice_readiness(value):
                 else 'Session is not running; cleanup is unconfirmed.')
     return {
         'preparing': 'Preparing; wait before speaking.',
-        'armed': 'Wake listener ready; say the wake phrase.',
+        'armed': ('Wake listener ready; say the wake phrase.' if wake_ready
+                  else 'Wake readiness not confirmed; inspect the matching session status.'),
         'listening': 'Listening; speak now.',
         'thinking': 'Processing your request; please wait.',
         'speaking': 'Playing the reply.',
@@ -686,13 +779,56 @@ def voice_readiness(value):
     }.get(value.get('phase'), 'Readiness not reported; use the live assistant screen.')
 
 
+def display_hands_free(result, args):
+    value = result.get('hands_free')
+    if value is None:
+        print('Hands-free: unavailable on this gateway; desired state is unknown.')
+        if result.get('hands_free_status_failed'):
+            print('Hands-free status error: ' + result['hands_free_error'])
+        return
+    print('Hands-free phone: ' + value['phone'] + '; enabled line: ' + value['line'])
+    print('Hands-free desired: ' + ('enabled' if value['enabled'] else 'disabled'))
+    print('Hands-free state: ' + value['state'])
+    guidance = {
+        'disabled': 'Automatic listening disabled; check finite session status for cleanup.',
+        'waiting_idle': 'Waiting for verified idle lines and the quiet period; not listening yet.',
+        'starting': 'Preparing a session; wake readiness is not confirmed.',
+        'running': 'Session running; wake readiness is not confirmed.',
+        'stopping': 'Waiting for owned session cleanup; not confirmed stopped yet.',
+        'backoff': 'Automatic retry pending; not listening.',
+        'faulted': 'Failed; resolve the reported problem before explicitly enabling again.',
+    }[value['state']]
+    if result.get('hands_free_listening') is True:
+        guidance = 'Wake listener ready; say the wake phrase.'
+    print('Hands-free readiness: ' + guidance)
+    print('Inner session limit: ' + str(value['session_seconds']) + ' seconds')
+    print('Consecutive failures: ' + str(value['consecutive_failures']))
+    if value['state'] == 'backoff':
+        print('Retry after: ' + str(value['retry_after_seconds']) + ' seconds')
+    if value['error']:
+        print('Hands-free reason: ' + value['error'])
+    if 'action_id' in result:
+        print('Action: ' + result['action_id'])
+    if value['enabled']:
+        print('Disable automatic listening: ' + shlex.join(
+            ['cisco', '--config', args.config, '--timeout', str(args.timeout),
+             args.extension, 'voice', 'disable']))
+
+
 def display_voice(result, args):
+    if 'hands_free' in result:
+        display_hands_free(result, args)
+    if 'voice' not in result:
+        return
     value = result['voice']
     print('Voice: ' + value['state'])
     print('Phone: ' + value['phone'] + '; session line: ' + value['line'])
     print('Session: ' + (value['session_id'] or 'none'))
     print('Remaining: ' + str(value['remaining_seconds']) + ' seconds')
-    print('Readiness: ' + voice_readiness(value))
+    if (result.get('hands_free') or {}).get('enabled'):
+        print('Finite session phase: ' + str(value.get('phase') or 'unreported'))
+    else:
+        print('Readiness: ' + voice_readiness(value, wake_ready=result.get('voice_wake_ready', False)))
     if 'mode' in value:
         print('Mode: ' + value['mode'])
     if 'session_seconds' in value:
@@ -805,7 +941,7 @@ def parser():
     alarm.add_argument('--days', required=True, help='mon,tue,... or weekdays, weekend, daily')
     alarm.add_argument('--enable', action='store_true', help='enable this alarm; otherwise save it disabled')
     alarm.add_argument('--replace', action='store_true', help='explicitly replace an alarm owned by the sibling line')
-    voice_sub = sub.add_parser('voice', help='Bounded attended voice controls').add_subparsers(
+    voice_sub = sub.add_parser('voice', help='Finite sessions and opt-in automatic hands-free controls').add_subparsers(
         dest='voice_action', required=True)
     voice_sub.add_parser('status', help='Read voice ownership without an AMI inventory request').add_argument(
         '--playback', action='store_true', help='Request optional private PCM completion counters')
@@ -813,6 +949,8 @@ def parser():
     for flag in ('attended', 'exclusive-media', 'enable-microphone'):
         voice_start.add_argument('--' + flag, action='store_true')
     voice_sub.add_parser('stop', help='Stop the current session, or an exact supplied session ID').add_argument('--session-id')
+    voice_sub.add_parser('enable', help='Authorize automatic microphone sessions; optional --idempotency-key and --dry-run')
+    voice_sub.add_parser('disable', help='Disable automatic sessions durably and request owned-session cleanup')
     for command_parser in dict.fromkeys(sub.choices.values()):
         global_options(command_parser, inherited=True)
     for command_parser in (*timer_sub.choices.values(), *alarm_sub.choices.values(), *voice_sub.choices.values()):
@@ -941,11 +1079,13 @@ def main(argv=None):
         config = load_config(args.config)
         if args.command == 'voice':
             result = voice_command(args, config, on_dispatch=remember_voice_dispatch)
-            if args.json or 'voice' not in result:
+            if args.json or not ('voice' in result or 'hands_free' in result):
                 print(json.dumps(result, sort_keys=True))
             else:
                 display_voice(result, args)
             return int(result.get('gateway_stop_available') is False
+                       or result.get('hands_free_status_failed') is True
+                       or (result.get('hands_free') or {}).get('state') in {'faulted', 'backoff'}
                        or result.get('voice', {}).get('state') in {
                 'failed', 'recovery_required', 'external_owner'})
         phone = None
