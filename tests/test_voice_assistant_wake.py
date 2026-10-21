@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from voice_assistant.audio import HOP_BYTES, HOP_SAMPLES, pcm_duration, validate_pcm16le
+from voice_assistant.service import AssistantService, ServiceSettings
 from voice_assistant.wake import FRONTEND_ID, FrozenOnnxWakeDetector, WakeModelError
 
 try:
@@ -118,6 +119,33 @@ class FrozenFrontendTests(unittest.TestCase):
         self.assertEqual(triggered, [16, 35, 54])
         self.assertEqual(len(classifier.inputs), 39)
 
+    def test_ineligible_crossings_keep_features_without_arming_refractory(self):
+        detector, (_, _, classifier) = self.detector()
+        self.assertFalse(detector.feed_with_eligibility(bytes(HOP_BYTES * 16), eligible=False))
+        self.assertTrue(detector.ready)
+        self.assertEqual(detector.last_score, .5)
+        self.assertIsNone(detector._last_trigger)
+        self.assertFalse(detector.feed_with_eligibility(bytes(HOP_BYTES), eligible=False))
+        np.testing.assert_array_equal(classifier.inputs[-1][0, :, 0], np.arange(2, 18))
+
+        # The old feed API remains eligible by default, including immediately
+        # after a suppressed crossing with continuous classifier history.
+        self.assertTrue(detector.feed(bytes(HOP_BYTES)))
+        np.testing.assert_array_equal(classifier.inputs[-1][0, :, 0], np.arange(3, 19))
+        self.assertEqual(detector._last_trigger, 18)
+        for _ in range(18):
+            self.assertFalse(detector.feed_with_eligibility(bytes(HOP_BYTES), eligible=False))
+        self.assertEqual(detector._last_trigger, 18)
+        self.assertTrue(detector.feed_with_eligibility(bytes(HOP_BYTES), eligible=True))
+
+    def test_eligibility_flag_is_explicit_and_does_not_consume_invalid_input(self):
+        detector, (mel, _, _) = self.detector()
+        for invalid in (None, 0, 1, "true"):
+            with self.subTest(value=invalid), self.assertRaises(TypeError):
+                detector.feed_with_eligibility(bytes(HOP_BYTES), eligible=invalid)
+        self.assertFalse(mel.inputs)
+        self.assertFalse(detector.ready)
+
     def test_packet_boundaries_and_multi_hop_calls_do_not_change_features(self):
         blob = np.arange(HOP_SAMPLES * 40, dtype=np.int32).astype("<i2").tobytes()
         batch, batch_sessions = self.detector()
@@ -198,6 +226,62 @@ class FrozenFrontendTests(unittest.TestCase):
                 self.detector(threshold=invalid)
         detector, _ = self.detector(score=.5, threshold=.75)
         self.assertFalse(detector.feed(bytes(HOP_BYTES * 16)))
+
+
+@unittest.skipIf(np is None, "Optional NumPy wake dependency is unavailable")
+class FrozenServiceEligibilityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cooldown_crossing_keeps_history_for_first_eligible_hop(self):
+        now = [0.0]
+        sessions = [FakeSession(role) for role in ("mel", "embedding", "classifier")]
+        detector = FrozenOnnxWakeDetector(*sessions, threshold=.5)
+        calls, events = [], []
+
+        class Assist:
+            async def run(self, _audio, **_kwargs):
+                calls.append(True)
+                return SimpleNamespace(conversation_id=None)
+
+        class Playback:
+            async def play(self, *_args):
+                pass
+
+            async def stop(self, *_args):
+                pass
+
+        service = AssistantService(
+            ServiceSettings(enabled=True, rearm_after_turn=True, duplicate_window_seconds=2),
+            {"phone": True}, lambda _: detector, Assist(), Playback(), events.append,
+            clock=lambda: now[0])
+        self.addAsyncCleanup(service.close)
+        # An actual completed turn establishes the service's two-second gate.
+        await service.activate("phone")
+        await service.wait_idle("phone")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(service._quiet_until, 2.0)
+        stream = await service.listen("phone")
+        for frame in range(63):
+            now[0] = (frame + 1) * .02
+            service.feed_pcm("phone", stream, bytes(640))
+        now[0] = 1.999
+        service.feed_pcm("phone", stream, bytes(640))
+        self.assertTrue(detector.ready)
+        self.assertEqual(detector.last_score, .5)
+        self.assertIsNone(detector._last_trigger)
+        self.assertEqual(service.status("phone").reason, "model_warmup")
+        self.assertFalse(any(event.reason == "wake_ready" for event in events))
+        self.assertEqual(len(calls), 1)
+
+        now[0] = 2.0
+        service.feed_pcm("phone", stream, bytes(640))
+        self.assertEqual(service.status("phone").reason, "wake_ready")
+        for frame in range(3):
+            now[0] = 2.02 + frame * .02
+            service.feed_pcm("phone", stream, bytes(640))
+        self.assertEqual(service.status("phone").state, "listening")
+        self.assertEqual(len(sessions[2].inputs), 2)
+        np.testing.assert_array_equal(sessions[2].inputs[-1][0, :, 0], np.arange(2, 18))
+        await service.wait_idle("phone")
+        self.assertEqual(len(calls), 2)
 
 
 @unittest.skipIf(np is None, "Optional NumPy wake dependency is unavailable")

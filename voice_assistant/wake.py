@@ -194,7 +194,7 @@ class FrozenOnnxWakeDetector:
             raise WakeModelError("Frozen models must return finite float32 values")
         return result
 
-    def _process_hop(self, pcm: bytes) -> bool:
+    def _process_hop(self, pcm: bytes, *, eligible: bool) -> bool:
         np = self._np
         samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32)
         audio = np.concatenate((self._context, samples))
@@ -221,7 +221,7 @@ class FrozenOnnxWakeDetector:
         self.last_score = float(output.reshape(-1)[0])
         if not 0 <= self.last_score <= 1:
             raise WakeModelError("Classifier probability must be in [0, 1]")
-        if (self.last_score >= self.threshold and (self._last_trigger is None
+        if (eligible and self.last_score >= self.threshold and (self._last_trigger is None
                 or self._hop - self._last_trigger >= REFRACTORY_HOPS)):
             self._last_trigger = self._hop
             return True
@@ -229,6 +229,12 @@ class FrozenOnnxWakeDetector:
 
     def feed(self, pcm: bytes) -> bool:
         """Consume ordered PCM16 mono 16 kHz bytes; never inspect a microphone."""
+        return self.feed_with_eligibility(pcm, eligible=True)
+
+    def feed_with_eligibility(self, pcm: bytes, *, eligible: bool) -> bool:
+        """Advance audio history; only eligible detections arm the refractory window."""
+        if type(eligible) is not bool:
+            raise TypeError("eligible must be a boolean")
         validate_pcm16le(pcm)
         data = self._pending + pcm
         whole = len(data) // HOP_BYTES * HOP_BYTES
@@ -236,7 +242,7 @@ class FrozenOnnxWakeDetector:
         try:
             for offset in range(0, whole, HOP_BYTES):
                 # Do not short-circuit after a trigger: every hop advances state.
-                hop_trigger = self._process_hop(data[offset:offset + HOP_BYTES])
+                hop_trigger = self._process_hop(data[offset:offset + HOP_BYTES], eligible=eligible)
                 triggered = triggered or hop_trigger
             self._pending = data[whole:]
         except Exception:

@@ -160,9 +160,13 @@ class AssistantService:
         return item is not None and item.stream_id == stream_id and item.state == "speaking"
 
     def _emit_armed(self, phone_id: str) -> None:
-        """Report optional wake-model readiness only when the status changes."""
+        """Report readiness only when a warmed detector can start a turn."""
         item = self._sessions[phone_id]
         ready = getattr(item.detector, "ready", None)
+        if ready is not None:
+            # Keep the existing preparing status until both activation gates
+            # open; model warmup may finish before the duplicate window ends.
+            ready = ready and self._owner is None and self._clock() >= self._quiet_until
         reason = None if ready is None else "wake_ready" if ready else "model_warmup"
         if item.state != "armed" or item.reason != reason:
             self._emit(phone_id, "armed", reason)
@@ -280,7 +284,14 @@ class AssistantService:
             return True
         item.preroll.append(pcm)
         try:
-            detected = item.detector.feed(pcm)
+            gated_feed = getattr(item.detector, "feed_with_eligibility", None)
+            if callable(gated_feed):
+                # Suppressed crossings must not consume a real detector's
+                # refractory window or discard its continuous feature history.
+                detected = gated_feed(
+                    pcm, eligible=self._owner is None and self._clock() >= self._quiet_until)
+            else:
+                detected = item.detector.feed(pcm)
             self._emit_armed(phone_id)
         except Exception:
             item.stream_id = None
