@@ -100,13 +100,14 @@ class AmiPort:
         endpoints, channels = ami.snapshot()
         own = self.gateway.own_channels(self.phone, channels)
         known = {'Not in use', 'In use', 'Busy', 'Ringing', 'Ring+Inuse', 'On Hold'}
-        registered = (all(endpoints.get(line) in known for line in self.phone['lines'])
-                      and not any(endpoints.get(line) in {'On Hold', 'Busy', 'Ringing', 'Ring+Inuse'}
-                                  for line in self.phone['lines']))
+        registered = all(endpoints.get(line) in known for line in self.phone['lines'])
+        conflicting = any(endpoints.get(line) in {'On Hold', 'Busy', 'Ringing', 'Ring+Inuse'}
+                          for line in self.phone['lines'])
         self.observation = Snapshot(self.phone['id'], started, registered,
             tuple(Channel(item.get('Channel', ''), item.get('Uniqueid', ''),
                           item.get('Channel', '').split('/')[1].split('-')[0]) for item in own),
-            frozenset(line for line in self.phone['lines'] if endpoints.get(line) != 'Not in use'))
+            frozenset(line for line in self.phone['lines'] if endpoints.get(line) != 'Not in use'),
+            conflicting_call_state=conflicting)
         if self.clock() - started > 1:
             raise BoundaryError('snapshot_stale')
         return endpoints, channels, own
