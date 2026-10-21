@@ -92,6 +92,14 @@ session with a stale finite phase. Missing fields or a changed ID are not ready.
 Absence of readiness does not prove microphone closure: capture can already be
 active during preparation, while uncertain cleanup needs separate recovery.
 
+That tuple applies to raw Gateway responses. In the output of
+`cisco --json LINE voice status`, use top-level `hands_free_listening: true`:
+the CLI evaluates the full tuple using the original Gateway fields.
+Its finite `voice` object omits null `error` values, so do not interpret an
+omitted error field as independent readiness evidence. The separate
+`voice_wake_ready` field covers only the finite session and does not establish
+that the hands-free policy is enabled and owns that same session.
+
 Each inner session retains its configured limit of at most 300 seconds and its
 existing native deadline, reservation and cleanup proof. Intentional renewal
 requests exact Stop of the owned session five seconds before its deadline, then
@@ -114,7 +122,10 @@ lease/renewal completion does.
 
 Shutdown prevents new starts before stopping owned sessions. Enabled intent
 can survive a clean gateway restart, but an unresolved journal fails closed
-and is never erased automatically. A disabled intent and an unconfirmed Stop
+and is never erased automatically. A confirmed phone hangup, DTMF Stop or
+ambiguous call ending disables intent even if gateway shutdown was requested
+at the same time; restarting the service must not undo that stop.
+A disabled intent and an unconfirmed Stop
 must be shown together; neither an empty channel list nor process exit proves
 physical microphone closure.
 

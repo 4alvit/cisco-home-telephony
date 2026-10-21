@@ -427,10 +427,49 @@ class HandsFreeTests(unittest.TestCase):
         self.manager.close()
         self.assertEqual(session.requested_reason, 'shutdown')
         self.finish('explicit_stop')
+        self.assertEqual(session.completion_reason, 'shutdown')
         self.assertTrue(self.record()['enabled'])
         self.assertFalse(self.record()['pending'])
-        _, second = self.new_manager()
-        self.assertEqual(self.status(second)['state'], 'waiting_idle')
+        self.manager, self.supervisor = self.new_manager()
+        self.assertTrue(self.status()['enabled'])
+        self.assertEqual(self.status()['state'], 'waiting_idle')
+        self.supervisor.tick()
+        self.assertEqual(len(self.runners), 1)
+        self.clock.advance(2)
+        self.supervisor.tick()
+        self.assertEqual(len(self.runners), 2)
+        self.assertNotEqual(self.manager._current['201'].session_id, session.session_id)
+
+    def check_manual_end_during_shutdown(self, reason):
+        self.enable()
+        session = self.start()
+        self.manager.close()
+        self.assertEqual(session.requested_reason, 'shutdown')
+        self.finish(reason)
+        self.assertEqual(session.completion_reason, reason)
+        self.assertTrue(session.cleanup_verified)
+        self.assertFalse(self.record()['enabled'])
+        self.assertFalse(self.record()['pending'])
+        self.manager, self.supervisor = self.new_manager()
+        self.assertFalse(self.status()['enabled'])
+        self.assertEqual(self.status()['state'], 'disabled')
+        launches = len(self.runners)
+        self.supervisor.tick()
+        self.clock.advance(2)
+        self.supervisor.tick()
+        self.assertEqual(len(self.runners), launches)
+
+    def test_dtmf_stop_during_shutdown_stays_disabled_after_restart(self):
+        self.check_manual_end_during_shutdown('dtmf_stop')
+
+    def test_peer_ended_during_shutdown_stays_disabled_after_restart(self):
+        self.check_manual_end_during_shutdown('peer_ended')
+
+    def test_peer_closed_during_shutdown_stays_disabled_after_restart(self):
+        self.check_manual_end_during_shutdown('peer_closed')
+
+    def test_call_changed_during_shutdown_stays_disabled_after_restart(self):
+        self.check_manual_end_during_shutdown('call_changed')
 
     def test_close_after_manager_finish_before_supervisor_settlement(self):
         self.enable()

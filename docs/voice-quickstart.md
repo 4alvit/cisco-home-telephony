@@ -36,11 +36,13 @@ Read **desired state and actual readiness separately**:
   the microphone is ready.
 - `waiting_idle` means the controller is waiting for all phone lines to be
   registered and idle. It does not by itself prove that a call is in progress.
-- `starting` and `running` do not invite speech on their own. Require
-  `hands_free.state: running`, no policy error and the **same non-null session
-  ID** in `hands_free` and `voice`, then all of:
-  `voice.state: running`, `active: true`, `error: null`, both Stop flags false,
-  positive `remaining_seconds`, `phase: armed` and `phase_reason: wake_ready`.
+- `starting` and `running` do not invite speech on their own. In the JSON output
+  of `cisco --json LINE voice status`, require top-level
+  `hands_free_listening: true`. The human-readable output then says
+  **Wake listener ready; say the wake phrase.** The CLI checks the complete
+  [Gateway readiness tuple](voice-control.md#hands-free-policy-and-status),
+  including matching current session IDs. CLI JSON omits null `voice.error`
+  values; an omitted error field alone is not proof of readiness.
 - `backoff` is a bounded retry delay. `faulted` needs the underlying problem
   resolved and a fresh explicit Enable. Unconfirmed cleanup is never readiness.
 

@@ -443,11 +443,12 @@ class HandsFreeSupervisor:
         elif not entry.enabled:
             entry.state = 'disabled'
             self._persist(entry)
+        elif reason in MANUAL_END:
+            # A confirmed manual end still wins when shutdown was also requested.
+            self._disable(entry)
         elif self._closed and getattr(session, 'requested_reason', None) == 'shutdown':
             entry.state = 'waiting_idle'
             self._persist(entry)
-        elif reason in MANUAL_END:
-            self._disable(entry)
         elif reason in ('lease_expired', 'call_preempted') and session.error is None:
             if reason == 'lease_expired':
                 entry.failures = 0
