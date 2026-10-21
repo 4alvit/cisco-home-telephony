@@ -1,10 +1,14 @@
-# One-shot wake assistant on k3s
+# Finite wake session on k3s
 
 This opt-in pilot connects the stock phone's microphone, a private frozen wake
 model, the selected Home Assistant pipeline and RTP speech playback. It uses
 the [optional wake image](voice-wake-runtime.md). It does not modify firmware.
 It is not an always-on assistant: one deliberate start gives one session of
-at most 30 seconds, including wake waiting and speech processing.
+at most 300 seconds, including setup, wake waiting, requests and playback.
+Successful replies may rearm within that fixed deadline when configured.
+For repeatable phone-menu or CLI use, prefer the gateway-owned
+[voice quickstart](voice-quickstart.md); this page covers a separately owned
+Job with a durable single-use attempt ID.
 
 ![Private wake image, model staging and shared session ownership](diagrams/voice-wake-k3s.svg)
 
@@ -35,13 +39,13 @@ a missing directory, and does not set `fsGroup` on existing storage.
 
 The gateway must be running the shared direct-control reservation implementation,
 with voice control attached and the selected handset in its inventory. This
-fences direct commands even when that handset has no manual voice profile.
+fences direct commands even when that handset has no voice profile.
 Deploy the gateway using the current gateway renderer before enabling a wake
-Job: its termination grace defaults to at least 180 seconds, with a larger
-minimum for large inventories. An image-only update retaining an older 75-second
-grace is insufficient. The gateway may retain callbacks for up to 145 seconds
-while an external owner completes its full primary and uncertain-cleanup budgets,
-and holds quiescent phones' locks through final listener closure.
+Job. Preserve its calculated termination grace and callback-drain budget; an
+image-only update with a historical grace value may be insufficient. The
+gateway cannot signal an external owner and uses a conservative bounded
+recovery horizon while holding quiescent phones' locks through final listener
+closure. Known local owners are interrupted immediately on shutdown.
 Before releasing the suspended Job, resolve any gateway command with an unknown
 outcome, including commands interrupted by a gateway crash or HTTP timeout, and
 confirm the handset is idle. The temporary direct-command lock ends when its
@@ -60,8 +64,11 @@ those files read-only and cannot access the source PVC.
 
 Keep all actual inputs under the ignored `.local` directory, with mode `0600`.
 Use the existing site, transport and assistant schemas. Set `wake.mode` to
-`onnx`, enable only the selected physical phone, and keep `rearm_after_turn`
-false. Either phone line can select that same physical phone. Use the
+`onnx` and enable only the selected physical phone. Set `rearm_after_turn` to
+`true` for repeated wake requests after successful replies, or `false` for one
+turn. Set the finite transport `duration_seconds` to at most 300. The updated
+renderer, reserved runner and runtime must be deployed together. Either phone
+line can select that same physical phone. Use the
 [qualified local pipeline](local-stt.md) if offline processing is required.
 
 ```sh
@@ -211,25 +218,29 @@ kubectl --kubeconfig .local/kubeconfig --context YOUR_CONTEXT --request-timeout=
   -p '{"spec":{"suspend":false}}'
 ```
 
-Stay at the phone until its live assistant screen shows **Listening**, or stop
+Stay at the phone until preparation finishes and its live assistant screen
+explicitly invites the wake phrase, or stop
 the exact attempt if it cannot be observed. Do not leave an unsuspended Pending
 Job to activate later without an attendant. Remain present through the turn and
 confirmed cleanup; if you must leave during startup, request Stop and verify
 closure first. A status snapshot or request timeout does not authorize a retry.
 
-The frontend first needs 1.28 seconds of
-actual microphone history. Say the private wake phrase, then a short question.
-The display progresses through Listening, Thinking and Speaking. Use its
-**Stop** softkey on that live screen to finish. **Applications → Voice Assistant**
-opens the separate gateway controls; its Stop cannot signal this standalone
-Job. For known external ownership, that page displays guidance instead.
+The frontend first needs 1.28 seconds of actual microphone history. Preparation
+or process `running` is not wake readiness. Say the private wake phrase, then a
+short question when invited. The display progresses through Listening, Thinking
+and Speaking. If successful rearming is enabled, wait for readiness and say the
+phrase again for the next request; the original deadline remains fixed.
+Use the **Stop** softkey on that live screen to finish.
+**Services → Home Phone Apps → Voice Assistant** opens the separate gateway
+controls; its Stop cannot signal this standalone Job. For known external
+ownership, that page displays guidance instead.
 If the live screen is unavailable, have the operator terminate the exact Job
 as described below. The normal SIP call observer also ends capture when the
 phone becomes busy, unavailable or uncertain.
 
 For a remote stop, terminate this exact Job with its normal 120-second grace
-period. This is the wake Job's own stop budget; the gateway Deployment separately
-requires at least 180 seconds so its callbacks can outlive a draining Job:
+period. This is the wake Job's own stop budget; preserve the gateway
+Deployment's separately calculated grace so callbacks can outlive a draining Job:
 
 ```sh
 kubectl --kubeconfig .local/kubeconfig --context YOUR_CONTEXT --request-timeout=10s \
@@ -253,13 +264,16 @@ Its status may report `recovery_required` / `voice_owner_unavailable` while the
 Job owns the device. These fields do not prove current microphone activity.
 Use the live assistant screen's Stop or the exact Job's termination for this
 pilot; neither the ordinary `cisco LINE voice stop` command nor the
-[Applications gateway controls](voice-control.md#gateway-and-interface-integration)
+[phone-menu gateway controls](voice-control.md#gateway-and-interface-integration)
 owns the Job's process.
 
-The Job has a 120-second outer deadline for startup and cleanup. This does not
-extend the owner's 30-second media session. Keep the last structured result
-private and check both conversation outcome and Stop confirmation. A failed or
-ambiguous result retains its durable reservation; never delete a journal or
+The updated renderer sets the outer Job deadline to
+`max(120, ceil(duration_seconds) + 90)` seconds for the configured session plus
+startup/cleanup. Inspect `activeDeadlineSeconds` in the generated manifest;
+do not reuse an older fixed 120-second manifest for a longer session. This outer
+deadline does not extend the owner's configured media deadline. The 120-second termination grace remains a separate Stop
+budget. Keep the last structured result private and check both conversation
+outcome and Stop confirmation. A failed or ambiguous result retains its durable reservation; never delete a journal or
 lock file to make a retry pass.
 
 ## Collect the result and remove temporary credentials
@@ -289,6 +303,11 @@ result separates two outcomes:
   It can be true after a manual Stop or an expired lease even though the
   conversation did not finish. Inspect `reason` and `voice.stop_confirmed`.
 
+`turns_completed` counts replies completed before the terminal reason. A wake
+session can finish cleanly on Stop or expiry after one or more replies; do not
+require `reason: "turn_complete"` for those repeated-turn sessions. A completed
+reply does not turn a later failure into a successful session.
+
 A successful init container only proves preparation. Deleting a Job during a
 remote Stop can also remove its log source, so capture output before deletion
 when available.
@@ -308,6 +327,12 @@ or proves that the phone stopped sending audio. Preserve uncertain state for
 inspection and confirm the physical phone's state before another attempt.
 
 ## Acceptance and limits
+
+The longer finite session and optional successful rearm describe the updated
+implementation, not new acoustic acceptance. Verify two spoken requests and
+audible replies within one session, then Stop and call preemption on the
+selected deployed phone. Earlier one-turn and synthetic results remain scoped
+to their recorded checks.
 
 Offline tests cover private staging, source replacement, concurrent
 initialization, malformed configuration, shared gateway/Job exclusion,

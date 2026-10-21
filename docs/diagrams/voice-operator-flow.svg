@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="850" viewBox="0 0 1440 850" role="img" aria-labelledby="title desc">
+  <title id="title">Use a finite Cisco voice session</title>
+  <desc id="desc">Check the selected idle phone, explicitly Start and Confirm, wait for reported readiness, then ask and hear a reply. Manual mode completes one turn. A configured wake session can return to readiness after successful playback within the original deadline, at most five minutes. Stop, incoming call, expiry or failure ends the session without restarting. Confirm the exact session is inactive and Stop confirmed. A running process, display label or software turn count is not physical audio acceptance.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#0b1629"/><stop offset="1" stop-color="#16243a"/></linearGradient>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#9bb1d0"/></marker>
+    <marker id="mint" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#65dcbb"/></marker>
+    <marker id="amber" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#f3c877"/></marker>
+  </defs>
+  <rect width="1440" height="850" rx="24" fill="url(#bg)"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="48" y="65" fill="#f4f7fc" font-size="34" font-weight="700">A voice session you can start — and stop</text>
+    <text x="48" y="105" fill="#b8c9e0" font-size="20">Home Phone Apps → Voice Assistant · one physical phone · one shared audio owner</text>
+    <rect x="48" y="134" width="420" height="40" rx="20" fill="#223a56"/>
+    <text x="68" y="160" fill="#d9ebff" font-size="17">Explicit Start · configured limit ≤ 5 minutes</text>
+    <rect x="488" y="134" width="415" height="40" rx="20" fill="#303451"/>
+    <text x="508" y="160" fill="#e1dbff" font-size="17">No boot activation · no automatic restart</text>
+
+    <rect x="48" y="216" width="285" height="223" rx="19" fill="#163450" stroke="#62b5ed" stroke-width="1.5"/>
+    <circle cx="80" cy="249" r="16" fill="#62b5ed"/><text x="80" y="255" text-anchor="middle" fill="#102337" font-size="18" font-weight="700">1</text>
+    <text x="107" y="257" fill="#eef8ff" font-size="24" font-weight="700">Check</text>
+    <text x="70" y="298" fill="#d7e9f9" font-size="18">Select the intended phone.</text>
+    <text x="70" y="329" fill="#d7e9f9" font-size="18">Both lines idle; stay nearby.</text>
+    <text x="70" y="370" fill="#a9c8e1" font-size="16">Status / Refresh only reads.</text>
+    <text x="70" y="401" fill="#a9c8e1" font-size="16">Pipeline check sends no audio.</text>
+
+    <path d="M346 327H382" fill="none" stroke="#9bb1d0" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="395" y="216" width="285" height="223" rx="19" fill="#302b50" stroke="#ad99e5" stroke-width="1.5"/>
+    <circle cx="427" cy="249" r="16" fill="#ad99e5"/><text x="427" y="255" text-anchor="middle" fill="#241e3e" font-size="18" font-weight="700">2</text>
+    <text x="454" y="257" fill="#f4efff" font-size="24" font-weight="700">Start + Confirm</text>
+    <text x="417" y="298" fill="#e2dbf6" font-size="18">Authorize microphone use.</text>
+    <text x="417" y="329" fill="#e2dbf6" font-size="18">One finite session begins.</text>
+    <text x="417" y="370" fill="#c6b9e2" font-size="16">Both line aliases share its ID.</text>
+    <text x="417" y="401" fill="#c6b9e2" font-size="16">Accepted is not yet ready.</text>
+
+    <path d="M693 327H729" fill="none" stroke="#9bb1d0" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="742" y="216" width="285" height="223" rx="19" fill="#16413d" stroke="#65dcbb" stroke-width="1.5"/>
+    <circle cx="774" cy="249" r="16" fill="#65dcbb"/><text x="774" y="255" text-anchor="middle" fill="#16332d" font-size="18" font-weight="700">3</text>
+    <text x="801" y="257" fill="#eefff8" font-size="24" font-weight="700">Wait for ready</text>
+    <text x="764" y="298" fill="#d6f4e9" font-size="18">Let preparation finish.</text>
+    <text x="764" y="329" fill="#d6f4e9" font-size="18">Read phase + reason.</text>
+    <text x="764" y="370" fill="#acdbca" font-size="16">Wake: wait for the invitation.</text>
+    <text x="764" y="401" fill="#acdbca" font-size="16">Running alone is not readiness.</text>
+
+    <path d="M1040 327H1076" fill="none" stroke="#9bb1d0" stroke-width="3" marker-end="url(#arrow)"/>
+    <rect x="1089" y="216" width="303" height="223" rx="19" fill="#17364d" stroke="#70c7e5" stroke-width="1.5"/>
+    <circle cx="1121" cy="249" r="16" fill="#70c7e5"/><text x="1121" y="255" text-anchor="middle" fill="#122f3d" font-size="18" font-weight="700">4</text>
+    <text x="1148" y="257" fill="#effaff" font-size="24" font-weight="700">Ask and listen</text>
+    <text x="1111" y="298" fill="#dbf1f8" font-size="18">Listening → Thinking</text>
+    <text x="1111" y="329" fill="#dbf1f8" font-size="18">→ Speaking</text>
+    <text x="1111" y="370" fill="#b0d5e2" font-size="16">Wait until playback finishes.</text>
+    <text x="1111" y="401" fill="#b0d5e2" font-size="16">Manual mode ends after one turn.</text>
+
+    <path d="M1240 440V477H884V444" fill="none" stroke="#65dcbb" stroke-width="3" marker-end="url(#mint)"/>
+    <rect x="717" y="496" width="675" height="44" rx="12" fill="#1b433d"/>
+    <text x="736" y="524" fill="#b1f3dc" font-size="17">Wake success: repeat the phrase · same session · same deadline</text>
+    <text x="48" y="508" fill="#b8c9e0" font-size="17">No memory is promised across separate Starts.</text>
+    <text x="48" y="533" fill="#b8c9e0" font-size="17">A local wake detector can still use cloud STT.</text>
+
+    <rect x="48" y="582" width="632" height="152" rx="19" fill="#453824" stroke="#f3c877" stroke-width="1.5"/>
+    <text x="71" y="619" fill="#ffe4ac" font-size="24" font-weight="700">End from any phase</text>
+    <text x="71" y="654" fill="#f1e4c8" font-size="19">Stop · incoming call · fixed deadline · failure</text>
+    <text x="71" y="689" fill="#decbaa" font-size="17">Use the live screen, or exact-session gateway Stop.</text>
+    <text x="71" y="716" fill="#decbaa" font-size="17">No rearm after the session ends.</text>
+    <path d="M695 660H754" fill="none" stroke="#f3c877" stroke-width="3" marker-end="url(#amber)"/>
+    <rect x="769" y="582" width="623" height="152" rx="19" fill="#293547" stroke="#91aac9" stroke-width="1.5"/>
+    <text x="792" y="619" fill="#edf4ff" font-size="24" font-weight="700">Confirm cleanup</text>
+    <text x="792" y="654" fill="#d9e5f6" font-size="19">Matching session · inactive · Stop confirmed</text>
+    <text x="792" y="689" fill="#b9c9de" font-size="17">Uncertain? Inspect the phone; follow recovery.</text>
+    <text x="792" y="716" fill="#b9c9de" font-size="17">Keep its state. Do not retry Start blindly.</text>
+
+    <line x1="48" y1="777" x2="1392" y2="777" stroke="#3c4c63"/>
+    <text x="48" y="806" fill="#9fb3ce" font-size="16">Software flow only. Verify audible replies and microphone closure on the deployed phone.</text>
+  </g>
+</svg>

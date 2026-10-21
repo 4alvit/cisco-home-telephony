@@ -206,8 +206,8 @@ class ControlConfigurationTests(ControlFixture):
         self.assertEqual(self.launches, [])
         self.assertFalse(self.status(instance)["active"])
 
-    def test_duration_over_thirty_seconds_is_rejected(self):
-        self.transport["duration_seconds"] = 31
+    def test_duration_over_five_minutes_is_rejected(self):
+        self.transport["duration_seconds"] = 301
         self.write_inputs()
         with self.assertRaises(control.ControlError):
             self.load()
@@ -234,16 +234,19 @@ class ControlConfigurationTests(ControlFixture):
         self.assertEqual(argv[argv.index("--ffmpeg") + 1], str(executable))
         self.assertNotIn(str(self.local), env["PATH"].split(os.pathsep))
 
-    def test_wake_and_automatic_rearm_are_rejected(self):
-        for section, field, value in (("wake", "mode", "onnx"),
-                                      ("service", "rearm_after_turn", True)):
-            with self.subTest(field=field):
-                before = copy.deepcopy(self.voice)
-                self.voice[section][field] = value
-                self.write_inputs()
-                with self.assertRaises(control.ControlError):
-                    self.load()
-                self.voice = before
+    def test_explicit_wake_profile_allows_successful_turn_rearm_without_starting(self):
+        self.voice["wake"]["mode"] = "onnx"
+        self.voice["service"]["rearm_after_turn"] = True
+        self.transport["duration_seconds"] = 300
+        self.write_inputs()
+        config = self.load()
+        self.assertEqual(config.profiles[0].mode, "wake")
+        self.assertTrue(config.profiles[0].rearm_after_turn)
+        instance = self.make_control(config=config)
+        self.assertEqual(self.status(instance)["mode"], "wake")
+        self.assertEqual(self.status(instance)["session_seconds"], 300)
+        self.assertIsNone(self.status(instance)["phase"])
+        self.assertEqual(self.launches, [])
 
     def test_private_config_permissions_and_symlinks_are_rejected(self):
         path = self.local / "control.json"
@@ -1003,7 +1006,7 @@ class ControlLifecycleTests(ControlFixture):
     def test_runner_reason_preserves_failure_even_when_cleanup_is_confirmed(self):
         instance = self.make_control()
         for index, reason in enumerate(("assistant_error", "receive_idle_timeout", "transport_stopped",
-                                        "lease_expired", "start_failed", PRIVATE_MARKER)):
+                                        "start_failed", PRIVATE_MARKER)):
             with self.subTest(reason=reason):
                 self.start(instance, request_id="classification-" + str(index))
                 self.runners[-1].finish(completed_report(reason))
@@ -1016,7 +1019,7 @@ class ControlLifecycleTests(ControlFixture):
 
     def test_explicit_stop_and_completed_turn_remain_clean_terminal_results(self):
         instance = self.make_control()
-        for index, reason in enumerate(("turn_complete", "explicit_stop", "display_stop", "shutdown")):
+        for index, reason in enumerate(("turn_complete", "explicit_stop", "display_stop", "shutdown", "lease_expired")):
             with self.subTest(reason=reason):
                 self.start(instance, request_id="completion-" + str(index))
                 self.runners[-1].finish(completed_report(reason))
@@ -1194,7 +1197,7 @@ class ControlCLIResponseTests(unittest.TestCase):
     def test_invalid_status_metadata_is_refused_without_echoing_response(self):
         changes = ({"line": PRIVATE_MARKER}, {"session_id": PRIVATE_MARKER},
                    {"schema_version": True}, {"active": 1},
-                   {"remaining_seconds": float("nan")}, {"remaining_seconds": 31})
+                   {"remaining_seconds": float("nan")}, {"remaining_seconds": 301})
         for change in changes:
             with self.subTest(field=next(iter(change))):
                 code, report = self.invoke(dict(self.response(), **change))
@@ -1254,7 +1257,7 @@ class ControlCLIResponseTests(unittest.TestCase):
                    {"network_actions": 0.0}, {"network_actions": 1},
                    {"microphone_started": 0}, {"microphone_started": True},
                    {"duration_seconds": 0}, {"duration_seconds": -1},
-                   {"duration_seconds": 30.01}, {"duration_seconds": True},
+                   {"duration_seconds": 300.01}, {"duration_seconds": True},
                    {"duration_seconds": "10"}, {"duration_seconds": float("inf")},
                    {"duration_seconds": float("nan")}, {"phone": PRIVATE_MARKER},
                    {"line": "201"})
@@ -1267,11 +1270,108 @@ class ControlCLIResponseTests(unittest.TestCase):
                 code, report = self.invoke(response, action="start", dry_run=True)
                 self.assertEqual(code, 2)
                 self.assertIs(report["automatic_retry"], False)
-        for duration in (0.1, 30):
+        for duration in (0.1, 30, 120, 300):
             with self.subTest(duration=duration):
                 code, _ = self.invoke(dict(self.dry_response(), duration_seconds=duration),
                                       action="start", dry_run=True)
                 self.assertEqual(code, 0)
+
+
+class UsableVoiceSessionTests(ControlFixture):
+    def progress(self, instance, session_id, phase, count=0, reason=None):
+        session = instance._sessions[session_id]
+        path = session.directory / "progress.json"
+        path.write_text(json.dumps({"schema_version": 1, "phase": phase,
+                                   "reason": reason, "turns_completed": count,
+                                   "updated_at": 1800000000.0,
+                                   "transcript": PRIVATE_MARKER}))
+        path.chmod(0o600)
+
+    def test_reported_phases_and_completed_turns_are_shared_by_both_lines(self):
+        instance = self.make_control()
+        started = self.start(instance)
+        session_id = started["session_id"]
+        argv = self.launches[0][0]
+        self.assertEqual(Path(argv[argv.index("--status-file") + 1]),
+                         instance._sessions[session_id].directory / "progress.json")
+        self.assertEqual(started["phase"], "preparing")
+        for phase, reason, count in (("preparing", "model_warmup", 0),
+                                     ("armed", "wake_ready", 0), ("listening", None, 0),
+                                     ("thinking", None, 0), ("speaking", None, 0),
+                                     ("armed", "wake_ready", 1)):
+            with self.subTest(phase=phase):
+                self.progress(instance, session_id, phase, count, reason)
+                state = self.status(instance, "202")
+                self.assertEqual((state["phase"], state["phase_reason"], state["turns_completed"]),
+                                 (phase, reason, count))
+                self.assertEqual(state["session_id"], session_id)
+                self.assert_safe(state)
+                self.assertEqual(control._safe_status(state), state)
+
+    def test_unusable_progress_never_blocks_exact_session_stop(self):
+        instance = self.make_control()
+        session_id = self.start(instance)["session_id"]
+        self.progress(instance, session_id, "thinking", reason=PRIVATE_MARKER)
+        self.assertIsNone(self.status(instance)["phase_reason"])
+        path = instance._sessions[session_id].directory / "progress.json"
+        path.write_text("{" + PRIVATE_MARKER)
+        self.assert_safe(self.status(instance))
+        stopped = self.stop(instance, session_id, "202")
+        self.assertEqual(stopped["state"], "stopping")
+        self.assertEqual(self.runners[0].terminations, 1)
+
+    def test_long_session_has_one_fixed_lease_and_retains_completed_count(self):
+        self.transport["duration_seconds"] = 300
+        self.voice["wake"]["mode"] = "onnx"
+        self.voice["service"]["rearm_after_turn"] = True
+        self.write_inputs()
+        instance = self.make_control()
+        session_id = self.start(instance)["session_id"]
+        self.clock.advance(31)
+        instance.tick()
+        self.assertEqual(self.runners[0].terminations, 0)
+        self.progress(instance, session_id, "armed", 2, "wake_ready")
+        self.assertEqual(self.status(instance)["remaining_seconds"], 269)
+        self.clock.advance(269)
+        instance.tick()
+        self.assertEqual(self.runners[0].terminations, 1)
+        self.assertEqual(len(self.launches), 1)
+        report = completed_report("lease_expired")
+        report["turns_completed"] = 2
+        self.runners[0].finish(report)
+        instance.tick()
+        state = self.status(instance)
+        self.assertEqual((state["state"], state["phase"], state["phase_reason"]),
+                         ("stopped", "stopped", "lease_expired"))
+        self.assertEqual(state["turns_completed"], 2)
+        self.assertTrue(state["stop_confirmed"])
+        self.assertFalse(state["active"])
+        restored = self.make_control()
+        self.assertEqual(self.status(restored)["turns_completed"], 2)
+
+    def test_changed_activation_mode_requires_profile_reload(self):
+        instance = self.make_control()
+        self.voice["wake"]["mode"] = "onnx"
+        self.write_inputs()
+        with self.assertRaises(control.ControlError):
+            self.start(instance)
+        self.assertEqual(self.launches, [])
+
+    def test_extended_wire_status_remains_optional_and_bounded(self):
+        old = {"schema_version": 1, "phone": "201", "line": "201",
+               "session_id": None, "state": "idle", "active": False,
+               "remaining_seconds": 0, "stop_requested": False,
+               "stop_confirmed": False, "error": None}
+        self.assertEqual(control._safe_status(old), old)
+        modern = dict(old, phase="armed", phase_reason="wake_ready", turns_completed=2,
+                      mode="wake", session_seconds=300, remaining_seconds=299)
+        self.assertEqual(control._safe_status(modern), modern)
+        for extra in ({"phase": PRIVATE_MARKER}, {"mode": "unknown"},
+                      {"turns_completed": True}, {"turns_completed": -1},
+                      {"session_seconds": 301}, {"session_seconds": 10**500},
+                      {"remaining_seconds": 10**500}):
+            with self.subTest(extra=extra), self.assertRaises(control.ControlError):
+                control._safe_status(dict(modern, **extra))
 
 
 if __name__ == "__main__":

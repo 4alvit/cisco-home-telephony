@@ -32,15 +32,18 @@ multi-container deployments, foreign init containers, unsupported state
 mappings, custom RuntimeClasses and Pod-level resource overrides instead of
 guessing a migration. RuntimeClasses can add resource overhead at admission
 that is absent from the captured Deployment.
-PVC migration is outside this renderer's scope.
+Migrating persistent gateway state to a PVC is outside this renderer's scope. A separate read-only model PVC is supported for wake profiles.
 
 The output contains an immutable, content-addressed Secret and the replacement
 Deployment. It uses one replica, `Recreate`, UID/GID `10001`, dropped
 capabilities, a read-only root filesystem and no service-account token. The
-default shutdown grace is 180 seconds; values below 180 seconds are rejected.
-Large inventories require an additional floor of 145 seconds plus one second
-per phone/API listener and ten seconds of margin. This leaves time for the
-gateway's full external-owner cleanup wait and final listener closure.
+shutdown grace is derived when `--grace-seconds` is omitted. It is at least
+180 seconds and covers the conservative external-owner horizon (415 seconds
+for a possible 300-second session), one second per phone/API listener and ten
+seconds of margin. An explicit shorter override is refused. This is a maximum
+shutdown budget to preserve callback authentication for a separately owned
+runner; it is not a fixed sleep. Known owned sessions receive Stop immediately,
+and the gateway exits early once all cleanup and fencing are confirmed.
 Existing gateway `/state` storage remains at the same path. The same volume is
 also mounted at `/run/voice/.local/state` for persistent voice ownership and
 cleanup journals. Source stays in the image under `/workspace`.
@@ -234,7 +237,6 @@ python3 scripts/render_voice_gateway.py \
   --capacity .local/voice-gateway/capacity.json \
   --cpu-request 250m --cpu-limit 1000m \
   --memory-request 128Mi --memory-limit 512Mi \
-  --grace-seconds 180 \
   --output .local/voice-gateway/candidate-disabled.json
 ```
 
@@ -263,11 +265,55 @@ to a private file with this shape:
 Omit `display_port` when unused. Each transport file must reference a gateway
 configuration semantically equal to the full input. The renderer keeps the
 full gateway file and rewrites file references only in staged transport and
-assistant copies. Profiles must select distinct physical phones, use manual
-mode, disable rearming, and meet the bounded-session validation. Referenced HA
-tokens are private files; no wake model is downloaded or packaged. Check actual
-host port availability separately from configured-port collision checks. See
+assistant copies. Profiles select distinct physical phones and a finite media
+session of at most 300 seconds. Manual mode completes one turn; an ONNX wake
+profile can rearm after successful playback within the same deadline. Referenced
+HA tokens are private files. An optional `ha.device_id` must identify the actual
+Cisco device, never a copied Echo identity. Room-relative Home Assistant tools
+also require the correct area assignment for that device; a device ID alone
+does not provide it. Check actual host port availability
+separately from configured-port collision checks. See
 [voice configuration and controls](voice-control.md).
+
+### Enable repeatable wake sessions
+
+Use the verified [wake-capable image](voice-wake-runtime.md), not the lean manual
+image. In the private assistant profile select `wake.mode: "onnx"`, set
+`wake.bundle_file` to the pinned local bundle, and explicitly enable
+`service.rearm_after_turn`. Set the transport's `duration_seconds` to the intended
+finite budget, for example 300. Keep per-turn timeouts separately bounded.
+
+Provision a read-only model PVC in the same namespace, containing the three
+model files at the relative paths recorded in that bundle. Keep matching local
+files beside the bundle for offline validation. Add these options to the render
+command above, using your real profiles and PVC name:
+
+```sh
+  --profiles .local/voice/profiles.json \
+  --models-claim reviewed-wake-models
+```
+
+The renderer validates the local files against the bundle hashes without
+loading inference. It places only the small manifest in the configuration
+Secret. A startup init container repeats the hash checks against the PVC and
+stages the normalized bundle and three models into an owner-only directory.
+The main process mounts that directory read-only. No model is downloaded, no
+weights enter the Secret, and no voice session starts during initialization.
+All wake profiles in this deployment must use the same pinned bundle; use a
+separate design review before introducing per-phone model bundles.
+
+For this wake variant, a minimal root init step creates/chowns only fresh
+`emptyDir` children. Model staging and the gateway run as UID 10001. There is
+no Pod `fsGroup` that could recursively alter the existing model PVC or state
+volume. Provision PVC read permissions for UID 10001 explicitly. The model
+stager requests 128 MiB; capacity validation includes this peak. The ordinary
+manual-only variant retains its original non-root init and needs no model PVC.
+
+Add `--enable-voice` only when ready to expose Start. Opening the phone menu
+still does not activate the microphone. Use the
+[operator quickstart](voice-quickstart.md) for Start, readiness, repeat questions
+and exact-session Stop. Returning to manual profiles without `--models-claim`
+removes the generated model mounts and wake initialization steps.
 
 ## 4. Review and install during a maintenance window
 
@@ -335,7 +381,7 @@ keeps each Pod's staged input coherent.
 
 To roll back, finish active sessions and retain their state, then apply the
 reviewed baseline Deployment and its exact Secret references using the same
-ownership process. Keep one replica and `Recreate`; allow at least 180 seconds
+ownership process. Keep one replica and `Recreate`; allow the generated shutdown budget
 of shutdown grace for the voice-capable Pod being replaced. A plain
 `kubectl set image` is insufficient because command, mounts and init staging
 also changed. Do not automatically restore an old database backup during an

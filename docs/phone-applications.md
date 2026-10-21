@@ -40,7 +40,7 @@ different phone.
 - **Camera Snapshot** displays one still image from an allowlisted HA camera.
 - **Phone Status** shows registration, DND, auto-answer, active calls and alert
   status without displaying SIP passwords, management credentials or HA tokens.
-- **Voice** appears when bounded voice control is configured for this phone.
+- **Voice Assistant** appears when voice control is configured for this phone.
   Opening it only reads session status. Start requires a separate confirmation
   that the user is present and authorizes microphone capture for the bounded
   session. Stop targets the exact displayed session ID, including when selected
@@ -56,11 +56,23 @@ an uncertain outcome. Confirmations are short-lived memory state and do not
 survive a gateway restart.
 
 Voice sessions use the gateway's configured phone mapping, so their status and
-Stop controls do not require fresh AMI call inventory. Sessions last at most
-30 seconds, use manual activation and do not rearm. The displayed process state
-is not proof that the microphone is closed: inspect Stop confirmation and
-resolve `recovery_required` at the physical phone. See the
+Stop controls do not require fresh AMI call inventory. The updated runtime
+supports an explicitly started session of at most 300 seconds. Manual mode
+ends after one request. A configured wake session can return to wake readiness
+after each successful reply until its original deadline; say the configured
+wake phrase again for each request. Stop, failure and call preemption end the
+session without rearming. A new Start does not retain the previous session's
+conversation context.
+
+Read the phase and its message rather than treating **running** as ready.
+Preparation/warmup is not an invitation to speak. Completed-turn count is
+software progress, not proof that a reply was audible. Older status responses
+may omit phase information; absence is not readiness. Inspect **Stop confirmed**
+and resolve `recovery_required` at the physical phone. Follow the
+[short voice quickstart](voice-quickstart.md) for normal use or the
 [voice control guide](voice-control.md) for runtime setup and recovery.
+These capabilities require matching deployed runtime and menu code; they are
+not a record of a new physical-phone acceptance test.
 
 ### Timers and recurring alarms
 

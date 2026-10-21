@@ -206,6 +206,7 @@ class RenderVoiceJobTests(unittest.TestCase):
         self.assertNotIn("curl", command)
 
     def test_secrets_rewrite_private_paths_and_never_appear_in_pod_or_source(self):
+        self.voice["ha"]["device_id"] = "synthetic-originating-cisco-device"
         source, secret, job = self.objects()
         files = self.secrets(secret)
         self.assertEqual(set(files), {"transport.json", "gateway.json", "voice.json", "ha-token.txt"})
@@ -214,10 +215,12 @@ class RenderVoiceJobTests(unittest.TestCase):
         voice = json.loads(files["voice.json"])
         self.assertEqual(transport["gateway_config"], "/run/voice/.local/gateway.json")
         self.assertEqual(voice["ha"]["token_file"], ".local/ha-token.txt")
+        self.assertEqual(voice["ha"]["device_id"], "synthetic-originating-cisco-device")
         self.assertEqual(voice["wake"]["bundle_file"], ".local/unused-manual-bundle.json")
         public = json.dumps([source, job])
         for marker in ("synthetic-ha-token", "synthetic-ami-secret", "u" * 24, "p" * 24,
-                       str(self.workspace), "192.168.50.20", "synthetic-pipeline"):
+                       str(self.workspace), "192.168.50.20", "synthetic-pipeline",
+                       "synthetic-originating-cisco-device"):
             self.assertNotIn(marker, public)
         self.assertTrue(secret["immutable"])
         self.assertTrue(source["immutable"])
@@ -290,8 +293,8 @@ class RenderVoiceJobTests(unittest.TestCase):
 
     def test_only_enabled_manual_one_phone_without_rearm_can_render(self):
         cases = (("service", "enabled", False), ("service", "rearm_after_turn", True),
-                 ("wake", "mode", "onnx"), ("service", "max_utterance_seconds", 31),
-                 ("service", "turn_timeout_seconds", 61))
+                 ("wake", "mode", "onnx"), ("service", "max_utterance_seconds", 61),
+                 ("service", "turn_timeout_seconds", 181))
         original = copy.deepcopy(self.voice)
         for section, key, value in cases:
             self.voice = copy.deepcopy(original)
@@ -306,12 +309,40 @@ class RenderVoiceJobTests(unittest.TestCase):
         self.voice = original
 
     def test_unknown_line_and_excess_duration_are_rejected(self):
-        for key, value in (("line", "299"), ("duration_seconds", 31)):
+        for key, value in (("line", "299"), ("duration_seconds", 301)):
             old = self.transport[key]
             self.transport[key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
                 self.render()
             self.transport[key] = old
+
+    def test_long_manual_lease_changes_deadline_without_extending_stop_grace(self):
+        names = []
+        for duration, expected in ((30, 90), (30.25, 91), (300, 360)):
+            with self.subTest(duration=duration):
+                self.transport["duration_seconds"] = duration
+                _source, secret, job = self.objects()
+                spec = job["spec"]
+                self.assertEqual(spec["activeDeadlineSeconds"], expected)
+                self.assertEqual(spec["template"]["spec"]["terminationGracePeriodSeconds"], 45)
+                self.assertIs(spec["suspend"], True)
+                self.assertEqual(spec["backoffLimit"], 0)
+                private = self.secrets(secret)
+                self.assertEqual(json.loads(private["transport.json"])["duration_seconds"], duration)
+                voice = json.loads(private["voice.json"])
+                self.assertEqual(voice["wake"]["mode"], "manual")
+                self.assertIs(voice["service"]["rearm_after_turn"], False)
+                names.append(job["metadata"]["name"])
+        self.assertEqual(len(set(names)), 3)
+
+    def test_service_time_budgets_are_preserved_within_the_finite_session(self):
+        self.transport["duration_seconds"] = 300
+        self.voice["service"].update(max_utterance_seconds=60, turn_timeout_seconds=120)
+        _source, secret, job = self.objects()
+        voice = json.loads(self.secrets(secret)["voice.json"])
+        self.assertEqual(voice["service"]["max_utterance_seconds"], 60)
+        self.assertEqual(voice["service"]["turn_timeout_seconds"], 120)
+        self.assertEqual(job["spec"]["activeDeadlineSeconds"], 360)
 
     def test_private_output_is_exclusive_mode_0600_and_rejects_symlink(self):
         manifest = self.render()

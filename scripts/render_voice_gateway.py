@@ -25,6 +25,7 @@ MAX_MANIFEST = 2 * 1024 * 1024
 RUNTIME = '/run/voice'
 CONFIG = RUNTIME + '/.local/config'
 STATE = RUNTIME + '/.local/state'
+MODELS = RUNTIME + '/.local/models'
 MANAGED = 'voice-gateway.cisco-home-telephony/renderer'
 IMAGE = re.compile(r'[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}\Z')
 
@@ -40,6 +41,33 @@ for path in (root, root / '.local', root / '.local/config', root / '.local/state
 sys.path.insert(0, '/opt/voice')
 from stage_private import stage_private
 stage_private('/run/voice-inputs', root / '.local/config', '/run/voice-inputs/staging.json')
+"""
+
+# Wake models use a separate read-only PVC. Do not apply fsGroup to that PVC
+# or the existing state directory: prepare only the new emptyDir children.
+WAKE_PREPARE_CODE = """import os
+from pathlib import Path
+os.umask(0o077)
+root = Path('/runtime/private')
+paths = (root, root / '.local', root / '.local/config', root / '.local/models', root / '.local/state')
+for path in paths:
+    path.mkdir(mode=0o700)
+    path.chmod(0o700)
+# CAP_CHOWN does not bypass mode-0700 traversal. Transfer parents last.
+for path in reversed(paths):
+    os.chown(path, 10001, 10001)
+"""
+WAKE_INIT_CODE = """import json, os, sys
+from pathlib import Path
+os.umask(0o077)
+root = Path('/runtime/private/.local')
+sys.path.insert(0, '/opt/voice')
+from stage_private import stage_private
+stage_private('/run/voice-inputs', root / 'config', '/run/voice-inputs/staging.json')
+sys.path.insert(0, '/opt/voice-wake')
+from stage_models import stage_models
+bundle = json.loads((root / 'config/wake-bundle.json').read_text())
+stage_models('/run/wake-models', root / 'models', bundle)
 """
 
 # Fail closed instead of changing ownership/modes of existing persistent data.
@@ -75,6 +103,7 @@ def module(name, path):
 gateway = module('_voice_gateway_render_gateway', ROOT / 'containers/asterisk/phone_gateway.py')
 control = module('_voice_gateway_render_control', ROOT / 'containers/asterisk/phone_voice_control.py')
 stager = module('_voice_gateway_render_stager', ROOT / 'containers/voice/stage_private.py')
+models = module('_voice_gateway_render_models', ROOT / 'containers/voice-wake/stage_models.py')
 
 
 def canonical(value):
@@ -194,7 +223,7 @@ def validate_context(deployment, config, capacity, receipt, image, max_age, now)
     require(not pod.get('runtimeClassName'), 'runtime_class_not_supported')
 
 
-def build_private_files(config, profiles, workspace, enabled):
+def build_private_files(config, profiles, workspace, enabled, models_claim=None):
     # Preserve every field, including future gateway metadata, applications,
     # credentials and the complete physical/softphone inventory.
     files = {'gateway.json': canonical(config)}
@@ -202,12 +231,14 @@ def build_private_files(config, profiles, workspace, enabled):
     require(type(enabled) is bool, 'enable_voice_must_be_boolean')
     if profiles is None:
         require(not enabled, 'profiles_required_to_enable_voice')
+        require(models_claim is None, 'wake_profile_required_for_models')
         return files
     require(isinstance(profiles, dict) and set(profiles) == {'version', 'profiles'}
             and type(profiles['version']) is int and profiles['version'] == 1
             and isinstance(profiles['profiles'], list) and 1 <= len(profiles['profiles']) <= 32,
             'invalid_profiles_document')
     entries = []
+    model_source = None
     for index, profile in enumerate(profiles['profiles']):
         require(isinstance(profile, dict) and {'transport_config', 'voice_config'} <= set(profile)
                 <= {'transport_config', 'voice_config', 'display_port'}, 'invalid_profile_entry')
@@ -218,9 +249,24 @@ def build_private_files(config, profiles, workspace, enabled):
         token = read_private(voice['ha']['token_file'], workspace, 8192).decode('ascii').strip()
         transport['gateway_config'] = CONFIG + '/gateway.json'
         voice['ha']['token_file'] = CONFIG + '/token-' + str(index) + '.txt'
-        # Manual profiles never read a wake bundle; remove the local pathname.
-        require(voice['wake']['mode'] == 'manual', 'manual_profiles_only')
-        voice['wake']['bundle_file'] = CONFIG + '/unused-manual-bundle.json'
+        if voice['wake']['mode'] == 'onnx':
+            require(isinstance(models_claim, str) and len(models_claim) <= 253
+                    and all(re.fullmatch(r'[a-z0-9](?:[-a-z0-9]*[a-z0-9])?', part)
+                            and len(part) <= 63 for part in models_claim.split('.')),
+                    'valid_models_claim_required')
+            source = private_path(voice['wake']['bundle_file'], workspace)
+            bundle = models._validate_bundle(read_json(source, workspace))
+            encoded = canonical(bundle)
+            require('wake-bundle.json' not in files or files['wake-bundle.json'] == encoded,
+                    'one_shared_wake_bundle_required')
+            files['wake-bundle.json'] = encoded
+            # Validate local pinned inputs without placing model bytes in a Secret.
+            # Runtime init repeats hash validation against the named PVC.
+            model_source = source.parent
+            voice['wake']['bundle_file'] = MODELS + '/bundle.json'
+        else:
+            require(voice['wake']['mode'] == 'manual', 'invalid_wake_mode')
+            voice['wake']['bundle_file'] = CONFIG + '/unused-manual-bundle.json'
         files['transport-' + str(index) + '.json'] = canonical(transport)
         files['voice-' + str(index) + '.json'] = canonical(voice)
         files['token-' + str(index) + '.txt'] = token + '\n'
@@ -234,11 +280,12 @@ def build_private_files(config, profiles, workspace, enabled):
         'ffmpeg_executable': '/usr/bin/ffmpeg', 'profiles': entries})
     require(len(files) <= 128 and all(len(v.encode()) <= MAX_FILE for v in files.values())
             and sum(len(v.encode()) for v in files.values()) <= 700_000, 'private_config_too_large')
-    validate_staged_profiles(files)
+    require(models_claim is None or model_source is not None, 'wake_profile_required_for_models')
+    validate_staged_profiles(files, model_source=model_source)
     return files
 
 
-def validate_staged_profiles(files):
+def validate_staged_profiles(files, *, model_source=None):
     """Use the real stager and control loader without executing any providers.
 
     Executable paths are mapped to this interpreter only for the offline loader's
@@ -280,6 +327,10 @@ def validate_staged_profiles(files):
         manifest.write_text(canonical({'version': 1, 'files': sorted(files)}))
         manifest.chmod(0o600)
         stager.stage_private(source, target, manifest)
+        if model_source is not None:
+            target_models = root / '.local/models'
+            target_models.mkdir(mode=0o700)
+            models.stage_models(model_source, target_models, json.loads(files['wake-bundle.json']))
         loaded = control.load_control_config(target / 'control.json', root)
         # Cross-profile transport/HTTP ports must not overlap, including a
         # display port colliding with another profile's RTP receive endpoint.
@@ -314,7 +365,8 @@ def state_binding(pod, container):
 
 def render(deployment, config, receipt, capacity, *, image, cpu_request, cpu_limit,
            memory_request='128Mi', memory_limit='512Mi', profiles=None, enable_voice=False,
-           workspace=ROOT, grace_seconds=180, max_capacity_age_seconds=900, now=None):
+           workspace=ROOT, grace_seconds=None, max_capacity_age_seconds=900, now=None,
+           models_claim=None):
     deployment = clean_deployment(deployment)
     config = copy.deepcopy(config)
     gateway.validate(config)
@@ -330,12 +382,19 @@ def render(deployment, config, receipt, capacity, *, image, cpu_request, cpu_lim
     require(container['name'] == 'gateway' and not container.get('lifecycle'), 'unsupported_gateway_container')
     managed = deployment['spec']['template']['metadata'].get('annotations', {}).get(MANAGED) == '1'
     init = pod.get('initContainers', [])
-    require(not init or (managed and len(init) == 1 and init[0].get('name') == 'stage-voice-private'
-                        and init[0].get('command') == ['/usr/local/bin/python3', '-c', INIT_CODE]),
+    manual_init = (len(init) == 1 and init[0].get('name') == 'stage-voice-private'
+                   and init[0].get('command') == ['/usr/local/bin/python3', '-c', INIT_CODE])
+    wake_init = (len(init) == 2 and init[0].get('name') == 'prepare-voice-private'
+                 and init[0].get('command') == ['/usr/local/bin/python3', '-c', WAKE_PREPARE_CODE]
+                 and init[1].get('name') == 'stage-voice-private'
+                 and init[1].get('command') == ['/usr/local/bin/python3', '-c', WAKE_INIT_CODE])
+    require(not init or (managed and (manual_init or wake_init)),
             'foreign_init_containers_not_supported')
     path, mount = state_binding(pod, container)
     # One second per callback/API listener plus ten seconds of scheduling margin.
     minimum_grace = max(180, int(control.EXTERNAL_OWNER_GRACE_SECONDS) + len(config['phones']) + 11)
+    if grace_seconds is None:
+        grace_seconds = minimum_grace
     require(type(grace_seconds) is int and minimum_grace <= grace_seconds <= 600,
             'grace_must_cover_shutdown_and_listeners')
     resources = {'requests': {'cpu': cpu_request, 'memory': memory_request},
@@ -344,13 +403,14 @@ def render(deployment, config, receipt, capacity, *, image, cpu_request, cpu_lim
     available, other = resource_pair(capacity['allocatable']), resource_pair(capacity['other_requests'])
     overhead = {key: quantity(pod.get('overhead', {}).get(key, '0'), key) for key in ('cpu', 'memory')}
     require(set(pod.get('overhead', {})) <= {'cpu', 'memory'}, 'unsupported_pod_overhead')
-    init_requests = {'cpu': 10, 'memory': 32 * 1024 * 1024}
+    init_requests = {'cpu': 10, 'memory': (128 if models_claim is not None else 32) * 1024 * 1024}
     for key in requests:
         require(0 < requests[key] <= limits[key] and available[key] > 0, 'invalid_resource_request_or_limit')
         require(other[key] + max(requests[key], init_requests[key]) + overhead[key] <= available[key],
                 'insufficient_' + key + '_capacity')
-    files = build_private_files(config, profiles, workspace, enable_voice)
-    digest = hashlib.sha256(canonical(files).encode()).hexdigest()
+    files = build_private_files(config, profiles, workspace, enable_voice, models_claim)
+    wake_enabled = 'wake-bundle.json' in files
+    digest = hashlib.sha256(canonical({'files': files, 'models_claim': models_claim}).encode()).hexdigest()
     secret_name = deployment['metadata']['name'][:36].rstrip('-') + '-voice-' + digest[:16]
     secret = {'apiVersion': 'v1', 'kind': 'Secret', 'immutable': True, 'type': 'Opaque',
               'metadata': {'name': secret_name, 'namespace': deployment['metadata']['namespace']},
@@ -358,7 +418,7 @@ def render(deployment, config, receipt, capacity, *, image, cpu_request, cpu_lim
     secret['data']['staging.json'] = base64.b64encode(canonical(
         {'version': 1, 'files': sorted(files)}).encode()).decode()
     mounts = container.get('volumeMounts', [])
-    owned_names = {'voice-runtime', 'voice-inputs'}
+    owned_names = {'voice-runtime', 'voice-inputs', 'voice-model-source'}
     require(len({v['name'] for v in pod['volumes']}) == len(pod['volumes']), 'duplicate_volume_names')
     for existing in mounts:
         destination = existing['mountPath'].rstrip('/')
@@ -372,8 +432,15 @@ def render(deployment, config, receipt, capacity, *, image, cpu_request, cpu_lim
     container['volumeMounts'] += [{'name': 'voice-runtime', 'mountPath': RUNTIME, 'subPath': 'private'},
                                  {'name': mount['name'], 'mountPath': STATE}]
     pod['volumes'] = [v for v in pod['volumes'] if v['name'] not in owned_names]
-    pod['volumes'] += [{'name': 'voice-runtime', 'emptyDir': {'sizeLimit': '8Mi'}},
-                       {'name': 'voice-inputs', 'secret': {'secretName': secret_name, 'defaultMode': 0o440}}]
+    pod['volumes'] += [{'name': 'voice-runtime', 'emptyDir': {'sizeLimit': '40Mi' if wake_enabled else '8Mi'}},
+                       {'name': 'voice-inputs', 'secret': {'secretName': secret_name,
+                                                        'defaultMode': 0o444 if wake_enabled else 0o440}}]
+    if wake_enabled:
+        pod['volumes'].append({'name': 'voice-model-source', 'persistentVolumeClaim': {
+            'claimName': models_claim, 'readOnly': True}})
+        # The gateway writes state elsewhere; verified models stay read-only.
+        container['volumeMounts'].append({'name': 'voice-runtime', 'mountPath': MODELS,
+                                         'subPath': 'private/.local/models', 'readOnly': True})
     scratch = [m for m in container['volumeMounts'] if m['mountPath'] == '/tmp']
     require(len(scratch) == 1, 'existing_tmp_emptydir_required')
     volume = next(v for v in pod['volumes'] if v['name'] == scratch[0]['name'])
@@ -402,6 +469,22 @@ def render(deployment, config, receipt, capacity, *, image, cpu_request, cpu_lim
         'resources': {'requests': {'cpu': '10m', 'memory': '32Mi'}, 'limits': {'cpu': '200m', 'memory': '64Mi'}},
         'volumeMounts': [{'name': 'voice-runtime', 'mountPath': '/runtime'},
                          {'name': 'voice-inputs', 'mountPath': '/run/voice-inputs', 'readOnly': True}]}]
+    if wake_enabled:
+        pod['securityContext'].pop('fsGroup', None)
+        prepare = {'name': 'prepare-voice-private', 'image': image, 'imagePullPolicy': 'IfNotPresent',
+            'command': ['/usr/local/bin/python3', '-c', WAKE_PREPARE_CODE],
+            'securityContext': {**security, 'runAsNonRoot': False, 'runAsUser': 0, 'runAsGroup': 0,
+                                'capabilities': {'drop': ['ALL'], 'add': ['CHOWN']}},
+            'resources': {'requests': {'cpu': '10m', 'memory': '32Mi'},
+                          'limits': {'cpu': '200m', 'memory': '64Mi'}},
+            'volumeMounts': [{'name': 'voice-runtime', 'mountPath': '/runtime'}]}
+        stage = pod['initContainers'][0]
+        stage['command'] = ['/usr/local/bin/python3', '-c', WAKE_INIT_CODE]
+        stage['resources']['requests']['memory'] = '128Mi'
+        stage['resources']['limits']['memory'] = '128Mi'
+        stage['volumeMounts'].append({'name': 'voice-model-source', 'mountPath': '/run/wake-models',
+                                     'readOnly': True})
+        pod['initContainers'].insert(0, prepare)
     deployment['spec'].update(replicas=1, strategy={'type': 'Recreate'})
     annotations = deployment['spec']['template']['metadata'].setdefault('annotations', {})
     annotations.update({MANAGED: '1', 'voice-gateway.cisco-home-telephony/config-sha256': digest,
@@ -430,10 +513,12 @@ def main(argv=None):
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--workspace', default=str(ROOT))
     parser.add_argument('--profiles')
+    parser.add_argument('--models-claim', help='Read-only PVC with the pinned wake models')
     parser.add_argument('--enable-voice', action='store_true')
     parser.add_argument('--memory-request', default='128Mi')
     parser.add_argument('--memory-limit', default='512Mi')
-    parser.add_argument('--grace-seconds', type=int, default=180)
+    parser.add_argument('--grace-seconds', type=int,
+                        help='Override derived shutdown budget; shorter values are refused')
     parser.add_argument('--max-capacity-age-seconds', type=int, default=900)
     args = parser.parse_args(argv)
     try:
@@ -443,6 +528,7 @@ def main(argv=None):
                         read_json(args.capacity, args.workspace), image=args.image,
                         cpu_request=args.cpu_request, cpu_limit=args.cpu_limit,
                         memory_request=args.memory_request, memory_limit=args.memory_limit,
+                        models_claim=args.models_claim,
                         profiles=read_json(args.profiles, args.workspace) if args.profiles else None,
                         enable_voice=args.enable_voice, workspace=args.workspace,
                         grace_seconds=args.grace_seconds, max_capacity_age_seconds=args.max_capacity_age_seconds)

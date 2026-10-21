@@ -30,6 +30,11 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = Path(__file__).resolve()
 SYNTHETIC_HOST = "192.168.50.10"
 SCENARIOS = ("complete", "stop", "provider-failure")
+DIAGNOSTIC_REPORT_LIMIT = 64 * 1024
+DIAGNOSTIC_CLEANUP_ERRORS = frozenset((
+    "transport_cleanup_failed", "assistant_cleanup_failed", "supervisor_cleanup_failed",
+    "display_cleanup_failed", "status_cleanup_failed",
+))
 
 
 class FixtureFailure(RuntimeError):
@@ -129,7 +134,9 @@ def fixture_worker(scenario, evidence_path, argv):
             return "idle"
 
     class SyntheticMedia:
-        def __init__(self, bind_ip, bind_port, phone_ip, phone_port, *_):
+        def __init__(self, bind_ip, bind_port, phone_ip, phone_port, *_, max_packets):
+            require(type(max_packets) is int and max_packets == runner.transport.packet_budget(6),
+                    "unexpected_synthetic_packet_budget")
             self.bind_ip = bind_ip
             self.bind_port = bind_port
             self.phone_ip = phone_ip
@@ -462,10 +469,87 @@ class FixtureCoordinator:
             "reason": value.get("reason"),
             "invalid_bearer": bad_token,
             "flags": [option for option in options if option.startswith("--")],
+            "voice": self._voice_diagnostic(value.get("voice")),
         })
         require(self.token.encode() not in stdout and b"synthetic-integration-token" not in stdout,
                 "public_secret_leak")
         return process.returncode, value
+
+    def _voice_diagnostic(self, value):
+        """Keep lifecycle evidence without identities, paths or arbitrary strings."""
+        if not isinstance(value, dict):
+            return {}
+        result = {}
+        for field, allowed in (("state", self.core.STATES), ("error", self.core.PUBLIC_ERRORS),
+                               ("phase", self.core.PHASES), ("phase_reason", self.core.PHASE_REASONS)):
+            item = value.get(field)
+            if item is None or type(item) is str and item in allowed:
+                result[field] = item
+        for field in ("active", "stop_requested", "stop_confirmed"):
+            if type(value.get(field)) is bool:
+                result[field] = value[field]
+        return result
+
+    def _worker_diagnostic(self, launch):
+        """Read the captured final report only after teardown has reaped workers.
+
+        This is failure evidence, not scenario acceptance. An absent or malformed
+        report stays explicit and cannot turn an incomplete scenario into a pass.
+        """
+        handle = launch["handle"]
+        code = handle.poll()
+        diagnostic = {"scenario": launch["scenario"], "report_state": "unavailable",
+                      "process_exit": code if type(code) is int and -128 <= code <= 255 else None}
+        raw = handle.read_result()
+        if raw is None:
+            return diagnostic
+        diagnostic["report_state"] = "invalid"
+        if type(raw) is not bytes or not 0 < len(raw) <= DIAGNOSTIC_REPORT_LIMIT or handle.overflow:
+            return diagnostic
+        try:
+            report = json.loads(raw)
+        except (ValueError, UnicodeError, RecursionError):
+            return diagnostic
+        if not isinstance(report, dict):
+            return diagnostic
+        diagnostic["report_state"] = "available"
+        error = report.get("error")
+        diagnostic["error"] = error if error is None or type(error) is str and error in (
+            "voice_session_failed", "invalid_config_or_runtime_failure") else "unrecognized"
+        for field in ("watchdog_armed", "watchdog_finished", "watchdog_stop_confirmed"):
+            if type(report.get(field)) is bool:
+                diagnostic[field] = report[field]
+        for field in ("watchdog_stop_errors", "turns_completed", "output_frames"):
+            if type(report.get(field)) is int and 0 <= report[field] <= 10000:
+                diagnostic[field] = report[field]
+        errors = report.get("cleanup_errors")
+        if isinstance(errors, list) and len(errors) <= 16:
+            diagnostic["cleanup_errors"] = [
+                item if type(item) is str and item in DIAGNOSTIC_CLEANUP_ERRORS else "unrecognized"
+                for item in errors]
+        result = report.get("result")
+        if isinstance(result, dict):
+            reason = result.get("reason")
+            diagnostic["reason"] = (reason if type(reason) is str and reason in self.core.PHASE_REASONS
+                                    else "unrecognized")
+            if type(result.get("stop_confirmed")) is bool:
+                diagnostic["stop_confirmed"] = result["stop_confirmed"]
+            if type(result.get("input_frames")) is int and 0 <= result["input_frames"] <= 10000:
+                diagnostic["input_frames"] = result["input_frames"]
+        return diagnostic
+
+    def _observe_cleanup(self):
+        """Measure before deleting the workspace; do not reuse an unrun check."""
+        observation = {"checked": False, "remaining_count": None}
+        self.summary["snapshot_observation"] = observation
+        try:
+            with os.scandir(self.local / "owner") as entries:
+                remaining = sum(entry.name.startswith("run-") for entry in entries)
+        except FileNotFoundError:
+            remaining = 0
+        observation.update(checked=True, remaining_count=remaining)
+        self.summary["worker_diagnostics"] = [self._worker_diagnostic(launch)
+                                               for launch in self.launches[:len(SCENARIOS)]]
 
     def check_start_guards(self):
         code, value = self.cli("202", "status")
@@ -649,6 +733,7 @@ class FixtureCoordinator:
             attempt("listener_join_failed", lambda: self.server_thread.join(2))
         if self.gateway:
             attempt("database_close_failed", self.gateway.db.close)
+        attempt("cleanup_observation_failed", self._observe_cleanup)
         attempt("workspace_cleanup_failed", self.temporary.cleanup)
         self.summary["external_network_attempts"] += self.parent_network["external_attempts"]
         attempt("network_guard_restore_failed", lambda: self.parent_guard.__exit__(None, None, None))
@@ -658,7 +743,8 @@ class FixtureCoordinator:
             "listener_closed": self.server_thread is None or not self.server_thread.is_alive(),
             "owner_monitor_stopped": (self.gateway is None or not self.gateway.voice
                                       or not self.gateway.voice._thread.is_alive()),
-            "run_snapshots_removed": self.checks.get("run_snapshots_removed", False),
+            "run_snapshots_removed": (self.summary.get("snapshot_observation", {}).get("checked") is True
+                                      and self.summary["snapshot_observation"]["remaining_count"] == 0),
         }
         self.summary["cleanup_errors"] = cleanup_errors
         self.summary["success"] = (self.summary["success"] and not cleanup_errors

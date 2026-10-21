@@ -203,10 +203,13 @@ blocking requests under the gateway lock. Use a bounded controller operation
 and surface uncertain cancellation rather than claiming success.
 
 `refresh_seconds` must be an integer from 2 through 5, `ttl_seconds` from 5
-through 120, and `max_sessions` from 1 through 64. The defaults are 3, 120 and
+through 360, and `max_sessions` from 1 through 64. The defaults are 3, 120 and
 16 respectively. Session TTL uses a monotonic clock and is a hard lifetime:
 read, frame refresh and state update do not extend it. UTC wall-clock capture
-times are for display, not lease enforcement.
+times are for display, not lease enforcement. The voice runner explicitly sets
+a TTL of at least five seconds and the finite media budget plus 30 seconds,
+so the Stop page remains available throughout a session of up to 300 seconds.
+The extra display lifetime does not extend microphone capture.
 
 Run this example from the repository root. It creates only local objects and
 uses a synthetic authorization context. The example hooks are not production

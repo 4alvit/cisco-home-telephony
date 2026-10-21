@@ -164,7 +164,7 @@ class PhoneVoiceDisplay:
                 'invalid_base_urls')
         require(type(refresh_seconds) is int and 2 <= refresh_seconds <= 5,
                 'invalid_refresh_seconds')
-        require(type(ttl_seconds) is int and 5 <= ttl_seconds <= 120,
+        require(type(ttl_seconds) is int and 5 <= ttl_seconds <= 360,
                 'invalid_ttl_seconds')
         require(type(max_sessions) is int and 1 <= max_sessions <= 64,
                 'invalid_max_sessions')
@@ -722,7 +722,7 @@ class VoiceDisplayServer:
                 0.1 <= request_timeout <= 30, 'invalid_request_timeout')
         require(type(refresh_seconds) is int and 2 <= refresh_seconds <= 5,
                 'invalid_refresh_seconds')
-        require(type(ttl_seconds) is int and 5 <= ttl_seconds <= 120, 'invalid_ttl_seconds')
+        require(type(ttl_seconds) is int and 5 <= ttl_seconds <= 360, 'invalid_ttl_seconds')
         require(callable(clock) and callable(wall_clock), 'callbacks_required')
         self.bind_ip, self.phone_ip, self.phone_id = str(bind), str(peer), phone_id
         self.port, self.focus, self.on_stop = port, focus, on_stop

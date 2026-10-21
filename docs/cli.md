@@ -183,9 +183,12 @@ cisco 213 voice stop --session-id 0123456789abcdef0123456789abcdef
 The IDs above are examples. Start requires a stable caller-chosen request key
 and explicit confirmation that an attendant is present, the phone media path
 is reserved, and microphone use is authorized. Remove `--dry-run` only for the
-intended attended attempt. Each session is bounded to at most 30 seconds and
-never rearms automatically. Stop requires the exact ID returned by Start or
-status; repeating an old Stop cannot stop a replacement session.
+intended attended attempt. Each session is bounded to at most 300 seconds.
+Manual mode completes one turn; a configured wake profile can rearm after a
+successful reply within the same fixed deadline. `voice stop` reads the current
+owned session and stops that exact ID; `--session-id` targets a previously
+recorded ID. Repeating an old Stop cannot stop a replacement session. See the
+[voice quickstart](voice-quickstart.md) for readiness and repeat conversations.
 
 Start dry-run validates through the gateway without launching the runner.
 Stop dry-run reads status and checks both the exact ID and whether the reported

@@ -4,6 +4,7 @@ import contextlib
 import copy
 from datetime import datetime, timedelta, timezone
 import importlib.util
+import hashlib
 import io
 import json
 import os
@@ -131,7 +132,8 @@ class RenderVoiceGatewayTests(unittest.TestCase):
         self.assertEqual(pod['imagePullSecrets'], oldpod['imagePullSecrets'])
         self.assertEqual(pod['containers'][0]['ports'], oldpod['containers'][0]['ports'])
         self.assertEqual(pod['containers'][0]['readinessProbe'], oldpod['containers'][0]['readinessProbe'])
-        self.assertEqual(pod['terminationGracePeriodSeconds'], 180)
+        self.assertEqual(pod['terminationGracePeriodSeconds'],
+                         max(180, int(r.control.EXTERNAL_OWNER_GRACE_SECONDS) + len(self.gateway['phones']) + 11))
         self.assertNotIn('status', new)
         self.assertNotIn('uid', new['metadata'])
         self.assertEqual(new['metadata']['annotations'], {'operator-note': 'preserve'})
@@ -399,7 +401,8 @@ class RenderVoiceGatewayTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'grace_must'):
             self.render(grace_seconds=179)
         self.deployment['spec']['template']['spec']['terminationGracePeriodSeconds'] = 240
-        self.assertEqual(self.pod(self.render())['terminationGracePeriodSeconds'], 240)
+        self.assertEqual(self.pod(self.render())['terminationGracePeriodSeconds'],
+                         max(240, int(r.control.EXTERNAL_OWNER_GRACE_SECONDS) + len(self.gateway['phones']) + 11))
 
     def test_large_inventory_requires_listener_close_margin(self):
         template = self.gateway['phones'][0]
@@ -433,14 +436,84 @@ class RenderVoiceGatewayTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'profile_port_collision'):
             self.render(profiles=self.profiles)
 
-    def test_manual_single_phone_bounded_profiles_only(self):
-        for branch, key, value in [('wake', 'mode', 'onnx'), ('service', 'rearm_after_turn', True),
+    def test_invalid_or_disabled_profiles_refused(self):
+        for branch, key, value in [('wake', 'mode', 'onnx'),
                                    ('service', 'enabled', False), ('phones', '209', True)]:
             voice = copy.deepcopy(self.voice)
             voice[branch][key] = value
             self.write('voice.json', voice)
             with self.assertRaises(Exception):
                 self.render(profiles=self.profiles)
+
+    def wake_profile(self):
+        root = self.workspace / '.local/model-source'
+        root.mkdir(mode=0o700)
+        entries = {}
+        for role in ('mel', 'embedding', 'classifier'):
+            data = ('synthetic-model-' + role).encode()
+            path = root / (role + '.onnx')
+            path.write_bytes(data)
+            path.chmod(0o600)
+            entries[role] = {'path': path.name, 'sha256': hashlib.sha256(data).hexdigest()}
+        bundle = {'format_version': 1, 'frontend': 'echomuse-oww-16k-v1',
+                  'threshold': 0.5, 'models': entries}
+        path = root / 'bundle.json'
+        path.write_text(json.dumps(bundle))
+        path.chmod(0o600)
+        self.voice['wake'] = {'mode': 'onnx', 'bundle_file': str(path)}
+        self.voice['service']['rearm_after_turn'] = True
+        self.transport['duration_seconds'] = 300
+        self.write('voice.json', self.voice)
+        self.write('transport.json', self.transport)
+        return root
+
+    def test_wake_profile_stages_pinned_models_without_secret_payloads_or_pvc_chown(self):
+        self.wake_profile()
+        result = self.render(profiles=self.profiles, models_claim='example-wake-models', enable_voice=True)
+        pod, files = self.pod(result), self.files(result)
+        voice = json.loads(files['voice-0.json'])
+        self.assertEqual(voice['wake']['bundle_file'], r.MODELS + '/bundle.json')
+        self.assertTrue(voice['service']['rearm_after_turn'])
+        self.assertIn('wake-bundle.json', files)
+        self.assertFalse(any(name.endswith('.onnx') for name in files))
+        self.assertNotIn('synthetic-model-', json.dumps(result))
+        self.assertNotIn('synthetic-model-', json.dumps(files))
+        self.assertNotIn(str(self.workspace), json.dumps(result))
+        self.assertNotIn(str(self.workspace), json.dumps(files))
+        self.assertNotIn('fsGroup', pod['securityContext'])
+        prepare, stage = pod['initContainers']
+        self.assertEqual([m['name'] for m in prepare['volumeMounts']], ['voice-runtime'])
+        self.assertEqual(prepare['securityContext']['capabilities']['add'], ['CHOWN'])
+        self.assertEqual(stage['securityContext']['runAsUser'], 10001)
+        self.assertTrue(next(m for m in stage['volumeMounts'] if m['name'] == 'voice-model-source')['readOnly'])
+        source = next(v for v in pod['volumes'] if v['name'] == 'voice-model-source')
+        self.assertEqual(source['persistentVolumeClaim'], {'claimName': 'example-wake-models', 'readOnly': True})
+        self.assertTrue(next(m for m in pod['containers'][0]['volumeMounts'] if m['mountPath'] == r.MODELS)['readOnly'])
+        self.assertEqual(json.loads(files['transport-0.json'])['duration_seconds'], 300)
+        self.assertEqual(pod['terminationGracePeriodSeconds'],
+                         max(180, int(r.control.EXTERNAL_OWNER_GRACE_SECONDS) + len(self.gateway['phones']) + 11))
+
+    def test_wake_models_fail_before_render_on_tampering_and_bad_claim(self):
+        source = self.wake_profile()
+        with self.assertRaisesRegex(ValueError, 'valid_models_claim_required'):
+            self.render(profiles=self.profiles, models_claim='../other')
+        (source / 'mel.onnx').write_bytes(b'changed')
+        with self.assertRaisesRegex(ValueError, 'model_checksum_mismatch'):
+            self.render(profiles=self.profiles, models_claim='example-models')
+
+    def test_wake_managed_deployment_can_render_again_and_return_to_manual(self):
+        self.wake_profile()
+        first = self.render(profiles=self.profiles, models_claim='example-models')
+        self.deployment = first['items'][1]
+        second = self.render(profiles=self.profiles, models_claim='example-models')
+        self.assertEqual(first, second)
+        self.voice['wake']['mode'] = 'manual'
+        self.voice['service']['rearm_after_turn'] = False
+        self.write('voice.json', self.voice)
+        manual = self.render(profiles=self.profiles)
+        self.assertEqual(len(self.pod(manual)['initContainers']), 1)
+        self.assertFalse(any(v['name'] == 'voice-model-source' for v in self.pod(manual)['volumes']))
+        self.assertFalse(any(m['mountPath'] == r.MODELS for m in self.pod(manual)['containers'][0]['volumeMounts']))
 
     def test_private_inputs_reject_links_world_readable_and_outside_paths(self):
         path = self.workspace / '.local/gateway.json'

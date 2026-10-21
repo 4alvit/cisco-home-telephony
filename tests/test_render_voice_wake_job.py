@@ -98,6 +98,7 @@ class WakeJobTests(unittest.TestCase):
         self.gateway["phones"][0]["label"] = "PRIVATE ROOM"
         self.gateway["api_token"] = "PRIVATE_API_TOKEN" * 3
         self.voice["wake"]["bundle_file"] = ".local/PRIVATE_USER/model.json"
+        self.voice["ha"]["device_id"] = "synthetic-originating-cisco-device"
         secret, job = self.objects()
         files = {k: base64.b64decode(v).decode() for k, v in secret["data"].items()}
         voice = json.loads(files["voice.json"])
@@ -105,10 +106,12 @@ class WakeJobTests(unittest.TestCase):
         self.assertEqual(voice["wake"]["bundle_file"], "/run/voice/.local/models/bundle.json")
         self.assertEqual(json.loads(files["transport.json"])["line"], "202")
         self.assertEqual(voice["phones"], {"201": True})
+        self.assertEqual(voice["ha"]["device_id"], "synthetic-originating-cisco-device")
         self.assertNotIn("PRIVATE_USER", json.dumps(files))
         self.assertNotIn("PRIVATE ROOM", json.dumps(files))
         self.assertNotIn("PRIVATE_API_TOKEN", json.dumps(files))
         self.assertNotIn("synthetic-ha-token", json.dumps(job))
+        self.assertNotIn("synthetic-originating-cisco-device", json.dumps(job))
         self.assertNotIn(self.bundle["models"]["mel"]["sha256"], json.dumps(job))
         self.assertEqual(set(json.loads(files["staging.json"])["files"]), set(files) - {"staging.json"})
 
@@ -137,15 +140,42 @@ class WakeJobTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.render()
 
-    def test_cannot_enable_repeat_or_lengthen_media_lease(self):
-        self.voice["service"]["rearm_after_turn"] = True
-        with self.assertRaises(ValueError):
-            self.render()
-        self.voice["service"]["rearm_after_turn"] = False
-        self.config["duration_seconds"] = 31
-        with self.assertRaises(ValueError):
-            self.render()
+    def test_finite_rearming_wake_session_preserves_models_and_fixed_stop_grace(self):
+        names = []
+        original_bundle = copy.deepcopy(self.bundle)
+        self.voice["service"]["turn_timeout_seconds"] = 120
+        for rearm in (False, True):
+            for duration, expected in ((30, 120), (30.25, 121), (300, 390)):
+                with self.subTest(rearm=rearm, duration=duration):
+                    self.voice["service"]["rearm_after_turn"] = rearm
+                    self.config["duration_seconds"] = duration
+                    secret, job = self.objects()
+                    spec = job["spec"]
+                    self.assertEqual(spec["activeDeadlineSeconds"], expected)
+                    self.assertEqual(spec["template"]["spec"]["terminationGracePeriodSeconds"], 120)
+                    self.assertIs(spec["suspend"], True)
+                    self.assertEqual(spec["backoffLimit"], 0)
+                    values = {key: base64.b64decode(value) for key, value in secret["data"].items()}
+                    voice = json.loads(values["voice.json"])
+                    self.assertEqual(voice["wake"]["mode"], "onnx")
+                    self.assertIs(voice["service"]["rearm_after_turn"], rearm)
+                    self.assertEqual(voice["service"]["turn_timeout_seconds"], 120)
+                    self.assertEqual(json.loads(values["transport.json"])["duration_seconds"], duration)
+                    self.assertEqual(json.loads(values["bundle.json"]), original_bundle)
+                    names.append(job["metadata"]["name"])
+        self.assertEqual(self.bundle, original_bundle)
+        self.assertEqual(len(set(names)), 6)
+
+    def test_only_enabled_onnx_with_bounded_lease_can_render(self):
+        for duration in (0, 301, True, float("inf"), float("nan")):
+            self.config["duration_seconds"] = duration
+            with self.subTest(duration=duration), self.assertRaises(ValueError):
+                self.render()
         self.config["duration_seconds"] = 30
+        self.voice["service"]["enabled"] = False
+        with self.assertRaises(ValueError):
+            self.render()
+        self.voice["service"]["enabled"] = True
         self.voice["wake"]["mode"] = "manual"
         with self.assertRaises(ValueError):
             self.render()

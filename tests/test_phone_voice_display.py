@@ -63,11 +63,24 @@ class DisplayControlTests(unittest.TestCase):
 
     def test_constructor_rejects_unbounded_and_noninteger_limits(self):
         for field, values in [('refresh_seconds', (True, 1, 6, 3.0)),
-                              ('ttl_seconds', (True, 4, 121, 30.0)),
+                              ('ttl_seconds', (True, 4, 361, 30.0)),
                               ('max_sessions', (True, 0, 65, 2.0))]:
             for value in values:
                 with self.subTest(field=field, value=value), self.assertRaises(display.DisplayError):
                     self.make_app(**{field: value})
+
+    def test_long_voice_session_retains_exact_stop_until_absolute_deadline(self):
+        self.app = self.make_app(ttl_seconds=330)
+        ref = self.app.start('demo', mode='voice')
+        self.clock.advance(300)
+        self.assertEqual(self.page(ref).status, 200)
+        self.assertEqual(self.app.cleanup(), 0)
+        self.app.stop('demo', ref.session_id)
+        self.assertIn(b'Stopped', self.page(ref).body)
+        self.assertEqual(len(self.stops), 1)
+        self.clock.advance(30)
+        self.app.cleanup()
+        self.assertEqual(self.app.stats()['sessions'], 0)
 
     def test_start_read_update_and_stop_require_exact_true_authorization(self):
         ref = self.app.start('demo', mode='camera')
@@ -601,7 +614,7 @@ class VoiceDisplayTests(DisplayFixture):
 
     def test_refresh_interval_and_resource_limits_require_bounded_integers(self):
         for name, bad in [('refresh_seconds', [True, 1, 6, 2.5, '3']),
-                          ('ttl_seconds', [True, 4, 121, 5.0, '30']),
+                          ('ttl_seconds', [True, 4, 361, 5.0, '30']),
                           ('max_sessions', [True, 0, 65, 2.0, '2'])]:
             for value in bad:
                 with self.subTest(name=name, value=value), self.assertRaises((display.DisplayError, ValueError)):

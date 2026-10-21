@@ -1,12 +1,16 @@
 # Bounded voice session controls
 
-![Shared voice ownership and incoming-call priority](diagrams/voice-call-priority.svg)
+For normal use, start with the [phone and CLI quickstart](voice-quickstart.md).
+This page describes configuration, ownership and recovery.
+
+![Finite voice session and explicit Stop](diagrams/voice-operator-flow.svg)
 
 `phone_voice_control.py` manages one attended voice session per physical phone.
 It launches the reviewed [foreground runner](voice-cli-install.md), retains
 ownership across separate status and Stop requests, and accepts only private,
-operator-configured profiles. The initial version supports manual activation.
-It does not create a persistent wake listener or change the phone's SIP setup.
+operator-configured profiles. Manual mode handles one request; wake mode can
+return to listening after a successful reply within the same finite session.
+Neither mode starts on boot or changes the phone's SIP setup.
 
 The controller runs inside the existing authenticated phone gateway. The
 gateway, `cisco LINE voice` command, phone menu and companion Home Assistant
@@ -25,9 +29,13 @@ when using the display. Python 3.11 or later is recommended; a supported Python
 Each profile points to the existing private transport and voice configuration.
 The transport configuration selects a line; its gateway configuration resolves
 that line to the physical phone. Both lines share one voice owner. The voice
-configuration must enable only that physical phone, use manual mode, and disable
-rearming. Duration must be at most 30 seconds. A profile cannot supply a command,
-shell fragment, remote URL, or arbitrary process arguments.
+configuration must enable only that physical phone. Use `wake.mode: "manual"`
+with `rearm_after_turn: false` for one request. A reviewed ONNX wake profile can
+set `rearm_after_turn: true` for repeated requests after successful replies.
+`duration_seconds` must be positive and at most 300 seconds, including setup,
+wake waiting, requests and playback. Each turn keeps its own shorter limits.
+A profile cannot supply a command, shell fragment, remote URL, or arbitrary
+process arguments.
 
 The registry has this shape; all paths and identifiers below are examples:
 
@@ -103,10 +111,11 @@ All referenced private paths must then resolve under that workspace's `.local`
 directory. Kubernetes projected Secrets use symlinks: copy their contents into
 ordinary owner-only files before loading the registry rather than pointing
 the controller at the projection. Keep state persistent across replacements
-with the same runtime user. The gateway keeps callbacks available for up to
-145 seconds during shutdown; use the current gateway renderer's minimum
-180-second Pod termination grace, including its larger floor for large
-inventories.
+with the same runtime user. Preserve the current gateway renderer's calculated
+Pod termination grace and callback-drain budget; do not reuse an older value
+from a saved manifest. Known local owners receive Stop immediately. An unknown
+external owner requires a conservative recovery horizon, not a blind process
+signal or an assumption that the longer session has already ended.
 
 The selected interpreter and source checkout must remain at their configured
 paths. The controller creates immutable private snapshots for its child runner
@@ -135,7 +144,7 @@ blocks these conflicting operations.
 While voice control is attached, each direct command for any gateway handset
 holds the same per-device file lock used by the standalone wake runner until
 synchronous phone I/O finishes. An intercom holds both devices' locks. Phones
-without a manual voice profile receive control-only identities; this does not
+without a voice profile receive control-only identities; this does not
 enable their voice Start or expose a voice status endpoint. The wake pilot must
 use the same state directory and a handset in this gateway's inventory.
 
@@ -193,19 +202,28 @@ downstream session activity, not the client HTTP request. It does not prove
 that the phone is idle or that a subsequent Start will be accepted.
 
 For an explicitly attended real attempt, use the same Start command without
-`--dry-run`. Record the returned session ID. Stop targets that exact ID:
+`--dry-run`. Record the returned session ID. To stop the current session:
+
+```sh
+cisco --config .local/cisco-cli.json 201 voice stop
+cisco --config .local/cisco-cli.json 201 voice status
+```
+
+With no ID, the CLI reads current status and then sends Stop for that exact
+gateway-owned session. It does not send a wildcard Stop or acquire an external
+owner. For a previously recorded session, retain explicit targeting:
 
 ```sh
 cisco --config .local/cisco-cli.json 201 voice stop \
   --session-id 0123456789abcdef0123456789abcdef
 ```
 
-The displayed ID is an example, not a valid local session. Run status again to
+The displayed ID is an example, not a valid local session. Read status again to
 observe cleanup. Exiting the client or pressing Ctrl+C in the client does not
 stop the gateway-owned session; send its explicit Stop request.
 
-`voice stop --dry-run` reads status, checks the supplied session ID, and checks
-whether the reported ownership permits Stop through this gateway. It does not
+`voice stop --dry-run` reads status, resolves or checks the exact session ID,
+and checks whether the reported ownership permits Stop through this gateway. It does not
 send a Stop POST. If the state is `external_owner` or the sanitized error is
 `voice_owner_unavailable`, a matching-ID dry run returns `status: "unavailable"`,
 `gateway_stop_available: false`, and a nonzero exit code. It retains the
@@ -224,10 +242,13 @@ The standalone `phone_voice_control.py` client remains available with
 flag is `--request-id`.
 
 Treat an accepted Start as a control-plane result, not proof that capture or
-speech recognition succeeded. The runner currently reports its detailed result
-at completion; process status alone cannot truthfully identify Listening,
-Thinking or Speaking. The optional [phone display](voice-display.md) has its own
-session state and physical acceptance requirements.
+speech recognition succeeded. Updated runners report their current phase while
+the session is active; process `state: "running"` alone is not readiness. Wait
+for the reported preparation/warmup to finish before speaking. In wake mode,
+wait for the explicit wake-ready phase/reason, then say the configured phrase
+and request. Manual mode requires no wake phrase. The optional
+[phone display](voice-display.md) shows the session progress; physical capture,
+audible output and microphone closure still require their own acceptance.
 
 Every response exposes a bounded status object with `schema_version`, `phone`,
 `line`, `session_id`, `state`, `active`, `remaining_seconds`, `stop_requested`,
@@ -239,14 +260,32 @@ configuration. Gateway voice-status payloads exclude credentials, private paths,
 process arguments, transcripts, audio and raw child output. Error values are
 fixed codes, not exception text.
 
+Updated status may additionally include `phase`, `phase_reason`,
+`turns_completed`, `mode` and `session_seconds`. These fields are optional for
+compatibility; their absence does not mean ready. `phase` can be `preparing`,
+`armed`, `listening`, `thinking`, `speaking`, `stopped`, `error` or null; inspect
+its fixed `phase_reason` as well. `mode` is `manual` or `wake`;
+`session_seconds` and `remaining_seconds` are bounded by 300.
+`turns_completed` counts software-completed replies, not human confirmation
+that a reply was heard. No transcript or model identifier is added to status.
+
+In wake mode, successful rearming stays inside the original session ID and
+deadline. Say the wake phrase again when ready for the next request. Stop,
+failure, call preemption and expiry do not rearm. Manual mode ends after one
+turn. A later explicit Start creates a new session; do not expect conversation
+context to survive it.
+
 States are `idle`, `starting`, `running`, `stopping`, `stopped`, `cancelled`,
 `failed` and `recovery_required`; `external_owner` is reserved. `cancelled` means
-the attempt was cancelled before its runner launched. `failed` is not a
-successful conversation. Read `stop_confirmed` separately: even `active: false`
-does not prove physical microphone closure when recovery is required.
-Assistant errors, input timeouts, transport failures and lease expiry remain
-`failed` even when their media cleanup is confirmed. Deliberate Stop and shutdown
-can report `stopped`; that state alone does not claim a completed conversation.
+the attempt was cancelled before its runner launched. `failed` reports session
+failure even if earlier turns completed. Read `stop_confirmed` separately:
+even `active: false` does not prove physical microphone closure when recovery
+is required.
+Assistant errors, input timeouts and transport failures remain `failed` even
+when their media cleanup is confirmed. Clean fixed-deadline expiry reports
+`stopped` with `phase_reason: "lease_expired"`; completed replies are counted
+separately. Deliberate Stop and shutdown can also report `stopped`; that state
+alone does not claim a completed conversation.
 
 ## If the CLI loses a Start or Stop acknowledgement
 
@@ -310,10 +349,11 @@ state are resolved.
 
 ## Deadlines and uncertain cleanup
 
-The controller applies an external lease of at most 30 seconds and requests
+The controller applies an external lease of at most 300 seconds and requests
 runner shutdown with SIGTERM when that lease expires. It allows a further
 45 seconds for cleanup. If forced termination is necessary, it targets only
 its own runner process; it does not kill the watchdog's process group.
+The active-session ceiling does not lengthen these Stop/cleanup budgets.
 This is additional supervision, not a hardware-enforced microphone lease.
 
 Stop acknowledgement, process exit and physical microphone closure are different
@@ -364,7 +404,7 @@ The gateway additionally supplies its full trusted inventory as immutable
 `ControlPhone` identities through `control_phones=`. Its internal `control`
 authorization permits `reserve_control(target, context=...)` to fence a direct
 phone command; this context manager releases its file lock in `finally`. These
-identities do not add manual voice profiles, and the gateway does not grant this
+identities do not add voice profiles, and the gateway does not grant this
 internal authorization to a bearer request or expose it as a separate route.
 Shutdown uses internal `reserve_shutdown` contexts for every inventory handset.
 They check the actual shared file lock as well as the current journal, including
@@ -381,16 +421,18 @@ An embedding that sets `monitor=False` must call `tick()` regularly.
 `close()` rejects new Starts and requests cleanup, but returns without waiting
 for all children to finish. Keep supervision alive during shutdown; do not
 equate a returned `close()` call with confirmed microphone closure.
-During gateway shutdown, phone authentication callbacks remain available for
-up to 145 seconds while any inventory handset has active or uncertain ownership.
-The budget covers the external runner's 30-second lease, 45-second Stop allowance,
-7-second completion margin and possible 55-second uncertain-cleanup drain, plus
-8 seconds of margin. The gateway does not signal a process it does not own.
+During gateway shutdown, phone authentication callbacks remain available while
+owned or uncertain sessions drain, subject to the current runtime's bounded
+shutdown budget. Known local owners receive shutdown immediately; the five-minute
+active-session ceiling is not a shutdown sleep. An external owner is not
+signalled by this process, so its conservative recovery horizon must account
+for a possible remaining lease and cleanup.
+
 Confirmed cleanup and acquired fences permit an earlier exit; a timeout returns
-an incomplete result and does not clear unresolved journals. The updated gateway
-renderer requires at least 180 seconds of Pod termination grace and increases
-that minimum for large inventories to allow listener closure. Do not release new
-wake Jobs while the gateway is shutting down.
+an incomplete result and does not clear unresolved journals. Preserve the
+current renderer's calculated Pod termination grace, including listener closure
+for the inventory size, rather than copying historical 145/180-second figures.
+Do not release new wake Jobs while the gateway is shutting down.
 
 The existing client transport uses these flat gateway action routes:
 
@@ -423,7 +465,8 @@ the exact session ID shown to the user. Selecting the sibling line never creates
 a second physical owner. Use explicit Refresh to update the displayed result;
 the menu does not poll or repeat microphone commands automatically.
 
-**Applications → Voice Assistant** uses the gateway's Stop endpoint. The
+**Services → Home Phone Apps → Voice Assistant** uses the gateway's Stop
+endpoint. If the firmware shows a service list first, choose **Home Apps**. The
 **Stop** softkey on the live **Listening / Thinking / Speaking** screen belongs
 to that screen's voice session. Use it for a
 [standalone wake Job](voice-wake-k3s.md#start-and-stop-an-attended-attempt).
@@ -447,6 +490,13 @@ Assistant restart during an AMI outage can prevent that initial load; use the
 gateway CLI or the phone's Voice menu for Stop in that case.
 
 ## Validation and acceptance
+
+The finite-session controls above describe implementation capability, not a
+claim that the new revision is deployed or acoustically accepted. Confirm the
+installed runtime and client together. A usable wake-session acceptance must
+include two distinct spoken requests and audible replies under one session ID,
+return to wake readiness, explicit Stop, and ordinary-call preemption. The
+following records describe earlier pilots; they do not replace that check.
 
 The deployed manual pilot passed image/configuration checks, authenticated
 directory checks, and status → Start dry-run → status through both line aliases.

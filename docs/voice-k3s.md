@@ -2,7 +2,8 @@
 
 For persistent CLI, phone-menu and Home Assistant controls, use the
 [voice gateway deployment guide](voice-gateway-deployment.md). This page covers
-the separate, finite attended-session Job and its image packaging.
+the separate, finite attended-session Job and its image packaging. For normal
+operation of an installed gateway, follow the [voice quickstart](voice-quickstart.md).
 
 `scripts/render_voice_job.py` prepares a private Kubernetes manifest for one
 attended, manually activated voice session. Rendering is offline: it reads
@@ -59,7 +60,7 @@ The workload uses these constraints:
 | `suspend: true` | The operator must explicitly release the reviewed Job. |
 | One completion and one parallel worker | Intended for one bounded manual session. |
 | `restartPolicy: Never`, `backoffLimit: 0` | No configured container restart or failed-Job retry. |
-| `activeDeadlineSeconds: 90` | Kubernetes bounds the active Job lifetime separately from the media deadline. |
+| `activeDeadlineSeconds` | `max(90, ceil(duration_seconds) + 60)` seconds; inspect the generated value rather than reusing an older fixed 90-second manifest. |
 | `terminationGracePeriodSeconds: 45` | Allows graceful shutdown before Kubernetes can force termination. |
 | `ttlSecondsAfterFinished: 300` | Finished Jobs become eligible for cleanup after five minutes. |
 | Node pinning and `hostNetwork: true` | RTP uses the selected node's LAN address and ports. |
@@ -142,7 +143,10 @@ inside its `.local` directory. The transport configuration identifies one phone
 through either of its gateway lines. The voice configuration must enable only
 that physical phone's primary ID and use an explicit Assist pipeline. The
 renderer requires `service.enabled: true`, `wake.mode: "manual"` and
-`rearm_after_turn: false`. The rendered session still requires the RTP ownership
+`rearm_after_turn: false`. Set the finite transport `duration_seconds` to at
+most 300 seconds. For repeated wake requests, use the gateway or the separate
+[wake Job renderer](voice-wake-k3s.md), not this manual-only packaging path.
+The rendered session still requires the RTP ownership
 and physical attendance conditions described in [voice transport](voice-transport.md).
 
 An HA token authorizes real Assist requests after the Job is released. Running
@@ -231,9 +235,11 @@ handling. [Kubernetes Job failure semantics](https://kubernetes.io/docs/concepts
 
 ## Stop, evidence and cleanup
 
-The voice runner retains its shorter, at-most-30-second media deadline and
-independent watchdog. The 90-second Job deadline is additional process cleanup,
-not a promise that the phone stops streaming at that instant. Hard Pod
+The voice runner retains its configured, at-most-300-second media deadline
+and independent watchdog. The updated Job deadline must accommodate that
+session plus startup/cleanup; review the rendered value. It does not renew
+the media lease or promise that the phone stops streaming at that instant.
+Stop remains interrupt-driven and does not wait for the full session budget. Hard Pod
 termination, node failure or resource exhaustion can kill the runner and its
 watchdog together. **There is no hardware-enforced microphone lease.** The
 attendant must verify physical closure and use local phone controls if remote
@@ -400,10 +406,11 @@ Use one replica with the `Recreate` strategy, explicit node pinning and the
 existing API and callback/listener ports. Retain the runtime's non-root,
 read-only and capability restrictions. Use the
 [gateway renderer](voice-gateway-deployment.md) to set
-`terminationGracePeriodSeconds` to at least 180 seconds; its inventory-aware
-minimum grows for larger deployments. This includes the gateway's bounded
-145-second callback retention and time to close its listeners. The persistent
-volume must preserve the same physical control ownership. Old and replacement
+`terminationGracePeriodSeconds` from the current runtime's bounded callback
+drain and inventory size. Do not copy a historical 145/180-second budget into
+a longer-session deployment. Known local owners are interrupted immediately;
+external-owner recovery is conservative. The persistent volume must preserve
+the same physical control ownership. Old and replacement
 gateways must not run concurrently or compete for the state or the phones.
 
 Only after the replacement is approved, staging and preflight pass, the
@@ -425,5 +432,5 @@ Daemon startup does not authorize a microphone session. Each Start must still
 supply the attendance, exclusive-media and microphone gates from
 [voice control](voice-control.md); existing call priority, bounded duration,
 explicit Stop and persistent uncertain-cleanup rules continue to apply. The
-short manual Job remains unchanged: its source projection is `/workspace`, its
+separate manual Job keeps the same storage layout: its source projection is `/workspace`, its
 Secret mount is `/run/voice/.local`, and its runtime workspace is `/run/voice`.

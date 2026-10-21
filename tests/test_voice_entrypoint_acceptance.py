@@ -72,13 +72,15 @@ class EntrypointScenarios(unittest.TestCase):
         cls.complete = run_case()
         cls.no_wake = run_case("no-wake", duration_seconds=1.5)
 
-    def test_completed_turn_and_no_wake_have_distinct_native_exit_results(self):
+    def test_clean_exit_does_not_equate_no_wake_with_a_completed_turn(self):
         self.assertIs(self.complete["assertion_success"], True, self.complete)
         self.assertEqual(self.complete["entrypoint_exit_code"], 0)
         self.assertIs(self.complete["turn_success"], True)
         self.assertIs(self.no_wake["assertion_success"], True, self.no_wake)
-        self.assertEqual(self.no_wake["entrypoint_exit_code"], 1)
+        self.assertEqual(self.no_wake["entrypoint_exit_code"], 0)
         self.assertIs(self.no_wake["turn_success"], False)
+        self.assertEqual(self.complete["turns_completed"], 1)
+        self.assertEqual(self.no_wake["turns_completed"], 0)
 
     def test_injected_ci_detector_is_never_labelled_actual_onnx(self):
         for result in (self.complete, self.no_wake):
@@ -140,10 +142,12 @@ class EntrypointNegativeControls(unittest.TestCase):
 
         with mock.patch.object(fixture.runner.transport.UdpMedia, "receive", return_value=[]):
             result = run_case("no-wake", duration_seconds=1.5, config_mutator=wait_for_lease)
-        self.assertEqual(result["entrypoint_exit_code"], 1, result)
+        self.assertEqual(result["entrypoint_exit_code"], 0, result)
+        self.assertEqual(result["turns_completed"], 0)
         self.assertIs(result["cleanup_success"], True)
-        self.assertEqual(result["entrypoint_state_before_rescue"]["transport_reason"],
-                         "lease_expired")
+        self.assertEqual(result["entrypoint_reason"], "lease_expired")
+        self.assertIn(result["entrypoint_state_before_rescue"]["transport_reason"],
+                      ("lease_expired", "duration_expired"))
         self.assertEqual(result["model_factory_calls"], 1)
         self.assertEqual(result["detector_frames"], 0)
         self.assertEqual(result["decoded_input_bytes"], 0)

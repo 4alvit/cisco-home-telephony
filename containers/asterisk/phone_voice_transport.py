@@ -26,6 +26,8 @@ from typing import NamedTuple
 SAMPLE_RATE = 8000
 FRAME_SAMPLES = 160
 FRAME_SECONDS = 0.020
+MAX_SESSION_SECONDS = 300
+MAX_RTP_PACKETS = MAX_SESSION_SECONDS * (SAMPLE_RATE // FRAME_SAMPLES) + 100
 MAX_DATAGRAM = 2048
 SILENCE = b'\xff' * FRAME_SAMPLES
 _NETWORKS = tuple(ipaddress.ip_network(value) for value in (
@@ -67,10 +69,15 @@ def _port(value, cisco=True):
     return value
 
 
-def _duration(value, maximum=30):
-    _require(type(value) in (int, float) and math.isfinite(value) and 0 < value <= maximum,
+def _duration(value, maximum=MAX_SESSION_SECONDS):
+    _require(type(value) in (int, float) and 0 < value <= maximum and math.isfinite(value),
              'invalid_duration')
     return float(value)
+
+
+def packet_budget(duration):
+    """Finite 20-ms packet allowance with two seconds of scheduling margin."""
+    return math.ceil(_duration(duration) / FRAME_SECONDS) + 100
 
 
 def tx_uri(ip, port):
@@ -248,11 +255,11 @@ class UdpMedia:
     it receives. Set a monotonic deadline before open when used standalone.
     """
     def __init__(self, bind_ip, bind_port, phone_ip, phone_port=None,
-                 expected_source_port=None, max_packets=1600, clock=time.monotonic):
+                 expected_source_port=None, max_packets=MAX_RTP_PACKETS, clock=time.monotonic):
         self.bind_ip, self.bind_port = _ipv4(bind_ip), _port(bind_port)
         self.phone_ip = _ipv4(phone_ip)
         self.phone_port = None if phone_port is None else _port(phone_port)
-        _require(type(max_packets) is int and 1 <= max_packets <= 3000, 'invalid_packet_budget')
+        _require(type(max_packets) is int and 1 <= max_packets <= MAX_RTP_PACKETS, 'invalid_packet_budget')
         self.receiver = RtpReceiver(phone_ip, expected_source_port)
         self.sender = RtpSender()
         self.max_packets, self.clock = max_packets, clock
@@ -767,7 +774,8 @@ def run_pilot(config, private, phone, *, enable_microphone=False, playback_tone=
     observer = _GatewayObserver(gateway, private, phone)
     observer.thread.start()
     media = UdpMedia(config['bind_ipv4'], config['bind_port'], phone['ipv4'],
-                     config['phone_rtp_port'], config.get('expected_source_port'))
+                     config['phone_rtp_port'], config.get('expected_source_port'),
+                     max_packets=packet_budget(config['duration_seconds']))
     starts = ([tx_uri(media.bind_ip, media.bind_port)] if enable_microphone else []) + (
         [rx_uri(media.bind_ip, media.phone_port, config.get('volume', 20))] if playback_tone else [])
     watchdog = _Watchdog(phone, starts)

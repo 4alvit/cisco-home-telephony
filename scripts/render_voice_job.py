@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -154,7 +155,7 @@ def read_websockets_wheel(path):
     return data
 
 
-def _validate(site, config, gateway, voice, token, display_port):
+def _validate(site, config, gateway, voice, token, display_port, *, wake_mode='manual'):
     k3s.validate_site(site)
     transport._gateway_module().validate(gateway)
     validate_voice_config(voice)
@@ -178,10 +179,14 @@ def _validate(site, config, gateway, voice, token, display_port):
     phone = matches[0]
     _require(voice['phones'] == {phone['id']: True}, 'one_enabled_selected_phone_required')
     settings = ServiceSettings(**voice['service'])
-    _require(settings.enabled and not settings.rearm_after_turn, 'single_manual_turn_required')
-    _require(voice['wake']['mode'] == 'manual', 'manual_wake_mode_required')
-    _require(settings.max_utterance_seconds <= 30 and settings.turn_timeout_seconds <= 60,
-             'voice_time_budget_exceeded')
+    # The wake renderer shares network/private-input validation without
+    # pretending its ONNX profile is a manual, single-turn configuration.
+    _require(wake_mode in ('manual', 'onnx') and voice['wake']['mode'] == wake_mode,
+             'unexpected_wake_mode')
+    _require(settings.enabled and (wake_mode == 'onnx' or not settings.rearm_after_turn),
+             'enabled_voice_or_single_manual_turn_required')
+    # ServiceSettings owns utterance/turn bounds; the transport lease still
+    # limits the complete session, including waiting, processing and playback.
     _require(isinstance(token, str) and 0 < len(token.strip()) <= 8192
              and all(33 <= ord(char) <= 126 for char in token.strip()), 'invalid_ha_token')
     if display_port is not None:
@@ -200,6 +205,9 @@ def render(site, transport_config, gateway_config, voice_config, token, *,
     _require(isinstance(name, str) and re.fullmatch(r'[a-z][a-z0-9-]{0,30}[a-z0-9]|[a-z]', name),
              'invalid_job_name')
     phone = _validate(site, config, gateway, voice, token, display_port)
+    # Keep the old 90-second floor and the 60-second margin beyond the
+    # former maximum lease. A longer session does not lengthen Stop grace.
+    active_deadline = max(90, math.ceil(config['duration_seconds']) + 60)
     image = site['asterisk_image'] if voice_image is None else voice_image
     _require(isinstance(image, str)
              and re.fullmatch(r'[^\s]+@sha256:[0-9a-f]{64}', image),
@@ -236,7 +244,8 @@ def render(site, transport_config, gateway_config, voice_config, token, *,
     secret_name, secret = k3s.secret(namespace, name + '-private', private_files)
     revision = _sha({'source': source_hash, 'secret': secret_name, 'site': site,
                      'voice_image': image,
-                     'display_port': display_port, 'name': name})[:16]
+                     'display_port': display_port, 'name': name,
+                     'active_deadline_seconds': active_deadline})[:16]
     job_name = name + '-' + revision
     labels = {'app': 'phone-voice-pilot', 'app.kubernetes.io/part-of': 'cisco-home-telephony',
               'voice-pilot-revision': revision}
@@ -288,7 +297,7 @@ def render(site, transport_config, gateway_config, voice_config, token, *,
     job = {'apiVersion': 'batch/v1', 'kind': 'Job',
            'metadata': {'name': job_name, 'namespace': namespace, 'labels': labels},
            'spec': {'suspend': True, 'parallelism': 1, 'completions': 1, 'backoffLimit': 0,
-                    'activeDeadlineSeconds': 90, 'ttlSecondsAfterFinished': 300,
+                    'activeDeadlineSeconds': active_deadline, 'ttlSecondsAfterFinished': 300,
                     'template': {'metadata': {'labels': labels}, 'spec': pod}}}
     result = {'apiVersion': 'v1', 'kind': 'List', 'items': [source, secret, job]}
     _require(len(_canonical(result).encode()) <= MAX_MANIFEST_BYTES, 'manifest_too_large')

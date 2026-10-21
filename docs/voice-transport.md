@@ -134,7 +134,7 @@ The configuration fields are:
 | `bind_ipv4` | Address owned by the computer running the pilot and reachable from the phone. |
 | `bind_port` | Local receive port advertised in `RTPTx`. |
 | `phone_rtp_port` | Phone receive port advertised in `RTPRx`. |
-| `duration_seconds` | Controller media deadline, at most 30 seconds, including setup. |
+| `duration_seconds` | Controller media deadline, at most 300 seconds, including setup. |
 | `receive_idle_seconds` | Maximum wait without accepted microphone packets. |
 | `volume` | Explicit initial playback volume; start low. |
 | `expected_source_port` | Optional observed phone transmit source port; `null` pins the first valid packet's source port. |
@@ -229,7 +229,7 @@ owned or uncertain directions. Cleanup can make two passes, separated by
 socket cleanup is attempted before remote Stop; local errors do not skip the
 remote attempts. Inspect both local and remote cleanup errors.
 
-**The 30-second limit is a controller deadline, not a hardware microphone
+**The configured finite limit (at most 300 seconds) is a controller deadline, not a hardware microphone
 lease.** A phone HTTP request can still be in flight at expiry;
 Stop attempts can take additional time or fail. Host failure, loss of power,
 network partition, firmware behavior or an unreachable phone can defeat both

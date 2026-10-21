@@ -1,5 +1,7 @@
 # Cisco 7945G: home telephony with Asterisk and k3s
 
+For the finite voice prototype, start with the [phone and CLI voice quickstart](docs/voice-quickstart.md).
+
 A practical guide to converting **Cisco 7945G** phones to SIP and running them
 with Asterisk on k3s, integrated with Home Assistant.
 

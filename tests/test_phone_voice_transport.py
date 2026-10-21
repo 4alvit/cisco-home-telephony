@@ -270,6 +270,31 @@ class UdpBoundTests(unittest.TestCase):
         self.connection.recvfrom.assert_not_called()
         self.connection.sendto.assert_not_called()
 
+    def test_five_minute_packet_budget_remains_finite_and_duration_sized(self):
+        self.assertEqual(v.packet_budget(30), 1600)
+        self.assertEqual(v.packet_budget(180), 9100)
+        self.assertEqual(v.packet_budget(300), 15100)
+        self.assertEqual(v.MAX_RTP_PACKETS, 15100)
+        for duration in (0, -1, 301, True, '300', 10 ** 400, float('inf'), float('nan')):
+            with self.subTest(duration=duration), self.assertRaises(v.VoiceTransportError):
+                v.packet_budget(duration)
+        for count in (0, True, 15101):
+            with self.subTest(count=count), self.assertRaises(v.VoiceTransportError):
+                v.UdpMedia('192.0.2.10', 24000, SOURCE[0], max_packets=count)
+
+        self.media.max_packets = v.packet_budget(300)
+        self.media.counters['sent'] = 15000
+        self.assertTrue(self.media.send_frame(SILENCE))
+        self.media.counters['sent'] = self.media.max_packets
+        with self.assertRaisesRegex(v.VoiceTransportError, 'send_budget_exhausted'):
+            self.media.send_frame(SILENCE)
+        self.media.counters['datagrams'] = 15000
+        self.connection.recvfrom.return_value = (b'bad', SOURCE)
+        self.assertEqual(self.media.receive(), [])
+        self.media.counters['datagrams'] = self.media.max_packets
+        with self.assertRaisesRegex(v.VoiceTransportError, 'receive_budget_exhausted'):
+            self.media.receive()
+
     def test_untrusted_datagrams_consume_finite_receive_budget(self):
         self.connection.recvfrom.return_value = (b"bad", ("192.0.2.21", 24000))
         self.assertEqual(self.media.receive(), [])
@@ -350,7 +375,7 @@ class SessionLifecycleTests(unittest.TestCase):
 
     def test_pilot_duration_and_explicit_flags_reject_coercion_before_io(self):
         invalid = [{"duration": value} for value in
-                   (0, -1, 31, True, "10", float("nan"), float("inf"))]
+                   (0, -1, 301, True, "10", 10 ** 400, float("nan"), float("inf"))]
         invalid += [{field: value} for field in
                     ("enable_microphone", "enable_playback", "media_reserved")
                     for value in (1, "true", None)]
@@ -532,6 +557,23 @@ class SessionLifecycleTests(unittest.TestCase):
         self.assertFalse(session.check())
         self.assertEqual(session.state, "stopped")
         self.assert_stops("RTPTx")
+
+    def test_five_minute_session_arms_one_deadline_and_expires_without_extension(self):
+        arm = mock.Mock()
+        session = self.session(duration=300, arm=arm)
+        session.start()
+        arm.assert_called_once_with(400.0)
+        self.assertEqual(self.media.deadline, 400.0)
+        for now in (130.0, 280.0, 399.99):
+            self.now = now
+            self.assertTrue(session.check())
+            self.assertEqual(session.deadline, 400.0)
+        self.now = 400.0
+        self.assertFalse(session.check())
+        self.assertEqual(session.reason, 'duration_expired')
+        self.assertTrue(session.stop_confirmed)
+        self.assert_stops('RTPTx')
+        arm.assert_called_once()
 
     def test_call_ringing_radio_disconnect_and_unknown_preempt_without_auto_resume(self):
         for state in ("call", "ringing", "radio", "disconnected", "unknown"):

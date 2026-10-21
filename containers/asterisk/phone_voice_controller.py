@@ -12,6 +12,8 @@ import math
 import struct
 import time
 
+from phone_voice_transport import MAX_SESSION_SECONDS
+
 
 def upsample_8k_frame(pcm: bytes) -> bytes:
     """One 20-ms PCM frame, 8 -> 16 kHz; no frame history or hidden buffering.
@@ -40,6 +42,16 @@ def playback_frames(pcm: bytes, sample_rate: int):
                             for i in range(0, len(samples), 2)))
     for offset in range(0, len(pcm), 320):
         yield pcm[offset:offset + 320].ljust(320, b'\0')
+
+
+def _playback_transport_stopped(session):
+    # The controller closes transport before waiting for assistant cleanup.
+    # A queued frame can observe that orderly close before its task is canceled;
+    # it is canceled output, not a provider failure or a completed reply.
+    if getattr(session, 'reason', None) in (
+            'explicit_stop', 'display_stop', 'shutdown', 'lease_expired', 'duration_expired'):
+        raise asyncio.CancelledError
+    raise RuntimeError('playback_transport_stopped')
 
 
 class RtpPCMSink:
@@ -76,7 +88,7 @@ class RtpPCMSink:
                 self.frames_sent += 1
                 return
             if self.session.state != 'active':
-                raise RuntimeError('playback_transport_stopped')
+                _playback_transport_stopped(self.session)
             await asyncio.sleep(.005)
 
     async def stop(self, phone_id):
@@ -109,7 +121,7 @@ class PhonePCMPlayback:
                     self.frames_sent += 1
                     break
                 if self.session.state != 'active':
-                    raise RuntimeError('playback_transport_stopped')
+                    _playback_transport_stopped(self.session)
                 await asyncio.sleep(.005)
 
     async def stop(self, phone_id):
@@ -125,11 +137,12 @@ class ControllerResult:
 
 
 class PhoneVoiceController:
-    """One selected physical phone, one foreground session, no automatic rearm."""
+    """One finite foreground lease; wake turns may rearm within its deadline."""
     def __init__(self, session, assistant, phone_id, *, duration=30,
                  receive_idle_seconds=3, clock=time.monotonic):
-        if type(duration) not in (int, float) or not math.isfinite(duration) or not 0 < duration <= 30:
-            raise ValueError('duration_must_be_at_most_30_seconds')
+        if (type(duration) not in (int, float) or not 0 < duration <= MAX_SESSION_SECONDS
+                or not math.isfinite(duration)):
+            raise ValueError('duration_must_be_at_most_300_seconds')
         self.session, self.assistant, self.phone_id = session, assistant, phone_id
         if (type(receive_idle_seconds) not in (int, float) or not math.isfinite(receive_idle_seconds)
                 or not 0 < receive_idle_seconds <= 10):
@@ -162,15 +175,29 @@ class PhoneVoiceController:
                     stream_id = await (self.assistant.activate(self.phone_id) if mode == 'manual'
                                        else self.assistant.listen(self.phone_id))
                 last_audio = self.clock()
+                was_processing = False
                 reason = 'lease_expired'
                 while self.clock() < deadline and not self._stop.is_set():
                     batch = await asyncio.to_thread(self.session.poll)
                     if self.session.state != 'active':
-                        reason = 'transport_stopped'
+                        reason = ('lease_expired' if getattr(self.session, 'reason', None) == 'duration_expired'
+                                  else 'transport_stopped')
                         break
-                    if batch:
-                        last_audio = self.clock()
-                    if self.clock() - last_audio >= self.receive_idle_seconds:
+                    if self.clock() >= deadline:
+                        break
+                    state = self.assistant.status(self.phone_id).state
+                    if state in ('stopped', 'error') or mode == 'manual' and state == 'armed':
+                        reason = 'assistant_error' if state == 'error' else 'turn_complete'
+                        break
+                    now = self.clock()
+                    processing = state in ('thinking', 'speaking')
+                    # RTP polling still checks focus, socket failures and the
+                    # lease during a reply. Missing input is only meaningful
+                    # while capturing; resume with a fresh, bounded grace.
+                    if batch or processing or was_processing:
+                        last_audio = now
+                    was_processing = processing
+                    if not processing and now - last_audio >= self.receive_idle_seconds:
                         reason = 'receive_idle_timeout'
                         break
                     for pcm in batch:

@@ -221,9 +221,12 @@ def child_worker(descriptor, lease_fd, argv):
     wire.recvfrom, wire.sendto = recv, send
 
     class Media(runner.transport.UdpMedia):
-        def __init__(self, *args):
+        def __init__(self, *args, max_packets):
             require(args == (HOST, 24576, DEVICE, 24578, 24580), "unexpected_media_config")
-            super().__init__(*args)
+            require(type(max_packets) is int
+                    and max_packets == runner.transport.packet_budget(spec["duration"]),
+                    "unexpected_media_packet_budget")
+            super().__init__(*args, max_packets=max_packets)
             self.wire = wire
             owned["media"] = self
 
@@ -421,6 +424,7 @@ def child_worker(descriptor, lease_fd, argv):
     clean = state_is_clean(before) and stale and wire.output_after_stop == 0
     evidence = {
         "entrypoint_exit_code": code, "reason": (native.get("result") or {}).get("reason"),
+        "turns_completed": native.get("turns_completed"),
         "prepared_config_used": owned.get("prepared_config_used") is True,
         "prepared_snapshot_sha256": prepared["sha256"],
         "native_argv_sha256": prepared["native_argv_sha256"],
@@ -570,6 +574,7 @@ def wrapper_worker(descriptor):
         "exit_code": code, "native_success": native.get("success") is True,
         "native_cleanup_success": native.get("cleanup_success") is True,
         "native_turn_success": native.get("turn_success") is True,
+        "native_turns_completed": native.get("turns_completed"),
         "native_reason": native.get("reason"), "native_error": native.get("error"),
         "child_launches": len(children), "child_pid": children[0].pid if children else None,
         "wrapper_pid": os.getpid(), "child_exited": child_exited,
@@ -697,6 +702,9 @@ def assess(result):
         observed_clean = state_is_clean(child["state_before_rescue"])
         common = (
             child["cleanup_success"] is True and observed_clean and child["stale_stream_rejected"] is True
+            and type(child["turns_completed"]) is int
+            and type(wrapper["native_turns_completed"]) is int
+            and child["turns_completed"] == wrapper["native_turns_completed"]
             and child["rescue_cleanup_success"] is True and child["output_after_stop"] == 0
             and child["prepared_config_used"] is True and child["model_factory_calls"] == 1
             and child["prepared_snapshot_sha256"] == wrapper["prepared_snapshot_sha256"]
@@ -726,16 +734,23 @@ def assess(result):
                  and child["upload_matches_postwake_pcm"] is True and child["ha_audio_bytes"] > 0)
         if scenario == "complete":
             return bool(audio and wrapper["exit_code"] == child["entrypoint_exit_code"] == 0
-                        and wrapper["native_turn_success"] is True and child["reason"] == "turn_complete"
+                        and wrapper["native_success"] is True and wrapper["native_turn_success"] is True
+                        and child["turns_completed"] == 1 and child["reason"] == "turn_complete"
                         and child["output_packets"] == pipeline.REPLY_FRAMES and child["output_nonzero"] is True
                         and child["output_matches_tts_pcmu"] is True)
-        if wrapper["native_turn_success"] or child["output_packets"] != 0 \
-                or child["entrypoint_exit_code"] != 1 or wrapper["exit_code"] != 1:
+        # The wrapper still reports no completed conversation as exit 1.
+        # A clean child timeout/Stop is exit 0; it must not fabricate a turn.
+        if (wrapper["native_success"] or wrapper["native_turn_success"]
+                or child["turns_completed"] != 0 or child["output_packets"] != 0
+                or wrapper["exit_code"] != 1):
             return False
         if scenario == "ha-timeout":
-            return bool(audio and child["reason"] == "assistant_error"
+            return bool(audio and child["entrypoint_exit_code"] == 1
+                        and child["reason"] == "assistant_error"
                         and "turn_timeout" in child["assistant_errors"]
                         and not wrapper["external_cancel_sent"])
+        if child["entrypoint_exit_code"] != 0 or wrapper["journal_state"] != "stopped":
+            return False
         if scenario == "no-wake":
             if child["wake_triggers"] or child["ha_sessions"] or child["ha_audio_bytes"]:
                 return False
@@ -750,7 +765,7 @@ def assess(result):
                         and child["reason"] == "shutdown")
         return bool(wrapper["stop_requested"] and not wrapper["external_cancel_sent"]
                     and wrapper["stop_after_spawn_seconds"] >= result["duration_seconds"] - .15
-                    and child["reason"] in ("shutdown", "lease_expired", "transport_stopped"))
+                    and child["reason"] in ("shutdown", "lease_expired"))
     except (KeyError, TypeError, ValueError):
         return False
 

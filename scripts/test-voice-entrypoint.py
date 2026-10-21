@@ -105,9 +105,12 @@ def run_scenario(scenario, pcm8k, *, detector_factory=None, fixture=None,
     original_media = runner.transport.UdpMedia
 
     class Media(original_media):
-        def __init__(self, *args):
+        def __init__(self, *args, max_packets):
             require(args == (HOST, 24576, DEVICE, 24578, 24580), "unexpected_media_config")
-            super().__init__(*args)
+            require(type(max_packets) is int
+                    and max_packets == runner.transport.packet_budget(duration_seconds),
+                    "unexpected_media_packet_budget")
+            super().__init__(*args, max_packets=max_packets)
             self.wire = wire
             owned["media"] = self
 
@@ -407,6 +410,7 @@ def run_scenario(scenario, pcm8k, *, detector_factory=None, fixture=None,
     expected_output = runner.transport.encode_ulaw(reply_frame)
     output_matches = bool(wire.output_payloads) and all(value == expected_output for value in wire.output_payloads)
     result = native.get("result") or {}
+    turns_completed = native.get("turns_completed")
     detector_frames = detectors[0].frames if detectors else 0
     # The negative control must actually process the entire matched input.
     # Merely reaching its lease deadline (or seeing a few silent frames) is not
@@ -419,17 +423,20 @@ def run_scenario(scenario, pcm8k, *, detector_factory=None, fixture=None,
                           and evidence.get("built_voice_sha256") == evidence["config_sha256"]["voice"]
                           and evidence.get("loaded_transport_sha256") == evidence["config_sha256"]["transport"])
     common = (failure is None and cleanup and rescue_clean and config_matches
+              and type(turns_completed) is int
               and evidence["build_service_calls"] == evidence["model_factory_calls"] == 1
               and evidence["voice_load_calls"] == evidence["transport_load_calls"] == 1
               and evidence["controller_modes"] == ["wake"] and evidence["media_opened"] == 1
               and before["output_packets"] == len(wire.output_packets)
               and network["external_network_attempts"] == 0 and not native.get("error"))
     turn = bool(common and exit_code == 0 and result.get("reason") == "turn_complete"
+                and turns_completed == 1
                 and len(triggers) == 1 and upload_matches and output_matches and any(output_pcm)
                 and len(wire.output_packets) == pipeline.REPLY_FRAMES)
     success = turn if scenario == "complete" else bool(
-        common and exit_code == 1 and result.get("reason") in ("lease_expired", "transport_stopped")
-        and before["transport_reason"] == "lease_expired"
+        common and exit_code == 0 and result.get("reason") == "lease_expired"
+        and turns_completed == 0
+        and before["transport_reason"] in ("lease_expired", "duration_expired")
         and detector_frames >= minimum_silence_frames
         and result.get("input_frames", 0) >= minimum_silence_frames and len(wire.decoded) > 0
         and not triggers and not peers and not wire.output_packets
@@ -438,6 +445,7 @@ def run_scenario(scenario, pcm8k, *, detector_factory=None, fixture=None,
         **evidence, "scenario": scenario, "assertion_success": success, "turn_success": turn,
         "entrypoint_exit_code": exit_code, "entrypoint_error": failure or native.get("error"),
         "entrypoint_reason": result.get("reason"), "states": native.get("states", []),
+        "turns_completed": turns_completed,
         "detector_kind": "injected_test" if detector_factory is not None else "onnx",
         "actual_onnx": bool(detector_factory is None and detectors),
         "model_runtime": model_runtime, "loaded_config_matches_build": config_matches,

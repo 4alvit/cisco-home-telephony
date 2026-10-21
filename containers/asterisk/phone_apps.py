@@ -21,6 +21,15 @@ TOKEN_TTL = 90
 MAX_TOKENS_PER_PHONE = 24
 DAYS = ('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun')
 ALERT_STATES = frozenset(('starting', 'ringing', 'stopping', 'ended', 'unknown'))
+VOICE_PHASES = frozenset(('preparing', 'armed', 'listening', 'thinking', 'speaking', 'stopped', 'error'))
+VOICE_PHASE_REASONS = frozenset((
+    'model_warmup', 'wake_ready', 'new_session', 'turn_complete', 'user_stop',
+    'explicit_stop', 'display_stop', 'shutdown', 'lease_expired', 'session_finished',
+    'transport_stopped', 'receive_idle_timeout', 'voice_session_failed', 'turn_timeout',
+    'turn_failed', 'audio_backpressure', 'wake_inference_failed', 'playback_stop_failed',
+    'speech_start', 'end_of_speech', 'no_speech', 'utterance_limit',
+    'audio_not_received', 'turn_cancelled', 'duplicate_activation', 'call',
+    'start_failed', 'assistant_error'))
 
 
 class AppError(Exception):
@@ -211,13 +220,15 @@ class PhoneApps:
         value = result.get('voice')
         fields = {'schema_version', 'phone', 'line', 'session_id', 'state', 'active',
                   'remaining_seconds', 'stop_requested', 'stop_confirmed', 'error'}
+        optional = {'phase', 'phase_reason', 'turns_completed', 'mode', 'session_seconds'}
         states = {'idle', 'starting', 'running', 'stopping', 'stopped', 'cancelled',
                   'failed', 'recovery_required', 'external_owner'}
         errors = {'voice_state_unavailable', 'voice_owner_unavailable', 'voice_start_failed',
                   'voice_start_uncertain', 'voice_signal_failed', 'voice_session_failed',
                   'voice_stop_unconfirmed'}
-        require(isinstance(value, dict) and set(value) == fields,
+        require(isinstance(value, dict) and fields <= set(value) <= fields | optional,
                 'voice_response_invalid', 503)
+        value = dict(value)
         state, session, remaining = value['state'], value['session_id'], value['remaining_seconds']
         require(type(value['schema_version']) is int and value['schema_version'] == 1
                 and value['phone'] == phone_id
@@ -227,19 +238,43 @@ class PhoneApps:
                 and value['active'] == (state in ('starting', 'running', 'stopping'))
                 and ((session is None and state == 'idle') or
                      (isinstance(session, str) and re.fullmatch(r'[0-9a-f]{32}', session) and state != 'idle'))
-                and type(remaining) in (int, float) and 0 <= remaining <= 30 and math.isfinite(remaining)
+                and type(remaining) in (int, float) and 0 <= remaining <= 300 and math.isfinite(remaining)
                 and (value['error'] is None or isinstance(value['error'], str) and value['error'] in errors),
                 'voice_response_invalid', 503)
+        for field in optional & set(value):
+            item = value[field]
+            if field == 'phase':
+                valid = item is None or isinstance(item, str) and item in VOICE_PHASES
+            elif field == 'phase_reason':
+                item = item if isinstance(item, str) and item in VOICE_PHASE_REASONS else None
+                valid = True
+            elif field == 'turns_completed':
+                valid = type(item) is int and 0 <= item <= 10000
+            elif field == 'mode':
+                valid = isinstance(item, str) and item in ('manual', 'wake')
+            else:
+                valid = type(item) in (int, float) and 0 < item <= 300 and math.isfinite(item)
+            require(valid, 'voice_response_invalid', 503)
+            value[field] = item
         if operation == 'start':
             require(state != 'idle', 'voice_response_invalid', 503)
         if operation == 'stop':
             require(session == body.get('session_id'), 'voice_response_invalid', 503)
-        return {key: value[key] for key in fields}
+        return {key: value[key] for key in fields | (optional & set(value))}
+
+    def voice_budget(self, phone_id):
+        profile = next((profile for profile in getattr(self.gateway, '_voice_profiles', ())
+                        if profile.phone_id == phone_id), None)
+        duration = getattr(profile, 'duration', 30)
+        require(type(duration) in (int, float) and 0 < duration <= 300 and math.isfinite(duration),
+                'voice_response_invalid', 503)
+        return duration
 
     def voice_page(self, phone_id, line, value):
         root = ET.Element('CiscoIPPhoneText')
         child(root, 'Title', 'Voice Assistant')
-        child(root, 'Prompt', 'Bounded session; microphone up to 30s')
+        budget = value.get('session_seconds', self.voice_budget(phone_id))
+        child(root, 'Prompt', f'Microphone up to {budget:g}s; Stop ends session')
         # A reserved journal from another process is not a locally stoppable
         # session. Local recovery_required sessions still retain their Stop path.
         external_owner = (value['state'] == 'external_owner'
@@ -248,6 +283,10 @@ class PhoneApps:
                 + '\nRemaining: ' + str(value['remaining_seconds']) + ' seconds'
                 + '\nStop requested: ' + ('Yes' if value['stop_requested'] else 'No')
                 + '\nStop confirmed: ' + ('Yes' if value['stop_confirmed'] else 'No'))
+        if 'mode' in value:
+            text += '\nMode: ' + value['mode']
+        if 'turns_completed' in value:
+            text += '\nTurns completed: ' + str(value['turns_completed'])
         if value['session_id']:
             text += '\nSession: ' + value['session_id']
         if external_owner:
@@ -257,8 +296,22 @@ class PhoneApps:
                      " Do not restart until cleanup is confirmed.")
         elif value['error'] or value['state'] == 'recovery_required':
             text += '\nCleanup may be unconfirmed. Check the phone; do not restart blindly.'
+        elif value['stop_confirmed']:
+            text += '\nSession ended; cleanup confirmed.'
+        elif value['stop_requested'] or value['state'] == 'stopping':
+            text += '\nStop requested; waiting for cleanup confirmation.'
         elif value['active']:
-            text += '\nRunning is not a readiness signal. Use the live assistant screen.'
+            text += '\n' + {
+                'preparing': 'Preparing; wait before speaking.',
+                'armed': 'Wake listener ready; say the wake phrase.',
+                'listening': 'Listening; speak now.',
+                'thinking': 'Processing your request; please wait.',
+                'speaking': 'Playing the reply.',
+                'stopped': 'Session ended; waiting for cleanup confirmation.',
+                'error': 'Voice processing failed; check Stop confirmation.',
+            }.get(value.get('phase'), 'Running is not a readiness signal. Use the live assistant screen.')
+        if value.get('phase_reason'):
+            text += '\nPhase reason: ' + value['phase_reason']
         child(root, 'Text', text)
         self.softkey(root, 'Refresh', self.url(phone_id, '/voice', line=line), 1)
         if not external_owner and value['state'] in ('idle', 'stopped', 'cancelled', 'failed'):
@@ -360,7 +413,7 @@ class PhoneApps:
             require(self.voice_enabled(phone_id),
                     'voice_control_unavailable', 503)
             return self.issue(phone_id, line, 'voice', 'start', {},
-                              'Microphone <=30s; I am here; audio reserved')
+                              f'Microphone <={self.voice_budget(phone_id):g}s; I am here; audio reserved')
         if path == '/voice-stop':
             session = params.get('session', '')
             require(re.fullmatch(r'[0-9a-f]{32}', session), 'invalid_query')

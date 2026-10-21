@@ -8,10 +8,15 @@ import argparse
 import asyncio
 from dataclasses import asdict
 import json
+import math
+import os
 from pathlib import Path
+import secrets
 import signal
+import stat
 import sys
 import threading
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -22,11 +27,133 @@ from voice_assistant.config import build_service, load_config
 from voice_assistant.playback import FFmpegDecoder
 
 
+PROGRESS_PHASES = frozenset(('preparing', 'armed', 'listening', 'thinking', 'speaking', 'stopped', 'error'))
+PROGRESS_REASONS = frozenset(('model_warmup', 'wake_ready', 'turn_complete', 'new_session',
+    'user_stop', 'explicit_stop', 'display_stop', 'shutdown', 'duplicate_activation', 'call',
+    'audio_backpressure', 'wake_inference_failed', 'turn_timeout', 'turn_failed',
+    'playback_stop_failed', 'start_failed', 'lease_expired', 'transport_stopped',
+    'receive_idle_timeout', 'assistant_error', 'audio_not_received', 'no_speech',
+    'turn_cancelled', 'session_finished', 'voice_session_failed', 'speech_start',
+    'end_of_speech', 'utterance_limit'))
+
+
+class SessionProgress:
+    """Small private snapshots, never a transcript or an alternate stdout stream."""
+    def __init__(self, workspace, filename=None):
+        self.workspace = Path(workspace).resolve()
+        self.parts = None
+        self.phase, self.reason, self.turns_completed = 'preparing', None, 0
+        self.failed = False
+        self.failure_reason = None
+        if filename is not None:
+            path = Path(filename)
+            if '..' in path.parts:
+                raise ValueError('private_status_path_required')
+            if not path.is_absolute():
+                path = self.workspace / path
+            relative = path.relative_to(self.workspace / '.local')
+            if len(relative.parts) < 2:
+                raise ValueError('private_status_directory_required')
+            self.parts = ('.local', *relative.parts)
+        self.publish('preparing')
+
+    def publish(self, phase, reason=None):
+        if self.failed:
+            phase, reason = 'error', self.failure_reason
+        self.phase = phase if type(phase) is str and phase in PROGRESS_PHASES else 'error'
+        self.reason = reason if type(reason) is str and reason in PROGRESS_REASONS else None
+        if self.phase == 'error':
+            self.failed = True
+            self.failure_reason = self.reason
+        if self.parts is None:
+            return
+        value = {'schema_version': 1, 'phase': self.phase, 'reason': self.reason,
+                 'turns_completed': self.turns_completed, 'updated_at': time.time()}
+        directory = os.open(self.workspace, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        temporary = None
+        try:
+            # Open every component relative to the preceding directory descriptor;
+            # symlinks cannot redirect either traversal or atomic replacement.
+            for name in self.parts[:-1]:
+                next_directory = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                         dir_fd=directory)
+                os.close(directory)
+                directory = next_directory
+            info = os.fstat(directory)
+            if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+                raise ValueError('private_status_directory_required')
+            try:
+                info = os.stat(self.parts[-1], dir_fd=directory, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                        or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+                    raise ValueError('private_status_file_required')
+            name = '.progress-' + secrets.token_hex(16)
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o600, dir_fd=directory)
+            temporary = name
+            with os.fdopen(fd, 'w') as target:
+                os.fchmod(target.fileno(), 0o600)
+                json.dump(value, target, sort_keys=True)
+                target.write('\n')
+                target.flush()
+                os.fsync(target.fileno())
+            os.replace(temporary, self.parts[-1], src_dir_fd=directory, dst_dir_fd=directory)
+            temporary = None
+            os.fsync(directory)
+        finally:
+            try:
+                if temporary is not None:
+                    os.unlink(temporary, dir_fd=directory)
+            finally:
+                os.close(directory)
+
+    def completed_reply(self):
+        self.turns_completed += 1
+        self.publish(self.phase, self.reason)
+
+
+class ProgressPlayback:
+    """Count a reply only after playback returns, never when a turn is canceled."""
+    def __init__(self, playback, progress):
+        self.playback, self.progress = playback, progress
+
+    async def play(self, *args, **kwargs):
+        result = await self.playback.play(*args, **kwargs)
+        self.progress.completed_reply()
+        return result
+
+    async def stop(self, *args, **kwargs):
+        return await self.playback.stop(*args, **kwargs)
+
+
 async def run_session(args, config, private, phone, voice):
+    progress = SessionProgress(args.workspace, getattr(args, 'status_file', None))
+    try:
+        return await _run_session(args, config, private, phone, voice, progress)
+    except asyncio.CancelledError:
+        try:
+            progress.publish('error' if progress.failed else 'stopped',
+                             progress.failure_reason if progress.failed else 'shutdown')
+        except Exception:
+            pass
+        raise
+    except Exception:
+        try:
+            progress.publish('error')
+        except Exception:
+            pass
+        raise
+
+
+async def _run_session(args, config, private, phone, voice, progress):
     gateway = transport._gateway_module()
     observer = transport._GatewayObserver(gateway, private, phone)
     media = transport.UdpMedia(config['bind_ipv4'], config['bind_port'], phone['ipv4'],
-                               config['phone_rtp_port'], config.get('expected_source_port'))
+                               config['phone_rtp_port'], config.get('expected_source_port'),
+                               max_packets=transport.packet_budget(config['duration_seconds']))
     starts = [transport.tx_uri(media.bind_ip, media.bind_port),
               transport.rx_uri(media.bind_ip, media.phone_port, config.get('volume', 20))]
     watchdog = transport._Watchdog(phone, starts)
@@ -41,6 +168,7 @@ async def run_session(args, config, private, phone, voice):
     stopped = threading.Event()
     captions_stopped = threading.Event()
     loop = asyncio.get_running_loop()
+    progress_failed = False
 
     def request_stop(reason='explicit_stop'):
         captions_stopped.set()
@@ -48,7 +176,16 @@ async def run_session(args, config, private, phone, voice):
             controller.request_stop(reason)
 
     def on_event(event):
+        nonlocal progress_failed
         states.append(event.state)
+        if event.reason == 'new_session':
+            return
+        try:
+            phase = 'preparing' if event.reason == 'model_warmup' else event.state
+            progress.publish(phase, event.reason)
+        except Exception:
+            progress_failed = True
+            request_stop()
         if display and event.reason != 'new_session':
             if event.state in ('stopped', 'error'):
                 captions_stopped.set()
@@ -58,7 +195,9 @@ async def run_session(args, config, private, phone, voice):
                 label = 'Thinking' if event.reason == 'model_warmup' else labels[event.state]
                 message = ('Preparing wake detector. Please wait for Listening.'
                            if event.reason == 'model_warmup' else
-                           'Say your wake phrase.' if event.reason == 'wake_ready' else event.reason or '')
+                           'Wake ready. Say your wake phrase.' if event.reason == 'wake_ready' else
+                           'Listening for your request.' if event.state == 'listening' else
+                           progress.reason or '')
                 display.update_status(label, message)
             except Exception:
                 # A missing status display stops capture instead of leaving an
@@ -88,6 +227,7 @@ async def run_session(args, config, private, phone, voice):
                             on_reply=(on_reply if voice.get('display_reply_text') is True
                                       and args.display_port else None),
                             compressed_decoder=FFmpegDecoder(args.ffmpeg, max_seconds=30))
+    service.playback = ProgressPlayback(service.playback, progress)
     controller = PhoneVoiceController(session, service, phone['id'], duration=config['duration_seconds'],
                                       receive_idle_seconds=config.get('receive_idle_seconds', 3))
     error, result, report = None, None, {}
@@ -101,9 +241,10 @@ async def run_session(args, config, private, phone, voice):
             display = VoiceDisplayServer(config['bind_ipv4'], args.display_port,
                                          phone['id'], phone['ipv4'],
                                          focus=observer.status, on_stop=display_stop,
-                                         request_timeout=8)
+                                         request_timeout=8,
+                                         ttl_seconds=max(5, math.ceil(config['duration_seconds']) + 30))
             display.start()
-            ref = display.start_status('Thinking', 'Preparing a bounded voice session.')
+            ref = display.start_status('Thinking', 'Preparing voice session. Please wait for Listening.')
             display_ref = ref
             await asyncio.to_thread(gateway.execute, phone, ref.page_url, 2)
         for number in (signal.SIGINT, signal.SIGTERM):
@@ -155,9 +296,22 @@ async def run_session(args, config, private, phone, voice):
                 await asyncio.shield(cleanup_task)
             except asyncio.CancelledError:
                 cancelled = True
+        try:
+            # Shutdown emits its own stopped event; retain the actual terminal
+            # outcome after every cleanup step has finished.
+            terminal_error = error or cleanup_errors or progress_failed or progress.failed
+            progress.publish('error' if terminal_error else 'stopped',
+                             progress.failure_reason if progress.failed else
+                             'shutdown' if cancelled or cleanup_task.result() else
+                             getattr(result, 'reason', progress.reason))
+        except Exception:
+            cleanup_errors.append('status_cleanup_failed')
         if cleanup_task.result() or cancelled:
             raise asyncio.CancelledError
+    if progress.failed or progress_failed:
+        error = 'voice_session_failed'
     return {'error': error, 'result': asdict(result) if result else None, 'states': states,
+            'turns_completed': progress.turns_completed,
             'capture_observed': bool(media.receiver.counters['received']),
             'input': dict(media.receiver.counters), 'output_frames': sink.frames_sent,
             'recorded_audio': False, 'cleanup_errors': cleanup_errors, **report}
@@ -170,6 +324,7 @@ def main(argv=None):
     parser.add_argument('--workspace', default=str(ROOT))
     parser.add_argument('--ffmpeg', default='ffmpeg')
     parser.add_argument('--display-port', type=int)
+    parser.add_argument('--status-file', help='private progress JSON under workspace/.local in an owned 0700 directory')
     parser.add_argument('--run', action='store_true')
     parser.add_argument('--attended', action='store_true')
     parser.add_argument('--exclusive-media', action='store_true')
@@ -194,7 +349,8 @@ def main(argv=None):
                    result.get('watchdog_armed') is not True or
                    result.get('watchdog_finished') is not True or
                    result.get('watchdog_stop_errors') != 0 or
-                   result['result']['reason'] != 'turn_complete' or
+                   result['result']['reason'] not in ('turn_complete', 'explicit_stop', 'display_stop',
+                                                       'shutdown', 'lease_expired') or
                    not (result['result']['stop_confirmed'] or result.get('watchdog_stop_confirmed')))
     except Exception:
         print(json.dumps({'error': 'invalid_config_or_runtime_failure',

@@ -139,7 +139,8 @@ class GatewaySharedReservationTests(unittest.TestCase):
     def test_shutdown_waits_full_external_grace_for_control_only_wake(self):
         self.make_source_control_only()
         self.fixture.start(self.wake)
-        with mock.patch.object(gateway.time, "monotonic", side_effect=(0, 0, 144, 146)), \
+        grace = wake_fixture.control.EXTERNAL_OWNER_GRACE_SECONDS
+        with mock.patch.object(gateway.time, "monotonic", side_effect=(0, 0, grace - 1, grace + 1)), \
              mock.patch.object(gateway.time, "sleep") as sleep, \
              mock.patch.object(self.control, "reserve_shutdown", wraps=self.control.reserve_shutdown) as reserve:
             self.assertFalse(self.gateway.close_voice())
@@ -154,7 +155,8 @@ class GatewaySharedReservationTests(unittest.TestCase):
         fd = self.wake._acquire(self.wake.inputs.profile)
         try:
             self.assertEqual(list(self.fixture.state.glob("*.json")), [])
-            with mock.patch.object(gateway.time, "monotonic", side_effect=(0, 0, 144, 146)), \
+            grace = wake_fixture.control.EXTERNAL_OWNER_GRACE_SECONDS
+            with mock.patch.object(gateway.time, "monotonic", side_effect=(0, 0, grace - 1, grace + 1)), \
                  mock.patch.object(gateway.time, "sleep") as sleep:
                 self.assertFalse(self.gateway.close_voice())
             self.assertEqual(sleep.call_count, 2)
@@ -199,7 +201,8 @@ class GatewaySharedReservationTests(unittest.TestCase):
                 self.wake._acquire(target)
             checks.append(True)
 
-        with mock.patch.object(gateway.time, "monotonic", side_effect=(0, 0, 146)), \
+        grace = wake_fixture.control.EXTERNAL_OWNER_GRACE_SECONDS
+        with mock.patch.object(gateway.time, "monotonic", side_effect=(0, 0, grace + 1)), \
              mock.patch.object(gateway.time, "sleep", side_effect=during_wait):
             self.assertFalse(self.gateway.close_voice())
         self.assertEqual(checks, [True])
