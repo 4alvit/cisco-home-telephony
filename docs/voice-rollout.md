@@ -1,16 +1,25 @@
 # Stock-phone voice assistant: implementation and acceptance
 
 This implementation uses the **unmodified SIP45 firmware** on a Cisco 7945G.
-The phone supplies microphone/speaker RTP and renders a small XML interface;
-the local host runs the wake detector and Home Assistant connection. It is a
-finite, explicitly started prototype, not an unattended always-listening service.
-Use the [operator quickstart](voice-quickstart.md) for the updated phone-menu
-and CLI flow. The observations below retain their original scope and do not
-claim that the newer multi-turn revision is deployed or physically accepted.
+The phone supplies microphone and speaker audio; a local host runs wake
+detection and the Home Assistant connection. It supports explicitly started
+finite sessions and an optional **hands-free policy** that supervises successive
+bounded SIP speakerphone sessions. Hands-free is off by default and requires an
+explicit Enable. Its persistent permission does not provide uninterrupted
+capture: call setup, model preparation and renewal can leave gaps.
+
+Use the [operator quickstart](voice-quickstart.md) for the current controls and
+[the SIP transport guide](sip-voice-contingency.md) for hands-free prerequisites.
+Implementation capability, installed revision and physical acceptance are
+separate. The dated observations below retain their original transport and test
+scope; they do not by themselves establish acceptance of a newer release.
+
+The following diagram describes the original finite XML/RTP path. The hands-free
+policy and its acceptance record are described separately below.
 
 ![Stock-phone voice architecture and acceptance boundaries](diagrams/voice-rollout.svg)
 
-## What is implemented
+## Original finite XML/RTP implementation
 
 - A source-pinned G.711 transport with sequence/timestamp checks, bounded
   reordering, explicit stream ownership and a separate cleanup supervisor.
@@ -37,6 +46,62 @@ claim that the newer multi-turn revision is deployed or physically accepted.
 The layers have separate tests and clear contracts: [transport](voice-transport.md),
 [voice coordinator](local-voice-assistant.md), [display](voice-display.md),
 [firmware lab](firmware-lab.md) and [local STT](local-stt.md).
+
+## Beta 12: opt-in hands-free supervision — 21 October 2026
+
+Beta 12 adds explicit `cisco LINE voice enable` and `voice disable` controls,
+with status separating persistent intent from the active session's readiness.
+The compatible Home Assistant companion exposes an administrator-only
+hands-free service and separate read-only desired-state and voice-status
+entities. Updating a client or loading an eligible profile alone does not
+activate capture.
+
+![Hands-free intent, bounded sessions and cleanup](diagrams/hands-free-operator-flow.svg)
+
+Hands-free requires the SIP AudioSocket transport, ONNX wake mode,
+successful-turn rearming and an eligible bounded session duration. The gateway
+owns renewal. It stops its current session before the inner lease expires,
+confirms cleanup and obtains fresh idle observations before starting another.
+This preserves bounded sessions and prevents overlapping ownership; it does
+not promise seamless listening, barge-in or conversation memory across session
+IDs. Only positively observed ordinary-call preemption permits automatic
+resumption after the call and idle checks finish.
+
+Disable removes persistent intent before requesting current-session cleanup.
+Stopping the current supervised session also disables that intent; an old
+exact-session Stop cannot disable a newer generation. Unresolved ownership,
+cleanup or an unconfirmed ordinary-call dispatch can keep a fresh Enable
+refused. See [pending-call recovery](voice-control.md#unconfirmed-ordinary-calls).
+A clean gateway restart may retain enabled intent; an unresolved journal must
+fail closed.
+
+A readiness observation requires the same canonical phone and non-null session
+ID in hands-free and finite status, enabled intent, both states running, active
+media, null errors, no Stop flags, positive remaining time, and the
+`armed` / `wake_ready` phase. Neither "enabled" nor "running" alone meets that
+criterion. Readiness is also not proof that anyone heard a reply, and absence
+of readiness is not proof that the microphone is off.
+
+### Release and acceptance record
+
+The hands-free implementation is pinned to
+[source c8f7e83](https://github.com/4alvit/cisco-home-telephony/commit/c8f7e83ff4c2b443a7ac16b03f24895c9fbc0bec).
+The paired Home Assistant component is version **0.6.0b1**,
+[source 692f357](https://github.com/ha-homelab/asterisk-telephony/commit/692f357aa15d9ec1a1bbfd41753ac362cb49da60).
+The integrated application suite ran 1,773 tests with four skips; the companion
+completed all 92 tests on each of Home Assistant 2026.10.0 and 2026.10.2.
+
+The [Beta 12 release record](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.12)
+is the canonical record for the downloadable image, checksums, installed-pilot
+results and remaining physical limitations. Its build, installation and
+acoustic results are separate claims; source tests alone do not establish a
+working microphone, intelligible reply or acceptable range across a room.
+Do not transfer the older XML/RTP measurements below to the SIP implementation.
+
+Keep device identities, room labels, addresses, credentials, private wake
+phrases and raw observations outside the public repository. Publish only the
+release pins and appropriately scoped results. Software counters and read-only
+status observations cannot replace a physical acoustic check.
 
 ## Physical evidence, 19 October 2026
 
@@ -109,10 +174,16 @@ revision, record two distinct spoken requests and audible replies within one
 wake session, return to readiness, measured reply latency, explicit Stop and
 ordinary-call preemption. Verify the selected speech backend and voice at
 deployment; a friendly pipeline name or an earlier Baya test is insufficient.
-No cross-Start conversation memory, barge-in, permanent listening or ten-phone
-acoustic acceptance is claimed.
+No cross-session conversation memory, barge-in, uninterrupted capture or
+ten-phone acoustic acceptance is claimed. The Beta 12 record separately
+tracks supervised renewal and its physical checks.
 
 ## Install and prepare
+
+The instructions in this section describe the standalone finite XML/RTP
+path. For supervised SIP hands-free operation, use the
+[current quickstart](voice-quickstart.md#enable-hands-free-mode) and
+[gateway setup](voice-control.md#hands-free-policy-and-status).
 
 Use the [voice CLI installation guide](voice-cli-install.md) for a local
 `cisco-voice` wrapper. For a one-shot cluster execution, use the
@@ -171,23 +242,26 @@ Deploy these files together; independently upgrading one layer is unsupported.
 
 ## Stop, ownership and failure behavior
 
-Use the live screen's **Stop**, or Ctrl-C when using the foreground
-`cisco-voice` runner. For a gateway-owned session, `cisco LINE voice stop`
-reads the current owned session and sends an exact-ID Stop; explicit
-`--session-id` targeting remains available. Exiting the ordinary `cisco`
-client does not stop that remote session.
-The controller also stops for either line becoming busy, a stale/failed AMI
-observation, input inactivity, a provider error or lease expiry. A fresh
-explicit command is required after Stop. No restart policy or reconnect path
-may silently re-enable listening.
+For the standalone finite XML/RTP path, use the live screen's **Stop**, or
+Ctrl-C in the foreground `cisco-voice` runner. For a gateway-owned session,
+`cisco LINE voice stop` reads and stops the exact current session;
+`--session-id` can target a previously recorded session. Exiting the ordinary
+`cisco` client does not stop a remote session. A finite session also ends on
+call preemption, failed observation, inactivity, provider failure or lease
+expiry. Finite mode does not automatically start another session. Optional
+hands-free mode follows the separate Beta 12 renewal rules; use
+`cisco LINE voice disable` to remove its persistent intent, including between
+sessions, and then verify owned-session cleanup.
 
-The supervisor preserves cleanup after a controller crash and distinguishes a
-definite device rejection from an ambiguous transport result. It cannot issue
-Stop if the whole host is dead or the network is disconnected. The phone has
-no demonstrated hardware-enforced RTP lease. A successful HTTP response is
-also not a physical audio measurement. Do not promote this pilot to unattended
-microphone operation without testing those failure cases and an independent
-recovery mechanism.
+The original XML/RTP cleanup supervisor distinguishes a definite device
+rejection from an ambiguous transport result. It cannot issue Stop while
+its host is dead or the network is disconnected, and no hardware-enforced
+RTP lease has been demonstrated on the phone. The SIP transport adds an
+independent PBX channel deadline; that does not establish a hardware lease
+for the separate XML/RTP path. An HTTP acknowledgement, channel deadline or
+process exit is not a physical audio measurement. Test the selected
+transport's failure and recovery cases before relying on it for persistent
+operation, and retain unresolved cleanup as an error.
 
 The display's own TTL bounds server memory and stale URLs. It does not prove
 that the phone has dismissed its last rendered page or stopped audio. Stop
