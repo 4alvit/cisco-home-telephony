@@ -112,6 +112,34 @@ phrases and raw observations outside the public repository. Publish only the
 release pins and appropriately scoped results. Software counters and read-only
 status observations cannot replace a physical acoustic check.
 
+## Startup admission hardening — 21 October 2026
+
+A newly allocated PJSIP channel can appear in an AMI snapshot before its
+pre-dial handler has finished installing the native timeout. The earlier
+startup path checked that proof immediately, so a transient `Down` channel
+could fail admission and leave a retained recovery reservation.
+
+Startup now waits for `Ringing` or `Up` within the existing setup deadline
+before checking the session identity and native timeout. Foreign-call checks,
+one Originate, the original absolute deadline, explicit Stop and all admission
+proofs remain in force. Missing or invalid proof on an actionable channel
+still refuses the call; this change does not automatically clear an earlier
+unconfirmed cleanup record.
+
+A deterministic regression reproduced the early-check failure on the previous
+source and passes with the readiness gate. Additional regressions cover an
+unready channel that times out, Stop during preparation, a competing call and
+invalid actionable-channel proof. A retained pilot startup failure was
+consistent with this race, but its original exception was unavailable; the
+historical cause is not conclusively established. For installed-image identity
+and completed acceptance, consult the [Beta 14 release record](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.14)
+when available; this source change alone does not establish installation.
+
+For everyday operation, use the [daily-use guide](voice-daily-use.md). An
+existing recovery reservation still requires an operator to establish that
+the previous owner and its resources have stopped. Restarting or deleting
+journals is not a recovery procedure.
+
 ## Physical evidence, 19 October 2026
 
 One configured 7945G passed an initial stock-RTP test:

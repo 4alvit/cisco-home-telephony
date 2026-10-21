@@ -29,6 +29,55 @@ helper = module('intercom_fixture_helpers', Path(__file__).with_name('test-alert
 need, await_condition = helper.need, helper.await_condition
 
 
+def refusal_diagnostics(error):
+    """Keep fixed error categories, never exception messages or SIP contents."""
+    reasons = {'intercom_not_connected_check_status', 'intercom_call_changed',
+               'intercom_call_ended', 'intercom_setup_timeout', 'ami_action_rejected',
+               'ami_timeout', 'ami_disconnected', 'invalid_ami_response', 'bad_ami_banner'}
+    types = {'Refused', 'RuntimeError', 'OSError', 'TimeoutError', 'ConnectionError',
+             'ConnectionResetError', 'BrokenPipeError', 'KeyError', 'ValueError'}
+    actions = {'Login', 'Originate', 'PJSIPShowEndpoints', 'CoreShowChannels', 'Hangup'}
+    ami_errors = {'authentication_failed', 'login_in_use', 'permission_denied',
+                  'no_such_channel', 'no_endpoints', 'endpoints_unavailable',
+                  'unknown_action', 'other'}
+    result = []
+    # The gateway wraps the original startup exception exactly once.
+    for item in (error, error.__context__):
+        if item is None:
+            continue
+        name, reason = type(item).__name__, getattr(item, 'reason', None)
+        row = {'type': name if name in types else 'other',
+               'reason': reason if isinstance(reason, str) and reason in reasons else 'other'}
+        for key, allowed in (('ami_action', actions), ('ami_error', ami_errors)):
+            value = getattr(item, key, None)
+            if value is not None:
+                row[key] = value if isinstance(value, str) and value in allowed else 'other'
+        result.append(row)
+    return result
+
+
+def redirect_evidence(peers, previous, presses):
+    result = {}
+    for phone_id, peer in peers.items():
+        with peer.lock:
+            calls = [call for key, call in peer.calls.items() if key not in previous[phone_id]]
+            result[phone_id] = {
+                'speaker_presses': presses.count(phone_id), 'new_dialogs': len(calls),
+                'redirects_sent': sum(bool(call.get('redirect_sent')) for call in calls),
+                'answered_dialogs': sum(call.get('answer') is not None for call in calls),
+            }
+    return result
+
+
+def require_redirect_evidence(evidence, redirect_phone):
+    target = evidence[redirect_phone]
+    need(target['new_dialogs'] > 0 and target['redirects_sent'] > 0,
+         'redirect scenario ended before intended peer sent 302 for a new INVITE')
+    if redirect_phone == '203':
+        need(evidence['201']['answered_dialogs'] == 1,
+             'destination redirect requires one newly answered source dialog')
+
+
 class ObserverAMI:
     """Never hold an observer login open across a gateway operation."""
     def __init__(self, secret):
@@ -91,11 +140,15 @@ class Phone(helper.Phone):
         super().close()
 
     def reply(self, message, address, status, body='', contact=None):
-        if status == '180 Ringing' and self.redirect:
+        redirect = status == '180 Ringing' and self.redirect
+        if redirect:
             self.calls[helper.headers(message)['call-id']]['reject'] = helper.time.monotonic()
             status = '302 Moved Temporarily'
             contact = 'sip:redirect-trap@' + self.address + ':5091'
-        return super().reply(message, address, status, body, contact)
+        result = super().reply(message, address, status, body, contact)
+        if redirect:
+            self.calls[helper.headers(message)['call-id']]['redirect_sent'] = True
+        return result
 
     def answer(self):
         with self.lock:
@@ -188,23 +241,40 @@ def test_inside():
             await_condition(endpoints_ready, 5, 'endpoints idle before ' + mode)
             presses.clear()
             peers[redirect_phone].redirect = True
-            before_invites = {phone_id: len(peer.calls) for phone_id, peer in peers.items()}
+            before_invites = {}
+            for phone_id, peer in peers.items():
+                with peer.lock:
+                    before_invites[phone_id] = set(peer.calls)
+            refusal = None
             try:
-                server.mutate('201', 'intercom', {'line': '202', 'number': '204', 'idempotency_key': 'fixture-' + mode})
-            except gateway.Refused as exc:
-                need(exc.reason == 'intercom_not_connected_check_status', 'unexpected redirect result')
-            else:
-                raise RuntimeError('redirected intercom reported success')
-            await_condition(lambda: not ami.channels(), 5, mode + ' cleanup')
-            need(all(peer.forward_packets == 0 for peer in peers.values()), 'intercom followed a SIP redirect')
-            if redirect_phone == '201':
-                need(len(peers['203'].calls) == before_invites['203'], 'source redirect reached destination')
-            else:
-                need(presses.count('201') == 1, 'source Speaker not answered exactly once')
-            need(all(presses.count(phone_id) <= 1 for phone_id in peers), 'Speaker repeated during refusal')
-            need(all(peer.error is None for peer in peers.values()), 'synthetic SIP worker failed')
-            result['cases'][mode] = {'followed': False, 'channels_after': 0}
-            peers[redirect_phone].redirect = False
+                try:
+                    server.mutate('201', 'intercom', {'line': '202', 'number': '204', 'idempotency_key': 'fixture-' + mode})
+                except gateway.Refused as exc:
+                    refusal = exc
+                    need(exc.reason == 'intercom_not_connected_check_status', 'unexpected redirect result')
+                else:
+                    raise RuntimeError('redirected intercom reported success')
+                await_condition(lambda: not ami.channels(), 5, mode + ' cleanup')
+                evidence = redirect_evidence(peers, before_invites, presses)
+                require_redirect_evidence(evidence, redirect_phone)
+                need(all(peer.forward_packets == 0 for peer in peers.values()), 'intercom followed a SIP redirect')
+                if redirect_phone == '201':
+                    need(evidence['203']['new_dialogs'] == 0, 'source redirect reached destination')
+                else:
+                    need(presses.count('201') == 1, 'source Speaker not answered exactly once')
+                need(all(presses.count(phone_id) <= 1 for phone_id in peers), 'Speaker repeated during refusal')
+                need(all(peer.error is None for peer in peers.values()), 'synthetic SIP worker failed')
+                result['cases'][mode] = {'followed': False, 'channels_after': 0, 'peers': evidence}
+            except Exception as error:
+                try:
+                    error.intercom_diagnostics = {'case': mode,
+                        'errors': refusal_diagnostics(refusal or error),
+                        'peers': redirect_evidence(peers, before_invites, presses)}
+                except Exception:
+                    pass  # Diagnostics must never replace the original failure.
+                raise
+            finally:
+                peers[redirect_phone].redirect = False
         result['status'] = 'PASS'
         return result
     finally:
@@ -295,6 +365,13 @@ def main():
             result = json.loads(completed.stdout)
             need(result.get('status') == 'PASS', 'isolated intercom regression did not pass')
             print(json.dumps(result, sort_keys=True))
+        except Exception:
+            if container:
+                try:
+                    helper.failure_logs(docker, container, label='intercom')
+                except Exception:
+                    pass  # Keep the original error and always reach cleanup.
+            raise
         finally:
             if container:
                 subprocess.run(docker + ['rm', '-f', container], capture_output=True, check=True, timeout=15)
@@ -304,6 +381,7 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as error:
-        diagnostics = {key: getattr(error, key) for key in ('ami_action', 'ami_error') if hasattr(error, key)}
+        diagnostics = {key: getattr(error, key) for key in ('ami_action', 'ami_error', 'intercom_diagnostics')
+                       if hasattr(error, key)}
         print(json.dumps({'status': 'FAIL', 'error': str(error), **diagnostics}), flush=True)
         raise SystemExit(1)

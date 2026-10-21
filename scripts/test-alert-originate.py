@@ -215,15 +215,15 @@ def endpoint_ready(ami, phone):
                and frame.get('DeviceState') == 'Not in use' for frame in endpoints)
 
 
-def failure_logs(docker, container):
+def failure_logs(docker, container, label='alert'):
     """Keep bounded diagnostics from this fixture, without masking its failure."""
     try:
         result = subprocess.run(docker + ['logs', '--tail', '80', container],
                                 capture_output=True, text=True, timeout=5)
-        print('Isolated alert fixture log tail:\n' + (result.stdout + result.stderr)[-12000:],
+        print(f'Isolated {label} fixture log tail:\n' + (result.stdout + result.stderr)[-12000:],
               file=sys.stderr)
     except (OSError, subprocess.SubprocessError):
-        print('Isolated alert fixture logs unavailable.', file=sys.stderr)
+        print(f'Isolated {label} fixture logs unavailable.', file=sys.stderr)
 
 
 def test_inside():

@@ -1,6 +1,7 @@
 # Cisco 7945G: home telephony with Asterisk and k3s
 
-For voice sessions and opt-in hands-free operation, start with the [phone and CLI voice quickstart](docs/voice-quickstart.md).
+For an already configured hands-free phone, use the [daily-use guide](docs/voice-daily-use.md).
+For setup and opt-in voice operation, start with the [phone and CLI voice quickstart](docs/voice-quickstart.md).
 
 A practical guide to converting **Cisco 7945G** phones to SIP and running them
 with Asterisk on k3s, integrated with Home Assistant.
