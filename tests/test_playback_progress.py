@@ -60,6 +60,10 @@ class PlaybackProgressTests(unittest.IsolatedAsyncioTestCase):
         self.progress = runner.SessionProgress(self.workspace, self.path)
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
+        # Host scheduling delays are not application stderr or playback failures.
+        # Keep asyncio debug and leak checks; disable only its timing diagnostic.
+        self.stack.enter_context(mock.patch.object(
+            asyncio.get_running_loop(), "slow_callback_duration", float("inf")))
         # IsolatedAsyncioTestCase has already created its loop/self-pipe.
         for target, name in ((socket, "socket"), (socket, "create_connection"),
                              (subprocess, "Popen")):
