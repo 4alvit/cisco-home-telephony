@@ -172,6 +172,12 @@ class AmiPort:
                 if own:
                     item = own[0]
                     self.seen_phone = True
+                    # An allocated channel can precede the pre-dial handler
+                    # that arms its native timeout. Wait for an answerable
+                    # state before requiring that handler's admission proof.
+                    if item.get('ChannelStateDesc') not in ('Ringing', 'Up'):
+                        self.stop_event.wait(.1)
+                        continue
                     self._verify_channel(ami, item)
                     if item.get('ChannelStateDesc') == 'Ringing' and not self.speaker_attempted:
                         self._guard()

@@ -34,6 +34,9 @@ class Gateway:
         self.actions, self.keys = [], []
         self.ringing = self.up = self.hungup = False
         self.foreign = self.wrong_token = self.missing_deadline = False
+        self.startup_states, self.variable_states = [], []
+        self.observed_state = None
+        self.deadline_value = '298'
         self.root = 'cisco-voice-' + SESSION.hex
 
     def own_channels(self, phone, channels):
@@ -53,8 +56,11 @@ class Gateway:
             def snapshot(self):
                 channels = []
                 if (parent.ringing or parent.up) and not parent.hungup:
+                    state = (parent.startup_states.pop(0) if parent.startup_states else
+                             'Up' if parent.up else 'Ringing')
+                    parent.observed_state = state
                     channels.append({'Channel': 'PJSIP/201-0001', 'Uniqueid': '99.1',
-                                     'Linkedid': parent.root, 'ChannelStateDesc': 'Up' if parent.up else 'Ringing'})
+                                     'Linkedid': parent.root, 'ChannelStateDesc': state})
                 if parent.foreign:
                     channels.append({'Channel': 'PJSIP/202-0002', 'Uniqueid': '99.2',
                                      'Linkedid': 'foreign', 'ChannelStateDesc': 'Ringing'})
@@ -71,8 +77,11 @@ class Gateway:
                         parent.hungup = True
                 if name == 'Getvar':
                     var = headers['Variable']
+                    parent.variable_states.append(parent.observed_state)
                     values = {'VOICE_SIP_SESSION': 'wrong' if parent.wrong_token else SESSION.hex,
-                              'VOICE_SIP_END': '1299', 'TIMEOUT(absolute)': '0' if parent.missing_deadline else '298'}
+                              'VOICE_SIP_END': '1299',
+                              'TIMEOUT(absolute)': ('0' if parent.missing_deadline or
+                                  parent.observed_state == 'Down' else parent.deadline_value)}
                     return [{'Value': '0' if var.startswith('DB(') else values[var]}]
                 return [{'Response': 'Success'}]
         return FakeAMI()
@@ -111,6 +120,74 @@ class AmiTests(unittest.IsolatedAsyncioTestCase):
                 await port.start()
             self.assertEqual(gateway.keys, [])
             await port.hangup_and_confirm()
+
+    async def test_allocated_channel_waits_for_predial_timeout_before_answering(self):
+        gateway, port = self.make()
+        gateway.startup_states = ['Down']
+        grant = await port.start()
+        self.assertEqual(grant.channel.uniqueid, '99.1')
+        self.assertTrue(port.deadline_armed)
+        self.assertNotIn('Down', gateway.variable_states)
+        self.assertEqual(gateway.keys, ['Key:Speaker'])
+        self.assertEqual(sum(name == 'Originate' for name, _ in gateway.actions), 1)
+        self.assertTrue(await port.hangup_and_confirm(grant))
+
+    async def test_allocated_channel_still_requires_valid_identity_and_timeout_when_ringing(self):
+        for option, value, reason in (
+                ('wrong_token', True, 'call_admission_mismatch'),
+                ('missing_deadline', True, 'pbx_deadline_unverified'),
+                ('deadline_value', '400', 'pbx_deadline_unverified')):
+            with self.subTest(option=option):
+                gateway, port = self.make()
+                gateway.startup_states = ['Down']
+                setattr(gateway, option, value)
+                with patch.object(port.stop_event, 'wait', return_value=False):
+                    with self.assertRaisesRegex(BoundaryError, reason):
+                        await port.start()
+                self.assertNotIn('Down', gateway.variable_states)
+                self.assertIn('Ringing', gateway.variable_states)
+                self.assertFalse(port.deadline_armed)
+                self.assertEqual(gateway.keys, [])
+                await port.hangup_and_confirm()
+
+    async def test_allocated_channel_wait_is_bounded_by_setup_deadline(self):
+        gateway, port = self.make()
+        gateway.startup_states = ['Down'] * 20
+        now = [100.0]
+        port.clock = lambda: now[0]
+        def advance(_seconds):
+            now[0] += 1
+            return False
+        with patch.object(port.stop_event, 'wait', side_effect=advance):
+            with self.assertRaisesRegex(BoundaryError, 'call_setup_timeout'):
+                await port.start()
+        self.assertEqual(now[0], 110)
+        self.assertEqual(gateway.variable_states, [])
+        self.assertEqual(gateway.keys, [])
+        self.assertTrue(await port.hangup_and_confirm())
+
+    async def test_stop_during_allocated_channel_wait_prevents_answer(self):
+        gateway, port = self.make()
+        gateway.startup_states = ['Down']
+        with patch.object(port.stop_event, 'wait', side_effect=lambda _: port.stop_event.set()):
+            with self.assertRaisesRegex(BoundaryError, 'explicit_stop'):
+                await port.start()
+        self.assertEqual(gateway.variable_states, [])
+        self.assertEqual(gateway.keys, [])
+        self.assertTrue(await port.hangup_and_confirm())
+
+    async def test_other_phone_call_during_allocated_wait_still_prevents_answer(self):
+        gateway, port = self.make()
+        gateway.startup_states = ['Down']
+        with patch.object(port.stop_event, 'wait',
+                          side_effect=lambda _: setattr(gateway, 'foreign', True)):
+            with self.assertRaisesRegex(BoundaryError, 'call_changed'):
+                await port.start()
+        self.assertEqual(gateway.variable_states, [])
+        self.assertEqual(gateway.keys, [])
+        self.assertTrue(await port.hangup_and_confirm())
+        self.assertEqual([value['Channel'] for name, value in gateway.actions
+                          if name == 'Hangup'], ['99.1'])
 
     async def test_other_phone_line_prevents_originate(self):
         gateway, port = self.make()
