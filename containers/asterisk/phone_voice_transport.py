@@ -366,6 +366,7 @@ class VoiceSession:
         self.deadline = None
         self.stop_errors = []
         self.stop_confirmed = False
+        self._start_attempted = False
         self._directions = set()
 
     def _status(self):
@@ -404,6 +405,7 @@ class VoiceSession:
                 self._guard()
                 direction = uri.split(':', 1)[0]
                 self._directions.add(direction)
+                self._start_attempted = True
                 try:
                     self.execute(uri)
                 except CommandRejected:
@@ -494,6 +496,19 @@ class VoiceSession:
                     remote_errors.append(uri.split(':')[0] + '_stop_failed')
             self.stop_errors.extend(remote_errors)
             self.stop_confirmed = not remote_errors
+
+    @_locked
+    def no_media_started(self, watchdog):
+        """Seal a never-started lifecycle; empty counters are not ownership proof.
+
+        A queued start cannot run after this check: stopped is terminal and
+        start() uses the same lock. Even a failed watchdog arm is excluded.
+        """
+        return (self.state == 'stopped' and self._start_attempted is False
+                and self.media.sock is None and self.stop_errors == []
+                and self.stop_confirmed is False
+                and getattr(watchdog, '_arm_attempted', None) is False
+                and getattr(watchdog, 'process', object()) is None)
 
     def __enter__(self):
         return self.start()
@@ -688,10 +703,12 @@ class _Watchdog:
         self.phone = phone
         self.allowed_starts = tuple(allowed_starts)
         self.process = self.pipe = None
+        self._arm_attempted = False
         self.report = {}
         self.request_id = 0
 
     def arm(self, deadline):
+        self._arm_attempted = True
         context = multiprocessing.get_context('spawn')
         self.pipe, child = context.Pipe()
         self.process = context.Process(target=_watchdog_main,

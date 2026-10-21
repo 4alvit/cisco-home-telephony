@@ -33,6 +33,8 @@ from voice_assistant.service import AssistantService, ServiceSettings
 
 
 REAL_DISPLAY_SERVER = phone_voice_display.VoiceDisplayServer
+REAL_VOICE_SESSION = subject.transport.VoiceSession
+REAL_WATCHDOG = subject.transport._Watchdog
 
 
 class FakeSession:
@@ -296,6 +298,106 @@ class SessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assert_observer_stopped()
         self.watchdog.finish.assert_called_once()
         self.display.close.assert_called_once()
+
+    async def real_prestart_failure(self, mutate=None, identity=True, failure='display'):
+        self.media.sock = None
+        self.media.close = mock.Mock()
+        self.media.open = mock.Mock(side_effect=OSError('synthetic bind failure'))
+        watchdog = REAL_WATCHDOG(self.phone, ())
+        session = REAL_VOICE_SESSION(watchdog.execute, self.media, self.observer.status,
+                                    enable_microphone=True, media_reserved=True, arm=watchdog.arm)
+        self.gateway.execute.side_effect = RuntimeError('synthetic display rejection')
+        if failure == 'observer-not-ready':
+            self.observer.ready = mock.Mock(wait=mock.Mock(return_value=False))
+        elif failure == 'observer-status':
+            self.observer.status.return_value = 'unknown'
+        elif failure == 'bind':
+            self.gateway.execute.side_effect = None
+        if mutate:
+            mutate(session, watchdog)
+        env = ({'CISCO_VOICE_SESSION_ID': 'a' * 32,
+                'CISCO_VOICE_LAUNCH_CHALLENGE': 'b' * 64} if identity else {})
+        if isinstance(identity, dict):
+            env = identity
+        with mock.patch.object(subject.transport, '_Watchdog', return_value=watchdog), \
+                mock.patch.object(subject.transport, 'VoiceSession', return_value=session), \
+                mock.patch.dict(os.environ, env, clear=True):
+            result, error = await self.invoke()
+        self.assertIsNone(error)
+        self.assertEqual(session.state, 'stopped')
+        self.assertFalse(session.stop_confirmed)
+        return result
+
+    async def test_real_never_armed_failure_emits_bound_proof_only_after_cleanup(self):
+        result = await self.real_prestart_failure()
+        self.assertEqual(result['error'], 'voice_session_failed')
+        self.assertIsNone(result['result'])
+        self.assertEqual(result['cleanup_errors'], [])
+        self.assertIs(result['watchdog_armed'], False)
+        self.assertEqual(result['cleanup_proof'], {
+            'version': 1, 'kind': 'safe_no_media_started', 'session_id': 'a' * 32,
+            'challenge': 'b' * 64, 'rtp_start_attempted': False,
+            'watchdog_arm_attempted': False, 'watchdog_process_created': False,
+            'cleanup_complete': True,
+        })
+        self.assertIn('assistant.close', self.events)
+        self.display.close.assert_called_once()
+        self.media.close.assert_called_once()
+
+    async def test_observer_and_prearm_bind_failures_emit_only_never_started_proof(self):
+        for failure in ('observer-not-ready', 'observer-status', 'bind'):
+            with self.subTest(failure=failure):
+                self.observer.ready = threading.Event()
+                self.observer.ready.set()
+                self.observer.status.return_value = 'idle'
+                result = await self.real_prestart_failure(failure=failure)
+                self.assertEqual(result['cleanup_proof']['kind'], 'safe_no_media_started')
+                self.assertIsNone(result['result'])
+                self.assertIs(result['watchdog_armed'], False)
+                self.assertEqual(self.media.open.call_count, int(failure == 'bind'))
+
+    async def test_never_started_failure_without_launch_binding_has_no_proof(self):
+        valid = {'CISCO_VOICE_SESSION_ID': 'a' * 32, 'CISCO_VOICE_LAUNCH_CHALLENGE': 'b' * 64}
+        bindings = [{}, {'CISCO_VOICE_SESSION_ID': 'a' * 32},
+                    {'CISCO_VOICE_LAUNCH_CHALLENGE': 'b' * 64},
+                    dict(valid, CISCO_VOICE_SESSION_ID='a' * 31),
+                    dict(valid, CISCO_VOICE_SESSION_ID='A' * 32),
+                    dict(valid, CISCO_VOICE_LAUNCH_CHALLENGE='b' * 63),
+                    dict(valid, CISCO_VOICE_LAUNCH_CHALLENGE='not-a-launch-challenge')]
+        for binding in bindings:
+            with self.subTest(binding=binding):
+                result = await self.real_prestart_failure(identity=binding)
+                self.assertNotIn('cleanup_proof', result)
+
+    async def test_cleanup_failure_and_attempted_start_do_not_emit_proof(self):
+        for field in ('start', 'arm', 'close', 'assistant-close', 'output', 'capture'):
+            with self.subTest(field=field):
+                def mutate(session, watchdog):
+                    if field == 'start':
+                        session._start_attempted = True
+                    elif field == 'arm':
+                        watchdog._arm_attempted = True
+                    elif field == 'close':
+                        self.media.close.side_effect = OSError('synthetic close failure')
+                    elif field == 'assistant-close':
+                        self.service.close_error = RuntimeError('synthetic assistant close failure')
+                    elif field == 'output':
+                        def builder(config, root, sink, **kwargs):
+                            sink.frames_sent = 1
+                            return self.service
+                        self.build_service.side_effect = builder
+                    else:
+                        self.media.receiver.counters['received'] = 1
+                try:
+                    result = await self.real_prestart_failure(mutate)
+                    self.assertNotIn('cleanup_proof', result)
+                    if field == 'output':
+                        self.assertEqual(result['output_frames'], 1)
+                finally:
+                    self.media.close.side_effect = None
+                    self.service.close_error = None
+                    self.build_service.side_effect = None
+                    self.media.receiver.counters.clear()
 
     async def test_display_update_failure_stops_capture_without_restart(self):
         self.display.update_status.side_effect = RuntimeError("synthetic-display-failure")
@@ -740,6 +842,12 @@ class SessionCLIExitTests(unittest.TestCase):
                 result["result"]["stop_confirmed"] = confirmed_by == "main"
                 result["watchdog_stop_confirmed"] = confirmed_by == "supervisor"
                 self.assertEqual(self.invoke(result), 0)
+
+    def test_safe_never_started_cleanup_still_exits_nonzero(self):
+        result = {'error': 'voice_session_failed', 'result': None, 'cleanup_errors': [],
+                  'watchdog_armed': False, 'turns_completed': 0,
+                  'cleanup_proof': {'kind': 'safe_no_media_started'}}
+        self.assertEqual(self.invoke(result), 1)
 
     def test_clean_explicit_stop_or_lease_expiry_is_not_a_runtime_failure(self):
         for reason in ('explicit_stop', 'display_stop', 'shutdown', 'lease_expired'):

@@ -364,6 +364,44 @@ class ReservationTests(unittest.TestCase):
         self.assertTrue(result["cleanup_success"])
         self.assertFalse(result["turn_success"])
 
+    def test_validated_never_started_cleanup_releases_but_command_stays_failed(self):
+        from test_phone_voice_control import no_media_report
+        wake = self.manager()
+        started = self.start(wake)
+        value = no_media_report(started['session_id'],
+                                self.launches[-1][2]['CISCO_VOICE_LAUNCH_CHALLENGE'])
+        self.children[-1].code, self.children[-1].raw = 1, json.dumps(value).encode()
+        wake.tick()
+        result = wake.result_summary('202')
+        self.assertTrue(result['cleanup_success'])
+        self.assertFalse(result['turn_success'])
+        self.assertFalse(result['success'])
+        self.assertEqual(result['reason'], 'start_failed')
+        self.assertEqual(result['turns_completed'], 0)
+        self.assertEqual(result['voice']['state'], 'failed')
+        self.assertFalse(result['voice']['stop_confirmed'])
+        self.assertNotIn(value['cleanup_proof']['challenge'], json.dumps(result))
+        with mock.patch.object(runner, 'load_inputs', return_value=wake.inputs), \
+                mock.patch.object(runner, 'run', return_value=result), \
+                contextlib.redirect_stdout(io.StringIO()):
+            code = runner.main(['--workspace', str(self.root), '--state-directory', str(self.state),
+                                '--transport-config', '.local/transport.json',
+                                '--voice-config', '.local/voice.json', '--attempt-id', 'test-no-media',
+                                '--run', '--attended', '--exclusive-media', '--enable-microphone'])
+        self.assertEqual(code, 1)
+
+    def test_unbound_never_started_claim_cannot_make_wrapper_cleanup_successful(self):
+        from test_phone_voice_control import no_media_report
+        wake = self.manager()
+        started = self.start(wake)
+        value = no_media_report(started['session_id'], '0' * 64)
+        self.children[-1].code, self.children[-1].raw = 1, json.dumps(value).encode()
+        wake.tick()
+        result = wake.result_summary('202')
+        self.assertFalse(result['cleanup_success'])
+        self.assertFalse(result['turn_success'])
+        self.assertEqual(result['voice']['state'], 'recovery_required')
+
     def test_completed_rearming_turns_survive_clean_stop_or_lease_expiry(self):
         self.voice["service"]["rearm_after_turn"] = True
         self.write(self.local / "voice.json", self.voice)

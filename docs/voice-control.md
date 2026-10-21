@@ -362,7 +362,20 @@ evidence. A nonzero exit code can follow an explicit user Stop; it is not by
 itself evidence that Stop failed. Conversely, process exit alone does not prove
 that the phone accepted Stop.
 
-Missing or unconfirmed evidence leaves persistent `recovery_required` state.
+An early startup failure can release ownership without a Stop acknowledgement
+only when the trusted runner proves that it attempted neither watchdog arming
+nor RTP Start and completed local cleanup. The controller checks the complete
+failed child's report against its private launch challenge, exact session and
+current reservation before writing the terminal journal and releasing the lock.
+That outcome remains `failed`, with `phase: "error"`,
+`phase_reason: "start_failed"` and `stop_confirmed: false`. The challenge binds
+the report to one launch; it does not authenticate an untrusted Python executable
+or imported code. Saved diagnostics cannot authorize this release.
+
+Missing, contradictory or unconfirmed evidence leaves persistent
+`recovery_required` state. A watchdog arm attempt, any RTP Start attempt, a
+signal, forced termination or incomplete child output excludes the early-failure
+release path.
 There is no automatic retry or automatic restart into capture. A new Start must
 not replace an active, stopping or unresolved session. State survives separate
 requests and controller restarts so a restart cannot silently forget an

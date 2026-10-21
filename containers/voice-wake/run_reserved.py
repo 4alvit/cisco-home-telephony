@@ -248,8 +248,10 @@ class ReservedWakeControl(control.VoiceControl):
         except (ValueError, TypeError, KeyError):
             pass
         super()._finish(session, raw)
-        cleanup = (session.stop_confirmed and session.lease_fd < 0
+        cleanup = (session.cleanup_verified and session.lease_fd < 0
                    and session.state in ("stopped", "failed"))
+        if cleanup and not session.stop_confirmed:
+            reason = "start_failed"
         # A rearming session normally ends on Stop or its original deadline.
         # Clean shutdown alone is not evidence that any reply completed.
         replied = (reason == "turn_complete" or turns > 0 and reason in

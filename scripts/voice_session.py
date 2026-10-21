@@ -11,6 +11,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import secrets
 import signal
 import stat
@@ -130,9 +131,16 @@ class ProgressPlayback:
 
 
 async def run_session(args, config, private, phone, voice):
+    # Correlation with the owning supervisor, not authentication of untrusted
+    # code. The fixed runner and its imports remain part of the trusted runtime.
+    identity = (os.environ.get('CISCO_VOICE_SESSION_ID', ''),
+                os.environ.get('CISCO_VOICE_LAUNCH_CHALLENGE', ''))
+    if not (re.fullmatch(r'[0-9a-f]{32}', identity[0])
+            and re.fullmatch(r'[0-9a-f]{64}', identity[1])):
+        identity = None
     progress = SessionProgress(args.workspace, getattr(args, 'status_file', None))
     try:
-        return await _run_session(args, config, private, phone, voice, progress)
+        return await _run_session(args, config, private, phone, voice, progress, identity)
     except asyncio.CancelledError:
         try:
             progress.publish('error' if progress.failed else 'stopped',
@@ -148,7 +156,7 @@ async def run_session(args, config, private, phone, voice):
         raise
 
 
-async def _run_session(args, config, private, phone, voice, progress):
+async def _run_session(args, config, private, phone, voice, progress, identity=None):
     gateway = transport._gateway_module()
     observer = transport._GatewayObserver(gateway, private, phone)
     media = transport.UdpMedia(config['bind_ipv4'], config['bind_port'], phone['ipv4'],
@@ -310,11 +318,25 @@ async def _run_session(args, config, private, phone, voice, progress):
             raise asyncio.CancelledError
     if progress.failed or progress_failed:
         error = 'voice_session_failed'
+    proof = {}
+    if (identity is not None and error == 'voice_session_failed' and result is None
+            and not cleanup_errors and report == {'watchdog_armed': False}
+            and progress.turns_completed == 0 and sink.frames_sent == 0
+            and not media.receiver.counters
+            and session.no_media_started(watchdog)):
+        # Emitted only after all cleanup has returned. This never fabricates a
+        # remote Stop acknowledgment or a successful conversation.
+        proof['cleanup_proof'] = {
+            'version': 1, 'kind': 'safe_no_media_started',
+            'session_id': identity[0], 'challenge': identity[1],
+            'rtp_start_attempted': False, 'watchdog_arm_attempted': False,
+            'watchdog_process_created': False, 'cleanup_complete': True,
+        }
     return {'error': error, 'result': asdict(result) if result else None, 'states': states,
             'turns_completed': progress.turns_completed,
             'capture_observed': bool(media.receiver.counters['received']),
             'input': dict(media.receiver.counters), 'output_frames': sink.frames_sent,
-            'recorded_audio': False, 'cleanup_errors': cleanup_errors, **report}
+            'recorded_audio': False, 'cleanup_errors': cleanup_errors, **report, **proof}
 
 
 def main(argv=None):
