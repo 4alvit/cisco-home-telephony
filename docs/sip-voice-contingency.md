@@ -117,6 +117,17 @@ The session lasts at most 300 seconds including setup. Replies do not extend
 it, and an inactive phone cannot hear the wake phrase through this prototype.
 Do not schedule repeated Starts to turn it into always-on listening.
 
+With the paced-idle update installed, an admitted SIP session sends PCM silence
+when no reply audio is waiting. Silence and speech share the same serialized
+writer and pacing; this is not a second audio stream or an audible ready cue.
+The sender remains subject to Stop, call preemption and the original deadline.
+It neither extends the session nor proves that a wake phrase was detected.
+
+Idle frames are transport maintenance. They do not increment `turns_completed`
+or `completed_pcm_bytes`; outgoing frame counts alone cannot establish a
+spoken reply. Install the matching gateway runtime to get this behavior; a
+CLI-only update does not add the sender.
+
 For a status-only playback check after installing the
 [playback diagnostics update](voice-control.md#playback-diagnostics):
 
@@ -171,6 +182,13 @@ two wake/reply/rearm turns through the actual coordinator, exact-call focus,
 lease expiry, repeated cancellation, inherited-lock checks and the manager's
 transport-specific completion contract. Provider responses in these tests are
 synthetic; they do not prove real STT, Baya audio or room acoustics.
+
+Keep installation, model checks and physical conversation results separate.
+Matching source hashes and a successful model positive control on the target
+host do not test speech pickup through the phone. A sustained idle call or
+clean Stop/preemption likewise does not establish an audible answer. Require
+the full wake/question/reply/rearm sequence on the installed revision before
+claiming conversational or across-room readiness.
 
 A separate isolated Asterisk 22.11.0 test used a fresh `--network none` container
 with no published ports. It verified a synthetic G.722 callee, AudioSocket UUID

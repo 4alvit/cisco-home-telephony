@@ -151,6 +151,11 @@ audio, audible sound, the actual TTS backend or that Baya synthesized the reply.
 Listen to confirm the result. Home Assistant needs no update for this optional
 CLI diagnostic.
 
+With the SIP paced-idle update installed, silent maintenance frames keep the
+outgoing media stream active while no reply is waiting. They are excluded
+from `turns_completed` and `completed_pcm_bytes`. Their presence is not a
+spoken reply, a ready cue, or an extension of the session deadline.
+
 ## Speech setup and common problems
 
 Before the first session, run [pipeline preflight](voice-pipeline-preflight.md)
