@@ -444,6 +444,7 @@ class HAClient:
         sender = receiver = None
         started = ended = intent_done = tts_done = False
         downstream_started = False
+        recognized_text_seen = False
         text = transcript = ""
         tts_url = mime_type = None
         continue_conversation = False
@@ -488,10 +489,10 @@ class HAClient:
                 data = event.get("data") or {}
                 if not isinstance(data, dict):
                     raise AssistError("invalid-event-data")
-                if kind in ("intent-start", "intent-end", "tts-start", "tts-end"):
+                if kind in ("intent-start", "intent-progress", "intent-end", "tts-start", "tts-end"):
                     downstream_started = True
                 if kind == "error":
-                    if (started and not downstream_started and transcript == ""
+                    if (started and not downstream_started and not recognized_text_seen
                             and data.get("code") == "stt-no-text-recognized"):
                         # This typed outcome leaves run() only after workers
                         # have stopped and the request's websocket has closed.
@@ -510,6 +511,8 @@ class HAClient:
                 elif kind in ("stt-vad-end", "stt-end"):
                     if kind == "stt-end":
                         transcript = (data.get("stt_output") or {}).get("text", "")
+                        # A later empty event cannot erase earlier recognition.
+                        recognized_text_seen = recognized_text_seen or transcript != ""
                     if sender is not None:
                         sender.cancel()
                         await asyncio.gather(sender, return_exceptions=True)

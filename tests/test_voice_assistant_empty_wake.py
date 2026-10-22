@@ -437,3 +437,32 @@ class EmptyWakeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.playback.plays, [])
                 self.assertEqual(self.replies, [])
                 await service.close()
+
+    async def test_ha_recognized_text_or_intent_progress_fences_empty_stt(self):
+        sequences = {
+            "recognized_text_then_empty": [
+                ("stt-end", {"stt_output": {"text": "synthetic recognized input"}}),
+                ("stt-end", {"stt_output": {"text": ""}}),
+            ],
+            "intent_progress": [("intent-progress", {})],
+        }
+        for name, sequence in sequences.items():
+            with self.subTest(sequence=name):
+                service = self.make(stt_error=True)
+                await self.started()
+                socket = self.sockets[0]
+                for kind, data in sequence:
+                    socket._event(kind, data)
+                socket._event("error", {"code": "stt-no-text-recognized"})
+                socket._event("run-end")
+                await self.idle()
+                self.assertTrue(socket.closed)
+                self.assertEqual(service.status("alpha").state, "error")
+                self.assertEqual(service.status("alpha").reason, "turn_failed")
+                self.assertIsNone(service._sessions["alpha"].stream_id)
+                self.assertIsNone(service._sessions["alpha"].conversation_id)
+                self.assertEqual(self.playback.plays, [])
+                self.assertEqual(self.replies, [])
+                self.assertNotIn("speaking", [event.state for event in self.events])
+                self.assertEqual([event.state for event in self.events].count("armed"), 1)
+                await service.close()
