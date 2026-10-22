@@ -402,7 +402,8 @@ def event_fresh(event_at, now, age):
 
 def event_title(label, event_at):
     suffix = datetime.fromtimestamp(event_at, timezone.utc).strftime(' | Event %m-%d %H:%M:%SZ')
-    return label[:48 - len(suffix)] + suffix
+    # CiscoIPPhoneDisplayableType limits Title to 32 characters.
+    return label[:32 - len(suffix)] + suffix
 
 
 def dispatch(config, camera_key, event_id, event_at, *, dry_run=False, http=None):
