@@ -566,6 +566,13 @@ Recover in this order:
 
    This request does not start media. A second transport error leaves the
    outcome unresolved; it is not an idle status.
+
+   For an uncertain Enable or Disable, inspect `hands_free.enabled`, its state
+   and error as well as finite-session status. A null session ID does not mean
+   automatic starts are disabled. If you intend to stop automatic listening,
+   use `cisco LINE voice disable` with the same private connection and read
+   status again, even between sessions. Confirm disabled intent and any tracked
+   session's cleanup separately. Do not send a new Enable to test connectivity.
 3. If your session is still present, use its exact `session_id` for an intended
    Stop and read status again. If ownership is unclear or another operator
    owns the session, coordinate with that owner before acting.

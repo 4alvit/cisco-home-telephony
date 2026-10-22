@@ -58,15 +58,26 @@ python3 --version
 git --version
 mkdir -p "$HOME/src"
 cd "$HOME/src"
-git clone https://github.com/4alvit/cisco-home-telephony.git
-cd cisco-home-telephony
-python3 scripts/cisco.py --help
+git clone --branch v0.1.0-beta.15 --single-branch \
+  https://github.com/4alvit/cisco-home-telephony.git cisco-home-telephony-beta15
+cd cisco-home-telephony-beta15
+git rev-parse HEAD
 ```
 
-If you already have a checkout, use that directory instead of cloning over it.
+This example selects [Beta 15](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.15).
+Confirm that the printed commit is
+`7f4b589d9a2863a6dfd0bf205267ce16b9ff0fe2` before continuing. For another
+release, use its recorded full source commit and matching server image; the
+latest default branch is not a release pin.
+
+For an existing checkout, inspect `git status` and preserve uncommitted work
+before changing revisions. Use a clean checkout at the selected release's
+commit, or clone into a new directory as above. Do not reset or clean an
+existing tree or replace private configuration to follow these instructions.
 Install a command symlink as your normal user:
 
 ```bash
+python3 scripts/cisco.py --help
 mkdir -p "$HOME/.local/bin"
 ln -s "$PWD/scripts/cisco.py" "$HOME/.local/bin/cisco"
 export PATH="$HOME/.local/bin:$PATH"
