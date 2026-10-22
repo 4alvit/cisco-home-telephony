@@ -11,7 +11,7 @@ import time
 from typing import Any, AsyncIterator, Callable, Protocol
 
 from .audio import UtteranceEndpoint
-from .ha import AssistError, EmptyWakeTurn, validate_wake_word_phrase
+from .ha import AssistError, EmptySTTTurn, EmptyWakeTurn, validate_wake_word_phrase
 
 
 FRAME_BYTES = 640  # 20 ms, signed little-endian int16, mono, 16 kHz
@@ -477,6 +477,7 @@ class AssistantService:
         completed = False
         duplicate = False
         empty = False
+        empty_stt = False
         cancelled = False
         try:
             # Capture may expire before this task's first instruction. There is
@@ -492,6 +493,12 @@ class AssistantService:
         except EmptyWakeTurn as error:
             empty = error is item.empty_abort and not result_received
             if not empty:
+                item.error = "turn_failed"
+        except EmptySTTTurn:
+            empty_stt = (not result_received and item.revision == revision
+                         and item.stream_id == stream_id and item.wake_detection
+                         and self.settings.rearm_after_turn)
+            if not empty_stt:
                 item.error = "turn_failed"
         except AssistError as error:
             # Only HA's exact typed rejection is a benign competing wake. Never
@@ -535,6 +542,9 @@ class AssistantService:
             elif (empty and item.revision == revision and item.stream_id is None
                   and item.wake_detection and self.settings.rearm_after_turn):
                 item.stream_id = stream_id
+                self._emit_armed(phone_id)
+            elif (empty_stt and item.revision == revision and item.stream_id == stream_id
+                  and item.wake_detection and self.settings.rearm_after_turn):
                 self._emit_armed(phone_id)
             elif ((completed or duplicate) and item.stream_id == stream_id and item.wake_detection
                   and self.settings.rearm_after_turn):
