@@ -291,6 +291,14 @@ def select_phones(inventory, destinations, now):
         alert = phone.get('alert')
         require('alert' in phone and (alert is None or isinstance(alert, dict)
                 and isinstance(alert.get('state'), str)), 'invalid_inventory')
+        if 'motion_image' in phone:
+            guard = phone['motion_image']
+            require(isinstance(guard, dict) and set(guard) == {'eligible', 'reason'}
+                    and type(guard['eligible']) is bool
+                    and (guard['reason'] is None if guard['eligible'] else
+                         isinstance(guard['reason'], str)
+                         and re.fullmatch(r'[a-z_]{1,64}', guard['reason'])),
+                    'invalid_inventory')
         rows[phone['id']] = phone
     requested = list(rows) if destinations == ['*'] else destinations
     require(all(x in mapping for x in requested), 'destination_not_in_inventory')
@@ -299,8 +307,10 @@ def select_phones(inventory, destinations, now):
     selected, skipped = [], []
     for phone_id in ids:
         phone = rows[phone_id]
+        guard = phone.get('motion_image')
         reason = ('offline' if not phone['online'] else
-                  'voice_configured' if 'voice' in phone['capabilities'] else
+                  guard['reason'] if guard is not None and not guard['eligible'] else
+                  'voice_configured' if guard is None and 'voice' in phone['capabilities'] else
                   'dnd' if phone['dnd'] or phone['dnd_pending'] else
                   'busy' if phone['channels'] else
                   'alert' if phone['alert'] is not None and phone['alert']['state'] != 'ended' else
@@ -421,6 +431,7 @@ def dispatch(config, camera_key, event_id, event_at, *, dry_run=False, http=None
             http = http or HTTP()
             inventory = http.json(config['gateway'], '/v1/phones')
             phones, skipped = select_phones(inventory, config['destinations'], time.time())
+            guarded_phones = {row['id'] for row in inventory['phones'] if 'motion_image' in row}
             result['skipped'].extend(skipped)
             if not phones:
                 return result
@@ -444,8 +455,11 @@ def dispatch(config, camera_key, event_id, event_at, *, dry_run=False, http=None
                 # before dispatch, not once for the whole batch. The server still
                 # owns the final voice reservation/AMI/call admission checks.
                 try:
-                    eligible, skipped = select_phones(
-                        http.json(config['gateway'], '/v1/phones'), [phone], time.time())
+                    current = http.json(config['gateway'], '/v1/phones')
+                    eligible, skipped = select_phones(current, [phone], time.time())
+                    if eligible and phone in guarded_phones and not any(
+                            row['id'] == phone and 'motion_image' in row for row in current['phones']):
+                        eligible, skipped = [], [{'phone': phone, 'reason': 'motion_guard_unavailable'}]
                 except Failure as exc:
                     if exc.reason != 'destination_not_in_inventory':
                         raise
@@ -467,7 +481,11 @@ def dispatch(config, camera_key, event_id, event_at, *, dry_run=False, http=None
                         'idempotency_key': 'motion-' + hashlib.sha256((event + phone).encode()).hexdigest()}
                 try:
                     inflight = phone
-                    response = http.json(config['gateway'], '/v1/phones/' + phone + '/image', body=body)
+                    # A new action makes a gateway downgrade fail closed. An old
+                    # server must never silently ignore a voice-safety flag.
+                    row = next(row for row in current['phones'] if row['id'] == phone)
+                    action = 'motion_image' if 'motion_image' in row else 'image'
+                    response = http.json(config['gateway'], '/v1/phones/' + phone + '/' + action, body=body)
                     require(response.get('status') == 'accepted', 'invalid_response')
                     result['accepted'].append(phone)
                 except Failure as exc:

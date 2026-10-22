@@ -635,6 +635,36 @@ class Gateway:
                     raise Refused(reason, error.status) from None
             yield
 
+    @contextmanager
+    def reserve_motion_image(self, phone):
+        """Reserve passive display I/O without preempting any voice session."""
+        with ExitStack() as reservations:
+            if self.hands_free is not None:
+                try:
+                    reservations.enter_context(
+                        self.hands_free.reserve_idle_notification(phone['id']))
+                except self._voice_module.ControlError as error:
+                    raise Refused(error.reason, error.status) from None
+            else:
+                require(not any(p.phone_id == phone['id'] for p in self._voice_profiles),
+                        'voice_state_unavailable', 503)
+            reservations.enter_context(self.reserve_phone_controls(phone))
+            yield
+
+    def motion_image_admission(self, phone):
+        """Voice admission only; ordinary call/DND/online checks remain separate."""
+        try:
+            with self.reserve_motion_image(phone):
+                return {'eligible': True, 'reason': None}
+        except Refused as error:
+            reason = error.reason if error.reason in {
+                'hands_free_enabled', 'voice_phone_busy', 'voice_recovery_required',
+                'voice_state_unavailable', 'hands_free_owner_unavailable',
+                'hands_free_state_unavailable', 'voice_control_closed'} else 'voice_state_unavailable'
+            return {'eligible': False, 'reason': reason}
+        except Exception:
+            return {'eligible': False, 'reason': 'voice_state_unavailable'}
+
     def close_voice(self, *, uncertain=False):
         if self.voice is None:
             return True
@@ -779,6 +809,7 @@ class Gateway:
                     'phones': [
                 {'id': phone['id'], 'lines': phone['lines'], 'room': phone.get('room'),
                  **self.preference(phone['id']),
+                 'motion_image': self.motion_image_admission(phone),
                  'dnd_pending': phone['id'] in self.dnd_pending,
                  'alert': self.latest_alert(phone['id']),
                  'online': all(endpoints.get(line) not in (None, 'Unavailable', 'Invalid') for line in phone['lines']),
@@ -973,11 +1004,16 @@ class Gateway:
 
     def mutate(self, phone_id, action, body):
         require(phone_id in self.phones, 'unknown_phone', 404)
-        require(action in ('dial', 'intercom', 'answer', 'hangup', 'speaker', 'message', 'image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop'),
+        require(action in ('dial', 'intercom', 'answer', 'hangup', 'speaker', 'message', 'image', 'motion_image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop'),
                 'unknown_action', 404)
         require(isinstance(body, dict), 'json_object_required', 400)
+        if action == 'motion_image':
+            body = dict(body)
+            body.setdefault('idle_close_seconds', 45)
+            require(type(body['idle_close_seconds']) is int and body['idle_close_seconds'] == 45,
+                    'bad_idle_close_seconds', 400)
         if 'idle_close_seconds' in body:
-            require(action == 'image', 'idle_close_image_only', 400)
+            require(action in ('image', 'motion_image'), 'idle_close_image_only', 400)
             require(type(body['idle_close_seconds']) is int
                     and 10 <= body['idle_close_seconds'] <= 120,
                     'bad_idle_close_seconds', 400)
@@ -1009,6 +1045,9 @@ class Gateway:
     def _mutate(self, phone, action, body):
         line = body.get('line', phone['id'])
         require(line in phone['lines'], 'line_does_not_belong_to_phone', 400)
+        if action == 'motion_image':
+            with self.reserve_motion_image(phone):
+                return self._mutate_reserved(phone, action, body, line)
         # Ordinary calls first retire only a supervised leg, then retain the
         # existing physical reservation and fresh call checks. Finite sessions
         # keep their existing behavior. Intercom suspends both endpoints itself.
@@ -1056,9 +1095,16 @@ class Gateway:
             require(all(endpoints.get(endpoint) not in (None, 'Unavailable', 'Invalid') for endpoint in phone['lines']),
                     'phone_unavailable', 503)
             owned = own_channels(phone, channels)
-            if action in ('message', 'image'):
+            if action in ('message', 'image', 'motion_image'):
                 require(not owned, 'phone_busy')
-                self.notify(phone, action, body)
+                if action == 'motion_image':
+                    require(all(endpoints.get(endpoint) == 'Not in use' for endpoint in phone['lines']),
+                            'phone_busy')
+                    require(not self.preference(phone['id'])['dnd'] and phone['id'] not in self.dnd_pending,
+                            'do_not_disturb')
+                    require(not any(row['phone'] == phone['id'] and row['state'] != 'ended'
+                                    for row in self.alerts()), 'alert_already_active')
+                self.notify(phone, 'image' if action == 'motion_image' else action, body)
                 return {'resource_ttl_seconds': 120}
             if action in ('dial', 'ring', 'alert'):
                 require(not owned and all(endpoints.get(endpoint) == 'Not in use' for endpoint in phone['lines']), 'phone_busy')
