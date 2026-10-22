@@ -462,6 +462,8 @@ def dispatch(config, camera_key, event_id, event_at, *, dry_run=False, http=None
                     continue
                 body = {'line': phone, 'title': event_title(config['cameras'][camera_key]['label'], event_at),
                         'image_base64': encoded,
+                        # Native application idle time, shorter than our >=60s cooldown.
+                        'idle_close_seconds': 45,
                         'idempotency_key': 'motion-' + hashlib.sha256((event + phone).encode()).hexdigest()}
                 try:
                     inflight = phone

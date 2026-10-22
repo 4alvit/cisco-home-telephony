@@ -952,6 +952,12 @@ class Gateway:
                 raise Refused('invalid_image', 400) from None
             image_url = self.resource(phone, output.getvalue(), 'image/png')
             root = ET.Element('CiscoIPPhoneImageFile')
+            if 'idle_close_seconds' in body:
+                # Native user-idle closing is scoped to this unique application.
+                app_id = 'image_' + secrets.token_hex(16)
+                root.set('appId', app_id)
+                root.set('onAppFocusGained',
+                         f'App:Close:1:{body["idle_close_seconds"]}:{app_id}')
             ET.SubElement(root, 'Title').text = title
             ET.SubElement(root, 'Prompt').text = 'Press Exit to return'
             ET.SubElement(root, 'LocationX').text = '-1'
@@ -970,6 +976,11 @@ class Gateway:
         require(action in ('dial', 'intercom', 'answer', 'hangup', 'speaker', 'message', 'image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop'),
                 'unknown_action', 404)
         require(isinstance(body, dict), 'json_object_required', 400)
+        if 'idle_close_seconds' in body:
+            require(action == 'image', 'idle_close_image_only', 400)
+            require(type(body['idle_close_seconds']) is int
+                    and 10 <= body['idle_close_seconds'] <= 120,
+                    'bad_idle_close_seconds', 400)
         key = body.get('idempotency_key')
         require(isinstance(key, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{8,128}', key), 'idempotency_key_required', 400)
         digest = hashlib.sha256(json.dumps([phone_id, action, body], sort_keys=True).encode()).hexdigest()

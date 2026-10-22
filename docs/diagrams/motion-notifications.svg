@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1030" role="img" aria-labelledby="title desc">
 <title id="title">Motion snapshots from Home Assistant to idle Cisco phones</title>
-<desc id="desc">The original Home Assistant motion notification goes to iPhone and Apple Watch first. A local event starts a separate automation, which selects configured online idle physical phones without a gateway voice profile, fetches the first complete JPEG from that same notification camera, and uses the existing authenticated gateway to display one PNG. Busy phones and all voice-configured phones are skipped, including idle gaps between voice sessions. This version does not stream video or change calls.</desc>
+<desc id="desc">The original Home Assistant motion notification goes to iPhone and Apple Watch first. A local event starts a separate automation, which selects configured online idle physical phones without a gateway voice profile, fetches the first complete JPEG from that same notification camera, and uses the authenticated gateway to display one PNG. A unique application ID requests native closing after 45 seconds of application idle time, freeing the screen for the next eligible event. Interaction can delay or cancel closing. Updates have a minimum 60-second cooldown; events during cooldown are dropped. Busy phones and all voice-configured phones are skipped. This version does not stream video or change calls.</desc>
 <defs>
  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#80dcd0"/></marker>
  <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#b5a5ff"/></marker>
@@ -41,12 +41,12 @@
  <rect x="980" y="799" width="400" height="163" rx="18" fill="#1c443d" stroke="#88ddab" stroke-width="2"/>
  <text x="1005" y="842" font-size="25" font-weight="700" fill="#f4f8fc">Cisco 7945G: one still</text>
  <text x="1005" y="877" font-size="20" fill="#c8eed6">298 × 156 Services image area</text>
- <text x="1005" y="910" font-size="20" fill="#c8eed6">Press Exit to dismiss</text>
+ <text x="1005" y="910" font-size="20" fill="#c8eed6">Close after 45s native idle, or Exit</text>
  <text x="1005" y="939" font-size="18" fill="#c8eed6">API acceptance ≠ verified screen rendering</text>
  <rect x="60" y="799" width="860" height="163" rx="18" fill="#182e47" stroke="#5b7492" stroke-width="1.5"/>
- <text x="85" y="842" font-size="24" font-weight="700" fill="#f4f8fc">First version: a still, not a video player</text>
- <text x="85" y="879" font-size="20" fill="#c3d2e5">All voice-configured phones are skipped, including idle gaps between calls.</text>
- <text x="85" y="912" font-size="20" fill="#c3d2e5">A 120-second resource lifetime does not erase pixels already displayed.</text>
+ <text x="85" y="842" font-size="24" font-weight="700" fill="#f4f8fc">Old image closes; next eligible event opens a fresh still</text>
+ <text x="85" y="879" font-size="20" fill="#c3d2e5">At least 60 seconds between updates; events during cooldown are dropped.</text>
+ <text x="85" y="912" font-size="20" fill="#c3d2e5">Interaction can delay dismissal. URL expiry alone does not clear the screen.</text>
  <text x="85" y="941" font-size="18" fill="#c3d2e5">Private configuration and tokens · no call, speaker or microphone action</text>
  <text x="60" y="1004" font-size="18" fill="#9eb2c9">Source design and acceptance guidance. Deployment and physical-screen results must be recorded separately.</text>
 </g>

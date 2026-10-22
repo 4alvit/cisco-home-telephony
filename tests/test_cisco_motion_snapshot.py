@@ -1,4 +1,5 @@
 """Offline motion dispatch contracts: synthetic JPEG, fake HA/PBX, local HTTP only."""
+import base64
 import copy
 import importlib.util
 import io
@@ -51,6 +52,7 @@ class FakeHTTP:
         self.reads = 0
         self.on_read = None
         self.on_post = None
+        self.frame = JPEG
 
     def json(self, target, path, *, body=None):
         if body is None:
@@ -68,7 +70,8 @@ class FakeHTTP:
         return {'status': 'accepted'}
 
     def open(self, target, path, **kwargs):
-        value = Response(b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + JPEG + b'\r\n--frame' + JPEG, chunk=3)
+        value = Response(b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + self.frame
+                         + b'\r\n--frame' + self.frame, chunk=3)
         self.streams.append(value)
         return value
 
@@ -123,6 +126,7 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(len(http.posts), 2)
         self.assertIn(' | Event ', http.posts[0][1]['title'])
         self.assertLessEqual(len(http.posts[0][1]['title']), 32)
+        self.assertEqual(http.posts[0][1]['idle_close_seconds'], 45)
         self.assertFalse(result['display_verified'])
 
     def test_event_title_fits_cisco_schema_and_preserves_complete_utc_event_time(self):
@@ -176,6 +180,52 @@ class DispatchTests(unittest.TestCase):
         result = motion.dispatch(self.config, 'side', 'event_0002', time.time(), http=http)
         self.assertEqual({x['reason'] for x in result['skipped']}, {'cooldown'})
         self.assertEqual(http.streams, [])
+
+    def test_distinct_event_after_cooldown_sends_new_frame_without_control_action(self):
+        self.config['destinations'] = ['201', '202']
+        http = FakeHTTP(inventory('201'))
+        later_frame = JPEG.replace(b'abc', b'xyz')
+        with mock.patch.object(motion.time, 'time', return_value=1792628291) as clock:
+            first = self.run_event(http, event='event_first')
+            clock.return_value += 60
+            http.frame = later_frame
+            second = self.run_event(http, event='event_second')
+
+        self.assertEqual(first['accepted'], ['201'])
+        self.assertEqual(second['accepted'], ['201'])
+        self.assertEqual(len(http.streams), 2)
+        # Only image requests are allowed: no Exit, key, call or speaker action.
+        self.assertEqual([path for path, _ in http.posts], ['/v1/phones/201/image'] * 2)
+        bodies = [body for _, body in http.posts]
+        self.assertEqual([body['idle_close_seconds'] for body in bodies], [45, 45])
+        self.assertEqual([base64.b64decode(body['image_base64']) for body in bodies],
+                         [JPEG, later_frame])
+        self.assertNotEqual(bodies[0]['idempotency_key'], bodies[1]['idempotency_key'])
+        self.assertNotEqual(bodies[0]['title'], bodies[1]['title'])
+
+    def test_cooldown_event_is_dropped_not_replayed_and_original_stays_deduplicated(self):
+        self.config['destinations'] = ['201']
+        http = FakeHTTP(inventory('201'))
+        started = 1792628291
+        with mock.patch.object(motion.time, 'time', return_value=started) as clock:
+            self.assertEqual(self.run_event(http, event='event_first')['accepted'], ['201'])
+            clock.return_value = started + 30
+            dropped = self.run_event(http, event='event_dropped')
+            self.assertEqual(dropped['skipped'], [{'phone': '201', 'reason': 'cooldown'}])
+            self.assertEqual((len(http.streams), len(http.posts)), (1, 1))
+
+            clock.return_value = started + 60
+            # Both retries retain their original, still-fresh event timestamps.
+            for event_id, event_at in [('event_dropped', started + 30), ('event_first', started)]:
+                with self.subTest(event_id=event_id):
+                    retry = motion.dispatch(self.config, 'front', event_id, event_at, http=http)
+                    self.assertEqual(retry['skipped'], [{'phone': '201', 'reason': 'duplicate_event'}])
+                    self.assertEqual((len(http.streams), len(http.posts)), (1, 1))
+
+            # Suppression does not defer the old frame or extend phone cooldown.
+            next_event = self.run_event(http, event='event_next')
+            self.assertEqual(next_event['accepted'], ['201'])
+            self.assertEqual((len(http.streams), len(http.posts)), (2, 2))
 
     def test_voice_guard_refusal_does_not_fallback_or_retry(self):
         http = FakeHTTP(error='http_busy')
