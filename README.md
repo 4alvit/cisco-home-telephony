@@ -2,7 +2,7 @@
 
 For an already configured hands-free phone, use the [daily-use guide](docs/voice-daily-use.md).
 For setup and opt-in voice operation, start with the [phone and CLI voice quickstart](docs/voice-quickstart.md).
-To install [Beta 16](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.16),
+To install [Beta 17](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.17),
 use its matching source and wake-capable archive with the [gateway installation guide](docs/voice-gateway-deployment.md)
 and [CLI installation guide](docs/cli-installation.md).
 

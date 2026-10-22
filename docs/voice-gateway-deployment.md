@@ -132,12 +132,12 @@ the extracted **base Secret only** during step 4; otherwise the preserved mount
 refers to a nonexistent Secret and the Pod cannot start. Do not apply
 `base-list.json`, which also contains the original Deployment.
 
-For a published installation, [Beta 16](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.16)
+For a published installation, [Beta 17](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.17)
 provides `voice-wake-amd64.tar.gz`, `SHA256SUMS`, `image.json`, `receipt.json`
 and `source.json`. Download all five into a new private directory. Verify
 `SHA256SUMS` with `sha256sum -c SHA256SUMS` (or `shasum -a 256 -c SHA256SUMS`
 on macOS), and confirm that the source record identifies
-`c3221365fee4cf029294565bdec264b291fd4dba`. Before conversion, compare the
+`f0102f401108c4c7ae60b02be012d8739664a887`. Before conversion, compare the
 exported archive's configuration ID and `linux/amd64` platform with the supplied
 metadata. After import, verify the final manifest and any configuration/rootfs
 mapping as described below; the converted configuration ID need not equal the
@@ -459,3 +459,21 @@ resources as deployment cleanup.
 - **Slow turns or restarts:** inspect throttling, OOM/restart history, network
   reachability and the selected Assist pipeline. Synthetic smoke and scheduler
   fit are separate from measured end-to-end voice performance.
+
+### Measure slow answers
+
+Correlate one request from STT completion through HA intent start/end to TTS;
+a gap identifies the waiting stage, not its cause. Replay the exact recognized
+text through the configured HA conversation agent with its tools and context.
+Measure cold and warm trials separately, recording model-load and prompt-cache
+state, response correctness and latency. Warm-only, arithmetic-only or direct
+model tests do not establish reliable performance of that HA path. For Ollama,
+compare `load_duration`, `prompt_eval_duration` and `eval_duration`, in nanoseconds,
+with the actual `prompt_eval_count` from its
+[response metrics](https://docs.ollama.com/api/chat). Prompt evaluation can dominate
+even a short answer; [`num_ctx`](https://docs.ollama.com/modelfile#valid-parameters-and-values)
+sets the context-window limit, not the actual input token count. If measured cold
+turns exceed the configured turn budget, use always-on local compute sized for
+the model, context and concurrent workload, then retest the complete HA path.
+Simply lengthening turn or session limits does not fix the bottleneck; preserve
+finite sessions and Stop/cleanup budgets.
