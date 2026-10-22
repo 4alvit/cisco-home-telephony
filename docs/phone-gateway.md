@@ -132,6 +132,11 @@ return credentials. Every mutation is a JSON POST to
   **not the timer/alarm scheduler path**. Manual 640 remains a finite tone test.
 - `message`: `title`, `text` (up to2000characters).
 - `image`: `title`, `image_base64`; PNG/JPEG up to2MiB and16million source pixels.
+  Optional `idle_close_seconds` is an integer from 10 to 120. It assigns a unique
+  Cisco application ID and requests native idle-time closing for that image.
+  Omit it to keep the existing manual-dismissal behavior. See
+  [motion snapshots](motion-notifications.md#automatic-dismissal-and-the-next-snapshot)
+  for lifecycle limits and firmware acceptance.
   EXIF orientation is applied, metadata is removed, and the picture is converted
   to a bounded RGB PNG fitting the7945G's **298×156** Services pane.
 
@@ -270,7 +275,10 @@ update completes. A short recovery interval can precede restoration.
 Text/photo delivery is a Cisco XML notification, **not cellular SMS/MMS**.
 The gateway serves each resource only to the intended phone for120seconds and
 retains no message/image in its SQLite state. Expiring the URL does not clear a
-page already on the display; press its Exit softkey. It is neither a video player
+page already on the display; press its Exit softkey. Opt-in image
+`idle_close_seconds` uses a separate native application timer; interaction
+can delay or cancel it. The timer closes that application's XML context,
+not a phone call. It is neither a video player
 nor animated-GIF support. Still sprites or a composed sprite sheet can be sent
 as a normal image. Font/locale coverage limits arbitrary Unicode.
 

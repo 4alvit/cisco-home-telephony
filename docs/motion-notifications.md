@@ -39,6 +39,45 @@ Long camera labels are shortened so the complete UTC event timestamp remains
 visible. A longer title can be accepted by the push endpoint while the phone
 fails to display the image page.
 
+### Automatic dismissal and the next snapshot
+
+Motion snapshots request **automatic dismissal after 45 seconds of native
+application idle time**. Once the old page closes, the next eligible motion
+event can display a fresh image without a person pressing Exit. This is
+automatic dismissal followed by a new notification, not an in-place video
+refresh. Exit remains available to dismiss the image earlier.
+
+The distinction matters on the 7945G: a second idle-only push can be accepted
+without being fetched while an earlier image remains open. New image URLs
+alone do not solve that behavior. The gateway gives each timed image a unique
+`appId` and uses Cisco's `onAppFocusGained` handler with
+`App:Close:1:45:<appId>`. Priority 1 waits for native application idle time;
+it does not force an immediate close. Cisco defines this as closing the
+named active application's **whole XML context**, including its stack.
+It is not a generic hangup or a command to close whichever page is visible.
+See the [Application URI reference](https://www.cisco.com/c/en/us/td/docs/voice_ip_comm/cuipph/all_models/xsi/7_0/english/programming/guide/70xsi/xsi70uri.html).
+
+Updates follow motion notifications, not a continuous refresh timer:
+
+- At least **60 seconds** must have passed since the last delivery attempt
+  to that physical phone. The private configuration can set a longer interval.
+- An event during cooldown is **dropped**, not delayed until the minute ends.
+  Another new eligible event is needed for the next picture. Replaying the
+  dropped event does not deliver it later.
+- User interaction or an application focus change can delay or cancel native
+  dismissal. A later push may still be skipped while the phone is occupied.
+  The 45 seconds is not an unconditional wall-clock deadline.
+- Duplicate or stale events, calls, DND, alerts, offline state and configured
+  voice profiles still prevent delivery. A visible image is never a live view.
+- A newly fetched frame is only as fresh as the camera's source. The title
+  shows the notification time, not a verified camera exposure time.
+
+There is no simulated Exit or Services key, and no forced-priority image
+push. Each new image retains the existing idle-only `Priority=2` delivery
+rule. Native close IDs are unique per image, so an old request cannot name a
+later image. Replaying an accepted API request does not reopen its image or
+restart its timer.
+
 This version sends a still, with no automatic slideshow or camera audio. It
 does not forward an MP4, animated GIF or video call to the phone. The existing
 [Camera Preview](camera-preview.md) is a separate, explicitly started feature;
@@ -72,8 +111,10 @@ require physical acceptance on the installed firmware.
 ## Install the helper and private configuration
 
 The standalone [helper](../scripts/cisco_motion_snapshot.py) uses Python's
-standard library and the existing gateway image action. It does not require
-FFmpeg, Pillow in HA, a new SIP account, a firmware change or a gateway rebuild.
+standard library and the gateway image action. It does not require FFmpeg,
+Pillow in HA, a new SIP account or a firmware change. **Deploy the updated
+gateway supporting `idle_close_seconds` before installing this helper.**
+Older gateways ignore that optional field and leave a static image open.
 The deployed gateway still needs its normal image-conversion dependencies.
 
 Install the helper as `/config/housekeeping/cisco_motion_snapshot.py` in the
@@ -219,10 +260,21 @@ insufficient. Then restore the intended private destination list. Test a real
 motion event separately and confirm that the original mobile notification
 still arrives. Do not infer ten-phone acceptance from one device.
 
+To verify the complete lifecycle on a particular firmware, leave the first
+image open without touching the phone. Confirm it closes after native idle
+time. After the configured phone cooldown has elapsed, generate a **new**
+motion event with its own ID and current trigger time. Confirm that the new
+title/frame appears and later closes too. Record both XML and PNG fetches as
+supporting evidence. Two accepted API responses alone do not prove that
+either image was displayed. Separately verify that a call or a different
+application is not closed by an old image's timer. A skipped event must not
+be forced through by clearing state or pressing remote keys.
+
 The gateway's image and XML URLs expire after **120 seconds**. This bounds
-server resources; it does **not erase pixels already displayed**. A phone
-may retain the last page until Exit or another UI event. The page is not an
-ongoing camera monitor.
+server resources; it does **not erase pixels already displayed**. Automatic
+dismissal is a separate native application timer, not the URL lifetime. If
+that timer is unavailable or interrupted, the last page may remain until
+Exit or another UI event. The page is not an ongoing camera monitor.
 
 ## Troubleshooting
 
@@ -238,6 +290,12 @@ ongoing camera monitor.
   retries with new event IDs.
 - **Duplicate, cooldown or stale event:** inspect the original event identity
   and time. A burst can intentionally reach no phones after the first event.
+- **The previous picture stays visible:** check the deployed gateway version
+  and the generated image's `appId`/`onAppFocusGained` attributes. An older
+  static image already on screen does not acquire a timer retroactively;
+  dismiss it once with Exit after upgrading. User interaction can delay
+  native dismissal. Do not lower priority safeguards or replay an old event
+  to force an update.
 - **Camera failure:** verify the selected notification camera supports the
   authenticated proxy stream and supplies a complete JPEG within the source
   budget. A cached still is not proof of a recent camera exposure.

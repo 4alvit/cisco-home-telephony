@@ -1,10 +1,15 @@
+import base64
 import copy
 import importlib.util
+import io
 import json
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+import xml.etree.ElementTree as ET
+
+from PIL import Image
 
 spec = importlib.util.spec_from_file_location('phone_gateway', Path(__file__).resolve().parents[1] / 'containers/asterisk/phone_gateway.py')
 gateway = importlib.util.module_from_spec(spec)
@@ -321,6 +326,150 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(call.kwargs['priority'], 2)
         content = next(iter(self.server.resources.values()))[1]
         self.assertIn(b'&lt;unsafe&gt;&amp;literal', content)
+
+    def image_request_body(self, key, title, color):
+        with Image.new('RGB', (3, 2), color) as image:
+            output = io.BytesIO()
+            image.save(output, format='PNG')
+        return {'idempotency_key': key, 'title': title,
+                'image_base64': base64.b64encode(output.getvalue()).decode('ascii')}
+
+    def test_consecutive_images_keep_distinct_immutable_resources_and_idle_only_pushes(self):
+        # Exercise real image decoding and resources, but not firmware rendering.
+        samples = [('snapshot-first', 'Motion A <entry>', (255, 0, 0)),
+                   ('snapshot-second', 'Motion B & garden', (0, 0, 255))]
+        previous_resources = {}
+        all_urls = []
+        for index, (key, title, color) in enumerate(samples, start=1):
+            with self.subTest(snapshot=key):
+                body = self.image_request_body(key, title, color)
+                result = self.server.mutate('201', 'image', body)
+                self.assertEqual(result['status'], 'accepted')
+                self.assertEqual(result['action_id'], key)
+                self.assertEqual(result['resource_ttl_seconds'], 120)
+                self.assertEqual(self.send.call_count, index)
+                push = self.send.call_args
+                self.assertEqual(push.args[0], self.server.phones['201'])
+                self.assertEqual(push.kwargs, {'priority': 2})
+                xml_url = gateway.parse.urlsplit(push.args[1])
+                self.assertEqual((xml_url.scheme, xml_url.netloc),
+                                 ('http', '192.168.50.10:18080'))
+                self.assertTrue(xml_url.path.startswith('/content/'))
+                self.assertFalse(xml_url.query or xml_url.fragment)
+                xml_resource = self.server.resources[('201', xml_url.path)]
+                self.assertEqual(xml_resource[2], 'text/xml; charset=utf-8')
+                document = ET.fromstring(xml_resource[1])
+                self.assertEqual(document.tag, 'CiscoIPPhoneImageFile')
+                self.assertEqual(document.attrib, {})
+                self.assertEqual(document.findtext('Title'), title)
+                image_url = gateway.parse.urlsplit(document.findtext('URL'))
+                self.assertEqual((image_url.scheme, image_url.netloc),
+                                 (xml_url.scheme, xml_url.netloc))
+                self.assertTrue(image_url.path.startswith('/content/'))
+                self.assertFalse(image_url.query or image_url.fragment)
+                image_resource = self.server.resources[('201', image_url.path)]
+                self.assertEqual(image_resource[2], 'image/png')
+                with Image.open(io.BytesIO(image_resource[1])) as decoded:
+                    self.assertEqual(decoded.format, 'PNG')
+                    self.assertEqual(decoded.mode, 'RGB')
+                    self.assertLessEqual(decoded.width, 298)
+                    self.assertLessEqual(decoded.height, 156)
+                    self.assertEqual(decoded.getextrema(), tuple((v, v) for v in color))
+                self.assertEqual(document.findtext('SoftKeyItem/Name'), 'Exit')
+                self.assertEqual(document.findtext('SoftKeyItem/URL'), 'SoftKey:Exit')
+                self.assertEqual(document.findtext('SoftKeyItem/Position'), '1')
+                self.assertEqual(document.findall('.//ExecuteItem'), [])
+                for resource_key, value in previous_resources.items():
+                    self.assertEqual(self.server.resources[resource_key], value)
+                self.assertEqual(len(self.server.resources), index * 2)
+                previous_resources = dict(self.server.resources)
+                all_urls.extend((push.args[1], document.findtext('URL')))
+        self.assertEqual(len(set(all_urls)), 4)
+        self.assertEqual(FakeAMI.calls, [])
+
+    def test_idle_image_close_is_opt_in_and_scoped_to_a_unique_application(self):
+        app_ids = []
+        for seconds in (10, 120):
+            with self.subTest(seconds=seconds):
+                body = self.image_request_body(f'idle-close-{seconds}', 'Motion', (0, 0, 255))
+                body['idle_close_seconds'] = seconds
+                self.server.mutate('201', 'image', body)
+                push = self.send.call_args
+                self.assertEqual(push.kwargs, {'priority': 2})
+                path = gateway.parse.urlsplit(push.args[1]).path
+                document = ET.fromstring(self.server.resources[('201', path)][1])
+                app_id = document.get('appId')
+                self.assertRegex(app_id, r'^image_[0-9a-f]{32}$')
+                self.assertEqual(document.attrib, {
+                    'appId': app_id,
+                    'onAppFocusGained': f'App:Close:1:{seconds}:{app_id}',
+                })
+                self.assertEqual(document.findall('.//ExecuteItem'), [])
+                app_ids.append(app_id)
+        self.assertEqual(len(set(app_ids)), 2)
+        self.assertEqual(self.send.call_count, 2)
+        self.assertEqual(FakeAMI.calls, [])
+
+    def test_invalid_idle_image_close_is_rejected_before_any_effects(self):
+        for seconds in (None, True, False, -1, 0, 5, 9, 121, 86400, 45.0, '45', [], {}):
+            with self.subTest(seconds=seconds), patch.object(gateway, 'AMI') as ami:
+                body = self.image_request_body('invalid-idle-close', 'Motion', (0, 0, 255))
+                body['idle_close_seconds'] = seconds
+                with self.assertRaises(gateway.Refused) as caught:
+                    self.server.mutate('201', 'image', body)
+                self.assertEqual(caught.exception.reason, 'bad_idle_close_seconds')
+                self.assertEqual(caught.exception.status, 400)
+                ami.assert_not_called()
+                self.send.assert_not_called()
+                self.assertEqual(self.server.resources, {})
+                self.assertEqual(self.server.db.execute('SELECT count(*) FROM operations').fetchone()[0], 0)
+
+    def test_idle_close_is_rejected_for_every_non_image_action(self):
+        for action in ('dial', 'intercom', 'answer', 'hangup', 'speaker', 'message',
+                       'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop'):
+            with self.subTest(action=action), patch.object(gateway, 'AMI') as ami:
+                with self.assertRaises(gateway.Refused) as caught:
+                    self.request(action, idle_close_seconds=45)
+                self.assertEqual(caught.exception.reason, 'idle_close_image_only')
+                self.assertEqual(caught.exception.status, 400)
+                ami.assert_not_called()
+                self.send.assert_not_called()
+                self.assertEqual(self.server.resources, {})
+                self.assertEqual(self.server.db.execute('SELECT count(*) FROM operations').fetchone()[0], 0)
+
+    def test_replaying_idle_close_image_does_not_reschedule_or_replace_application(self):
+        first = self.image_request_body('idle-close-first', 'First', (255, 0, 0))
+        first['idle_close_seconds'] = 45
+        result = self.server.mutate('201', 'image', first)
+        second = self.image_request_body('idle-close-second', 'Second', (0, 0, 255))
+        second['idle_close_seconds'] = 45
+        self.server.mutate('201', 'image', second)
+        resources, pushes = dict(self.server.resources), list(self.send.call_args_list)
+        self.assertEqual(self.server.mutate('201', 'image', first), result)
+        self.assertEqual(self.server.resources, resources)
+        self.assertEqual(self.send.call_args_list, pushes)
+        restarted = gateway.Gateway(config(), self.directory.name)
+        self.addCleanup(restarted.db.close)
+        self.assertEqual(restarted.mutate('201', 'image', first), result)
+        self.assertEqual(restarted.resources, {})
+        self.assertEqual(self.send.call_args_list, pushes)
+
+    def test_replaying_accepted_image_after_newer_image_does_not_push_old_content(self):
+        first_body = self.image_request_body('snapshot-first', 'First', (255, 0, 0))
+        first_result = self.server.mutate('201', 'image', first_body)
+        self.server.mutate('201', 'image',
+                           self.image_request_body('snapshot-second', 'Second', (0, 0, 255)))
+        resources = dict(self.server.resources)
+        pushes = list(self.send.call_args_list)
+        self.assertEqual(self.server.mutate('201', 'image', first_body), first_result)
+        self.assertEqual(self.server.resources, resources)
+        self.assertEqual(self.send.call_args_list, pushes)
+        restarted = gateway.Gateway(config(), self.directory.name)
+        self.addCleanup(restarted.db.close)
+        self.assertEqual(restarted.mutate('201', 'image', first_body), first_result)
+        self.assertEqual(restarted.resources, {})
+        self.assertEqual(self.send.call_args_list, pushes)
+        self.assertEqual(FakeAMI.calls, [])
 
 
 if __name__ == '__main__': unittest.main()
