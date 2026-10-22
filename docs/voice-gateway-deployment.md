@@ -132,12 +132,12 @@ the extracted **base Secret only** during step 4; otherwise the preserved mount
 refers to a nonexistent Secret and the Pod cannot start. Do not apply
 `base-list.json`, which also contains the original Deployment.
 
-For a published installation, [Beta 16](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.16)
+For a published installation, [Beta 17](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.17)
 provides `voice-wake-amd64.tar.gz`, `SHA256SUMS`, `image.json`, `receipt.json`
 and `source.json`. Download all five into a new private directory. Verify
 `SHA256SUMS` with `sha256sum -c SHA256SUMS` (or `shasum -a 256 -c SHA256SUMS`
 on macOS), and confirm that the source record identifies
-`c3221365fee4cf029294565bdec264b291fd4dba`. Before conversion, compare the
+`96109316909fd8b4fa3609bd205b9d669bfbce24`. Before conversion, compare the
 exported archive's configuration ID and `linux/amd64` platform with the supplied
 metadata. After import, verify the final manifest and any configuration/rootfs
 mapping as described below; the converted configuration ID need not equal the

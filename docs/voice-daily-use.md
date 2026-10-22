@@ -39,6 +39,20 @@ a new call is established, and the wake model becomes ready again. There is a
 gap in listening and the phone may ring briefly. Wait for readiness again;
 there is no guaranteed fixed delay or uninterrupted listening.
 
+An active assistant call with **Ready for wake phrase** is normal between
+questions. **Thinking** and **Speaking** belong to a request or reply; they are
+not the expected idle state. If either remains beyond the configured turn
+timeout without a reply or progress, use Disable, check that Stop is confirmed,
+and follow the [recovery procedure](voice-control.md#deadlines-and-uncertain-cleanup).
+The call timer alone does not indicate a stuck request.
+
+While hands-free is enabled, that phone is intentionally excluded from passive
+[motion snapshots](motion-notifications.md), including gaps between renewed
+sessions. Disable hands-free and confirm the voice session has fully stopped
+before expecting snapshots on that phone. Calls, DND, alerts and uncertain
+ownership can still prevent delivery. A motion notification never stops the
+assistant to display an image.
+
 ## Use the phone for ordinary calls
 
 - **Incoming call:** ordinary calls take priority over the assistant. Answer
@@ -144,14 +158,20 @@ If the integration is unavailable, use the configured CLI.
 - **No response to the wake phrase:** confirm readiness, use the configured
   phrase, and try a short question near the phone in a quiet setting. Room-wide
   pickup is not guaranteed. There is no wake acknowledgment sound to listen for.
-- **Wake detected, but no question followed:** with local endpointing and an
-  explicitly enabled `rearm_after_turn` profile, a local no-speech decision
-  aborts the empty request. After Home Assistant closes that request and audio
-  cleanup succeeds, the same session can become ready again. Wait for readiness
-  before repeating the wake phrase and question. This does not extend the
-  session's original time limit or count as a completed reply. Manual activation,
-  profiles without rearming, missing input audio and other failures still stop
-  the session. Failed request closure or audio cleanup never silently rearms.
+- **Wake detected, but no question followed:** with `rearm_after_turn` enabled,
+  the same wake session can recover from a local no-speech decision when local
+  endpointing is enabled. It can also recover from the exact Home Assistant
+  `stt-no-text-recognized` result after a request started, provided no text was
+  recognized and no intent or TTS work began. Both paths wait for request
+  closure and audio cleanup, and require the current session to remain valid;
+  Stop, Disable, replacement or lease expiry cannot be undone by recovery.
+  Wait for readiness before repeating the wake phrase and question. Recovery
+  does not extend the original time limit or count as a completed reply.
+  Manual activation, profiles without rearming, missing input audio and generic
+  errors such as `stt-stream-failed` still stop the session. Failed closure or
+  cleanup never silently rearms. See the
+  [provider compatibility note](voice-gateway-deployment.md#enable-repeatable-wake-sessions)
+  if an older provider reports empty recognition as a generic error.
 - **Thinking or Speaking:** let the turn finish before asking again. If no sound
   is heard, inspect the [playback diagnostics](voice-quickstart.md#inspect-playback-progress);
   do not treat completed software playback as an audibility test.
