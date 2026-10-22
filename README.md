@@ -74,8 +74,10 @@ conversion to MPP is not required.
   Ordinary calls and voice sessions retain priority; pictures are not live video.
 - **Show motion alerts on free phones:** [motion snapshots](docs/motion-notifications.md)
   sends the first received frame from a Home Assistant notification camera to
-  online, idle Cisco handsets. Busy phones and every phone with a configured
-  voice-assistant profile are skipped, including gaps between voice sessions.
+  online, idle Cisco handsets. All configured phones can participate, including
+  voice-profile phones with hands-free disabled and voice ownership quiescent.
+  Busy phones, enabled hands-free and active or uncertain voice ownership are
+  skipped. Offline phones remain configured for new events after reconnecting.
 - **Experiment with incoming video:** the [SIP video lab](docs/sip-video-bridge.md)
   receives a synthetic loopback SIP/H.264 call and decodes phone-sized pictures.
   This isolated prototype decodes after capture; it does not bridge phone audio
