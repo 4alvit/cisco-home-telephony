@@ -2,7 +2,7 @@
 
 For an already configured hands-free phone, use the [daily-use guide](docs/voice-daily-use.md).
 For setup and opt-in voice operation, start with the [phone and CLI voice quickstart](docs/voice-quickstart.md).
-To install [Beta 17](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.17),
+To install [Beta 18](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.18),
 use its matching source and wake-capable archive with the [gateway installation guide](docs/voice-gateway-deployment.md)
 and [CLI installation guide](docs/cli-installation.md).
 
@@ -118,6 +118,11 @@ conversion to MPP is not required.
   designs, account requirements and limitations.
 - [Persistent HA phone control](docs/phone-gateway.md): opt-in auto-answer,
   PBX DND, numeric dialing, text and photo delivery.
+- [HA radio media players](https://github.com/ha-homelab/asterisk-telephony/blob/main/docs/media-player.md)
+  with Beta 18 and **Cisco phone controls 0.7.0b1**: one player per physical
+  handset, numeric catalog stations and Stop for the exact verified radio call.
+  Both the matching gateway and active generated PBX radio routes are required.
+  Follow the linked state and playback checks to validate your installation.
 - [Phone applications](docs/phone-applications.md): native English menus for
   the directory, radio, timers, alarms, phone settings and selected HA devices.
 - [External SIP research](docs/extended-services-research.md), with disabled-by-default
