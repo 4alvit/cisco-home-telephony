@@ -58,15 +58,15 @@ python3 --version
 git --version
 mkdir -p "$HOME/src"
 cd "$HOME/src"
-git clone --branch v0.1.0-beta.15 --single-branch \
-  https://github.com/4alvit/cisco-home-telephony.git cisco-home-telephony-beta15
-cd cisco-home-telephony-beta15
+git clone --branch v0.1.0-beta.16 --single-branch \
+  https://github.com/4alvit/cisco-home-telephony.git cisco-home-telephony-beta16
+cd cisco-home-telephony-beta16
 git rev-parse HEAD
 ```
 
-This example selects [Beta 15](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.15).
+This example selects [Beta 16](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.16).
 Confirm that the printed commit is
-`7f4b589d9a2863a6dfd0bf205267ce16b9ff0fe2` before continuing. For another
+`c3221365fee4cf029294565bdec264b291fd4dba` before continuing. For another
 release, use its recorded full source commit and matching server image; the
 latest default branch is not a release pin.
 

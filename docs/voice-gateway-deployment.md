@@ -132,12 +132,12 @@ the extracted **base Secret only** during step 4; otherwise the preserved mount
 refers to a nonexistent Secret and the Pod cannot start. Do not apply
 `base-list.json`, which also contains the original Deployment.
 
-For a published installation, [Beta 15](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.15)
+For a published installation, [Beta 16](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.16)
 provides `voice-wake-amd64.tar.gz`, `SHA256SUMS`, `image.json`, `receipt.json`
 and `source.json`. Download all five into a new private directory. Verify
 `SHA256SUMS` with `sha256sum -c SHA256SUMS` (or `shasum -a 256 -c SHA256SUMS`
 on macOS), and confirm that the source record identifies
-`7f4b589d9a2863a6dfd0bf205267ce16b9ff0fe2`. Before conversion, compare the
+`c3221365fee4cf029294565bdec264b291fd4dba`. Before conversion, compare the
 exported archive's configuration ID and `linux/amd64` platform with the supplied
 metadata. After import, verify the final manifest and any configuration/rootfs
 mapping as described below; the converted configuration ID need not equal the
@@ -230,6 +230,15 @@ the snapshot before applying and inspect the server-side dry run.
 and [init-container accounting](https://kubernetes.io/docs/concepts/workloads/pods/init-containers/#resource-sharing-within-containers)
 describe the scheduler's rules.
 
+Before a reviewed replacement, inspect pending workloads and queued CI jobs
+for the same node, together with allocated CPU and memory requests. A free
+capacity snapshot does not reserve a Pod slot: a queued runner can claim the
+old Pod's resources during a required zero-replica barrier. Coordinate with the
+CI owner to pause or drain expendable CI across the replacement and keep it
+paused until the gateway is Ready. If the replacement stays Pending, recheck
+scheduling events and current allocations. Do not blindly lower resource
+requests or stop production workloads to make it fit.
+
 Choose a CPU request and limit explicitly. A small request may fit a busy node
 but does not establish adequate voice latency. Measure CPU throttling, memory,
 turn duration and concurrent workload contention during separately attended
@@ -295,6 +304,14 @@ image. In the private assistant profile select `wake.mode: "onnx"`, set
 `wake.bundle_file` to the pinned local bundle, and explicitly enable
 `service.rearm_after_turn`. Set the transport's `duration_seconds` to the intended
 finite budget, for example 300. Keep per-turn timeouts separately bounded.
+
+Local `no_speech` recovery applies before Home Assistant VAD takes over.
+After that, only the exact `stt-no-text-recognized` result can rearm after
+request closure and audio cleanup; generic `stt-stream-failed` and other
+failures remain terminal. Both paths require `rearm_after_turn` and preserve
+the original session deadline. If an older provider reports empty recognition
+as an error, use [provider companion 0.1.3](https://github.com/ha-homelab/ha-echo-show-5/blob/a1ce58d24235e33f3658ff35ad6f4129a2421ea7/integrations/fcc-voice-backup/cloud_speech.py)
+to report an empty transcript instead.
 
 Provision a read-only model PVC in the same namespace, containing the three
 model files at the relative paths recorded in that bundle. Keep matching local
