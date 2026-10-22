@@ -85,7 +85,7 @@ def service_dialplan(site):
             routes.append(f'''exten => {number},1,Answer()
  same => n,Set(TIMEOUT(absolute)={radio['max_seconds'] + 30})
  same => n,Set(RADIOSTATUS=failed)
- same => n,Set(CISCO_RADIO=1:{number}:${{UNIQUEID}})
+ same => n(cisco-radio-v1),Set(CISCO_RADIO=1:{number}:${{UNIQUEID}})
  same => n,AGI(radio.py,{station})
  same => n,Set(CISCO_RADIO=)
  same => n,GotoIf($["${{RADIOSTATUS}}" = "ok"]?done)

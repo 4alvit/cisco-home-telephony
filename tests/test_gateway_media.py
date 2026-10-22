@@ -10,6 +10,8 @@ from test_phone_gateway import config, gateway, FakeAMI
 class MediaAMI(FakeAMI):
     markers = {}
     snapshots = []
+    supported = {'701', '708'}
+    support_values = []
 
     def snapshot(self):
         if self.snapshots:
@@ -19,6 +21,11 @@ class MediaAMI(FakeAMI):
     def action(self, name, **values):
         self.calls.append((name, values))
         if name == 'Getvar':
+            if values['Variable'].startswith('DIALPLAN_EXISTS('):
+                source = values['Variable'].split(',')[1]
+                value = (self.support_values.pop(0) if self.support_values else
+                         '1' if source in self.supported else '0')
+                return [{'Response': 'Success', 'Variable': values['Variable'], 'Value': value}]
             return [{'Response': 'Success', 'Variable': 'CISCO_RADIO',
                      'Value': self.markers.get(values['Channel'], '')}]
         return [{'Response': 'Success'}]
@@ -48,6 +55,7 @@ class MediaTests(unittest.TestCase):
         self.addCleanup(self.server.db.close)
         self.server.dnd_pending.clear()
         MediaAMI.channels, MediaAMI.calls, MediaAMI.markers, MediaAMI.snapshots = [], [], {}, []
+        MediaAMI.supported, MediaAMI.support_values = {'701', '708'}, []
         MediaAMI.endpoints = {'201': 'Not in use', '202': 'Not in use'}
         self.patch_ami = patch.object(gateway, 'AMI', MediaAMI)
         self.patch_ami.start()
@@ -77,6 +85,71 @@ class MediaTests(unittest.TestCase):
         self.assert_blank('idle', None)
         self.assertIn('media', self.server.listing()['phones'][0]['capabilities'])
 
+    def test_old_pbx_idle_never_advertises_or_starts_unstoppable_media(self):
+        MediaAMI.supported.clear()
+        phone = self.server.listing()['phones'][0]
+        self.assertNotIn('media', phone['capabilities'])
+        self.assert_blank('unknown', 'unavailable')
+        with patch.object(self.server, 'suspend_hands_free') as suspend, \
+                patch.object(self.server, 'reserve_phone_controls') as reserve:
+            with self.assertRaises(gateway.Refused) as caught:
+                self.request('media_play', line='201', source='701')
+            self.assertEqual(caught.exception.reason, 'media_unavailable')
+            suspend.assert_not_called()
+            reserve.assert_not_called()
+        self.execute.assert_not_called()
+        self.assertTrue(all(name == 'Getvar' for name, _ in MediaAMI.calls))
+
+    def test_every_advertised_source_needs_current_loaded_route_support(self):
+        MediaAMI.supported.remove('708')
+        phone = self.server.listing()['phones'][0]
+        self.assertNotIn('media', phone['capabilities'])
+        self.assert_blank('unknown', 'unavailable')
+        MediaAMI.supported.add('708')
+        self.assertIn('media', self.server.listing()['phones'][0]['capabilities'])
+
+    def test_marked_radio_remains_stoppable_after_dialplan_rollback(self):
+        for bridge, expected in (('bridge-one', 'playing'), ('', 'buffering')):
+            with self.subTest(state=expected):
+                channel, _ = self.install_radio(bridge=bridge)
+                MediaAMI.supported.clear()
+                phone = self.server.listing()['phones'][0]
+                self.assertEqual(phone['media']['state'], expected)
+                self.assertIn('media', phone['capabilities'])
+                identity = {key: phone['media'][key] for key in ('source', 'line', 'channel', 'uniqueid')}
+                self.server.mutate('201', 'media_stop', {
+                    **identity, 'idempotency_key': 'rollback-stop-' + expected})
+                self.assertEqual(MediaAMI.calls[-1], ('Hangup', {'Channel': channel['Uniqueid'], 'Cause': '16'}))
+                MediaAMI.channels = []
+                MediaAMI.endpoints = {'201': 'Not in use', '202': 'Not in use'}
+                phone = self.server.listing()['phones'][0]
+                self.assertEqual(phone['media']['state'], 'unknown')
+                self.assertEqual(phone['media']['reason'], 'unavailable')
+                self.assertNotIn('media', phone['capabilities'])
+
+    def test_route_support_lost_during_handoff_refuses_phone_io(self):
+        MediaAMI.support_values = ['1', '0']
+        with self.assertRaises(gateway.Refused) as caught:
+            self.request('media_play', line='201', source='701')
+        self.assertEqual(caught.exception.reason, 'media_unavailable')
+        self.execute.assert_not_called()
+        self.assertEqual(len(MediaAMI.calls), 2)
+
+    def test_route_support_requires_exact_success_variable_and_value(self):
+        variable = 'DIALPLAN_EXISTS(home,701,cisco-radio-v1)'
+        for response in ([], [{'Response': 'Success', 'Variable': variable, 'Value': ''}],
+                         [{'Response': 'Success', 'Variable': variable, 'Value': '01'}],
+                         [{'Response': 'Success', 'Variable': variable, 'Value': 1}],
+                         [{'Response': 'Success', 'Variable': 'other', 'Value': '1'}],
+                         [{'Response': 'Error', 'Variable': variable, 'Value': '1'}]):
+            with self.subTest(response=response), \
+                    patch.object(MediaAMI, 'action', return_value=response), \
+                    patch.object(self.server, 'suspend_hands_free') as suspend:
+                with self.assertRaises(gateway.Refused):
+                    self.request('media_play', line='201', source='701')
+                suspend.assert_not_called()
+        self.execute.assert_not_called()
+
     def test_offline_then_online_is_not_optimistically_playing(self):
         MediaAMI.endpoints['201'] = 'Unavailable'
         self.assert_blank('blocked', 'offline')
@@ -103,7 +176,8 @@ class MediaTests(unittest.TestCase):
         self.assert_blank('blocked', 'call')
         channel['Linkedid'] = 'cisco-voice-' + 'a' * 32
         self.assert_blank('blocked', 'voice')
-        self.assertFalse(any(name == 'Getvar' for name, _ in MediaAMI.calls))
+        self.assertFalse(any(name == 'Getvar' and values.get('Variable') == 'CISCO_RADIO'
+                             for name, values in MediaAMI.calls))
 
     def test_manually_dialled_radio_on_either_line_is_observed(self):
         for line in ('201', '202'):

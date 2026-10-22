@@ -184,6 +184,15 @@ path is connected; it does not measure speaker sound or expose song metadata.
 A manually dialed catalog radio number is recognized by the same mechanism.
 An older, unmarked PBX cannot authorize radio Stop or report verified Playing.
 
+Before advertising idle media readiness or starting radio, the gateway checks
+`DIALPLAN_EXISTS(home,<source>,cisco-radio-v1)` against the loaded PBX routes.
+The versioned label is attached to the ownership-marker instruction. Missing
+or malformed support leaves an idle player's media capability unavailable and
+refuses Play before voice handoff. The selected route is checked again before
+phone commands. This uses the active dialplan rather than a global variable
+that could survive a rollback. An already verified radio call retains its
+media state and exact Stop even if route support subsequently disappears.
+
 Regenerate and activate the PBX configuration while preserving existing secrets.
 For an immutable configuration Secret mounted as the entire `/etc/asterisk`
 directory, create its replacement, update the workload reference and perform a

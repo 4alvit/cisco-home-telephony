@@ -146,6 +146,9 @@ class GatewayHandsFreeTests(unittest.TestCase):
                     self.events.append(('io',))
 
                 def action_guard(ami, *args, **kwargs):
+                    if args == ('Getvar',):
+                        self.assertEqual(kwargs, {'Variable': 'DIALPLAN_EXISTS(home,701,cisco-radio-v1)'})
+                        return [{'Response': 'Success', 'Variable': kwargs['Variable'], 'Value': '1'}]
                     io_guard()
                     return original(ami, *args, **kwargs)
 

@@ -797,6 +797,25 @@ class Gateway:
         return {item['number'] for item in self.config.get('services', [])
                 if item['kind'] == 'radio' and item['number'] in self.config['dial_allowlist']}
 
+    def media_supported(self, ami, sources=None):
+        """Check the currently loaded routes, including after rollback/reload.
+
+        The versioned label is on the radio ownership marker itself. A global
+        variable could survive removal of its defining dialplan and is unsafe
+        as a compatibility gate for starting a call that must remain stoppable.
+        """
+        sources = self.media_sources() if sources is None else sources
+        if not sources:
+            return False
+        for source in sorted(sources):
+            variable = f'DIALPLAN_EXISTS(home,{source},cisco-radio-v1)'
+            response = ami.action('Getvar', Variable=variable)
+            values = [item.get('Value') for item in response
+                      if item.get('Response') == 'Success' and item.get('Variable') == variable]
+            if values != ['1']:
+                return False
+        return True
+
     @staticmethod
     def media_state(state, reason=None, channel=None, source=None):
         return {'state': state, 'source': source,
@@ -894,7 +913,14 @@ class Gateway:
             endpoints, channels = ami.snapshot()
             self.reconcile_alerts(ami, channels)
             self.reconcile_intercoms(ami, channels)
+            supported = self.media_supported(ami)
             endpoints, channels, media = self.media_snapshot(ami, endpoints, channels)
+            if not supported:
+                # A dialplan rollback must prevent new starts without hiding
+                # an already marked call that can still be stopped safely.
+                media = {phone_id: state if state['state'] in ('buffering', 'playing')
+                         else self.media_state('unknown', 'unavailable')
+                         for phone_id, state in media.items()}
             return {'ami_fresh': True, 'observed_at': time.time(),
                     'dial_allowlist': self.config['dial_allowlist'],
                     'ring_allowlist': self.config.get('ring_allowlist', ['640']),
@@ -915,7 +941,7 @@ class Gateway:
                  'channels': [{'name': item['Channel'], 'uniqueid': item.get('Uniqueid'),
                                'state': item.get('ChannelStateDesc'), 'line': item['Channel'].split('/')[1].split('-')[0]}
                               for item in own_channels(phone, channels)],
-                 'capabilities': ['dial', 'intercom', 'answer', 'hangup', 'speaker_toggle', 'message', 'image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop', 'media'] + (['voice'] if any(
+                 'capabilities': ['dial', 'intercom', 'answer', 'hangup', 'speaker_toggle', 'message', 'image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop'] + (['media'] if supported or media[phone['id']]['state'] in ('buffering', 'playing') else []) + (['voice'] if any(
                      profile.phone_id == phone['id'] for profile in self._voice_profiles) else [])}
                 for phone in self.phones.values()]}
 
@@ -1157,6 +1183,10 @@ class Gateway:
     def _mutate(self, phone, action, body):
         line = body.get('line', phone['id'])
         require(line in phone['lines'], 'line_does_not_belong_to_phone', 400)
+        if action == 'media_play':
+            # Validate PBX compatibility before even pausing hands-free voice.
+            with AMI(self.config['ami']) as ami:
+                require(self.media_supported(ami, [body['source']]), 'media_unavailable')
         if action == 'motion_image':
             with self.reserve_motion_image(phone):
                 return self._mutate_reserved(phone, action, body, line)
@@ -1267,6 +1297,10 @@ class Gateway:
                 index = phone['lines'].index(line) + 1
                 # The Dial URI has NO line-selector suffix. Select the real
                 # line key first, then submit only a numeric dial sequence.
+                if action == 'media_play':
+                    # Handoff/checks take time; confirm the loaded route again
+                    # immediately before marking dispatch or sending phone keys.
+                    require(self.media_supported(ami, [number]), 'media_unavailable')
                 self._mark_hands_free_call(phone)
                 execute(phone, 'Key:Line' + str(index))
                 execute(phone, 'Dial:' + number)

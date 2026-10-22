@@ -50,6 +50,7 @@ class RadioConfiguration(unittest.TestCase):
             self.assertIn("AGI(radio.py,echo)", dial)
             self.assertIn("AGI(radio.py,bob-metal)", dial)
             self.assertIn("Set(CISCO_RADIO=1:702:${UNIQUEID})", dial)
+            self.assertIn("same => n(cisco-radio-v1),Set(CISCO_RADIO=1:702:${UNIQUEID})", dial)
             self.assertIn("Set(CISCO_RADIO=1:704:${UNIQUEID})", dial)
             self.assertIn("AGI(radio.py,echo)\n same => n,Set(CISCO_RADIO=)", dial)
             self.assertNotIn("exten => 701,", dial)

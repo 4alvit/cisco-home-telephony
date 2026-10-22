@@ -187,6 +187,7 @@ class IncomingRadioNegotiation(unittest.TestCase):
             secret = json.loads((root / "gateway-ami-secret.json").read_text())
         configured = fixture.media_fixture_dialplan(original)
         self.assertIn("Set(CISCO_RADIO=1:702:${UNIQUEID})", configured)
+        self.assertIn("same => n(cisco-radio-v1),Set(CISCO_RADIO=1:702:${UNIQUEID})", configured)
         self.assertIn("AGI(/etc/asterisk/radio_fixture_agi.py,echo)\n same => n,Set(CISCO_RADIO=)", configured)
         self.assertIn("exten => 799,1,Goto(home,702,1)", configured)
         self.assertEqual(secret['username'], 'cisco_gateway')
