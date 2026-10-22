@@ -188,6 +188,14 @@ def incoming_fixture_pjsip(content):
             + "\n[radio-fixture-loopback]\ntype=identify\nendpoint=201\nmatch=127.0.0.2/32\n")
 
 
+def media_fixture_dialplan(content):
+    """Replace only the network source, preserving generated radio ownership."""
+    need(content.count("AGI(radio.py,echo)") == 1, "generated radio route missing")
+    content = content.replace("AGI(radio.py,echo)",
+                              "AGI(/etc/asterisk/radio_fixture_agi.py,echo)")
+    return content + "\n[radio-smoke]\nexten => 799,1,Goto(home,702,1)\n"
+
+
 def selected_answer(body, payload, codec):
     """A sorted broad answer does not prove a single negotiated voice codec."""
     rows = body.splitlines()
@@ -348,13 +356,51 @@ def amplitude(samples, rate, frequency):
                        for n, value in enumerate(samples))) / len(samples)
 
 
+@contextmanager
+def media_gateway():
+    """Use the production reader/Stop path with this fixture's loopback AMI.
+
+    No HTTP listener or phone command is started. Production configuration still
+    rejects loopback; the override below is confined to a network-none fixture.
+    """
+    gateway = module("radio_gateway_fixture", Path(__file__).with_name("phone_gateway.py"))
+    secret = json.loads(Path("/etc/asterisk/gateway-ami-secret.json").read_text())
+    config = {
+        "persistent_enabled": True, "bind_ipv4": "192.168.50.10", "api_port": 18084,
+        "api_token": "a" * 48, "api_clients": ["192.168.50.11"],
+        "ami": {"host": "192.168.50.10", "port": 5038, **secret},
+        "dial_allowlist": ["702"], "services": [
+            {"number": "702", "label": "Synthetic radio", "kind": "radio"}],
+        "phones": [{"id": "201", "lines": ["201"], "ipv4": "192.168.50.21",
+                    "device": "SEP020000000001", "port": 18080,
+                    "auth_path": "/auth/" + "c" * 64,
+                    "username": "u" * 24, "password": "p" * 24}],
+    }
+    with tempfile.TemporaryDirectory(prefix="radio-gateway-state-") as state:
+        server = gateway.Gateway(config, state)
+        server.config["ami"]["host"] = "127.0.0.1"
+        server.dnd_pending.clear()
+        try:
+            yield server, gateway.Refused
+        finally:
+            server.db.close()
+
+
 def test_inside():
     need({name for _, name in socket.if_nameindex()} == {"lo"}, "network-none required")
+    with media_gateway() as (server, refused):
+        return radio_cases(server, refused)
+
+
+def radio_cases(server, refused):
     subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i",
                     "aevalsrc=0.2*sin(2*PI*1000*t)+0.2*sin(2*PI*5000*t):s=44100:d=5",
                     "-c:a", "libmp3lame", "-b:a", "192k", "-y",
                     "/tmp/radio-fixture.mp3"], check=True, timeout=15)
-    result = {"network": "none", "synthetic_only": True, "physical_phones_called": False, "cases": {}}
+    result = {"network": "none", "synthetic_only": True, "physical_phones_called": False,
+              "cases": {}, "media": {"marked_playing_cases": 0, "stale_stop_refusals": 0,
+                                      "uniqueid_stop": False}}
+    previous_media = None
     cases = (("G722", "G722", 9, "g722", 16000, False),
              ("PCMU", "PCMU", 0, "mulaw", 8000, False),
              ("incoming_mixed_G722", "G722", 9, "g722", 16000, True),
@@ -376,6 +422,38 @@ def test_inside():
                 subprocess.run(["asterisk", "-rx",
                                 "channel originate PJSIP/201 extension 799@radio-smoke"],
                                check=True, capture_output=True, timeout=5)
+            observed = {}
+
+            def playing():
+                state = server.listing()["phones"][0]["media"]
+                if state["state"] != "playing":
+                    return False
+                need(state["source"] == "702" and state["line"] == "201",
+                     "radio identity differs from the generated home dialplan")
+                observed.update(state)
+                return True
+
+            await_condition(playing, 3, "fresh marker and linked AudioSocket bridge")
+            result["media"]["marked_playing_cases"] += 1
+            if previous_media is not None:
+                try:
+                    server.mutate("201", "media_stop", {
+                        **previous_media, "idempotency_key": "stale-stop-" + case})
+                except refused as error:
+                    need(error.reason == "media_identity_changed", "unexpected stale Stop refusal")
+                else:
+                    raise RuntimeError("stale Stop was accepted for a replacement radio call")
+                current = server.listing()["phones"][0]["media"]
+                need(current["state"] == "playing" and current["uniqueid"] == observed["uniqueid"],
+                     "stale Stop affected the replacement call")
+                result["media"]["stale_stop_refusals"] += 1
+            previous_media = {key: observed[key] for key in ("source", "line", "channel", "uniqueid")}
+            if case == "incoming_PCMU":
+                await_condition(lambda: len(peer.packets) >= 65, 3, "radio before exact-identity Stop")
+                stopped = server.mutate("201", "media_stop", {
+                    **previous_media, "idempotency_key": "exact-uniqueid-stop"})
+                need(stopped["status"] == "accepted", "uniqueid Stop not accepted")
+                result["media"]["uniqueid_stop"] = True
             completed_receipt = {}
 
             def finished():
@@ -408,6 +486,8 @@ def test_inside():
                 return {"0 active channels", "0 active calls"} <= rows
 
             await_condition(no_channels, 5, "all synthetic radio channels released")
+            need(server.listing()["phones"][0]["media"]["state"] == "idle",
+                 "ended radio did not return to idle")
             need(len(peer.packets) >= 50, "missing radio RTP")
             options = ["-ar", "8000", "-ac", "1"] if decoder == "mulaw" else []
             decoded = subprocess.run(
@@ -454,6 +534,7 @@ def main():
         root = Path(temporary)
         site = {"node_ipv4": "127.0.0.1", "lan_cidr": "127.0.0.0/8",
                 "ntp_ipv4": "127.0.0.1", "phone_cidrs": ["127.0.0.0/8"],
+                "gateway": {"enabled": True, "ami_client_ipv4": "127.0.0.1"},
                 "radio": {"enabled": True, "stations": ["echo"], "max_seconds": 30}}
         inventory = {"phones": [{"model": "CP-7945G", "verified": True, "mac": "020000000001",
                                  "label": "Fixture", "extension": "201", "transport": "udp",
@@ -462,10 +543,11 @@ def main():
         folder = root / "asterisk"
         pjsip = folder / "pjsip.conf"
         pjsip.write_text(incoming_fixture_pjsip(pjsip.read_text()))
-        with (folder / "extensions.conf").open("a") as stream:
-            stream.write("\n[radio-smoke]\nexten => 799,1,Answer()\n"
-                         " same => n,AGI(/etc/asterisk/radio_fixture_agi.py,echo)\n"
-                         " same => n,Hangup()\n")
+        dialplan = folder / "extensions.conf"
+        # Preserve the real home/702 context, source/UID marker and cleanup.
+        dialplan.write_text(media_fixture_dialplan(dialplan.read_text()))
+        (folder / "gateway-ami-secret.json").write_bytes((root / "gateway-ami-secret.json").read_bytes())
+        (folder / "phone_gateway.py").write_bytes((repo / "containers/asterisk/phone_gateway.py").read_bytes())
         for name in ("test-radio-wideband.py", "test-alert-originate.py"):
             (folder / name).write_bytes((repo / "scripts" / name).read_bytes())
         fixture = folder / "radio_fixture_agi.py"
@@ -482,7 +564,7 @@ def main():
             subprocess.run(docker + ["start", container], capture_output=True, check=True, timeout=15)
             def loaded():
                 output = subprocess.run(docker + ["exec", container, "asterisk", "-rx",
-                                                  "dialplan show 799@radio-smoke"],
+                                                  "dialplan show 702@home"],
                                         capture_output=True, text=True, timeout=5)
                 return output.returncode == 0 and "radio_fixture_agi.py,echo" in output.stdout
             await_condition(loaded, 25, "radio fixture dialplan loaded")

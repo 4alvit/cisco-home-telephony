@@ -127,7 +127,10 @@ class GatewayHandsFreeTests(unittest.TestCase):
         self.supervisor.status.assert_not_called()
 
     def test_call_actions_hold_inhibit_and_physical_reservation_through_io(self):
+        self.gateway.config['services'] = [{'number': '701', 'label': 'Radio', 'kind': 'radio'}]
+        self.gateway.dnd_pending.clear()
         for action, extra in (('dial', {'number': '600'}), ('ring', {'destination': '640'}),
+                              ('media_play', {'source': '701'}),
                               ('alert', {'kind': 'timer'}), ('speaker', {'mode': 'toggle'}),
                               ('answer', {'channel': 'PJSIP/202-abcd', 'uniqueid': 'synthetic-call'})):
             with self.subTest(action=action):
@@ -143,6 +146,9 @@ class GatewayHandsFreeTests(unittest.TestCase):
                     self.events.append(('io',))
 
                 def action_guard(ami, *args, **kwargs):
+                    if args == ('Getvar',):
+                        self.assertEqual(kwargs, {'Variable': 'DIALPLAN_EXISTS(home,701,cisco-radio-v1)'})
+                        return [{'Response': 'Success', 'Variable': kwargs['Variable'], 'Value': '1'}]
                     io_guard()
                     return original(ami, *args, **kwargs)
 
@@ -153,11 +159,11 @@ class GatewayHandsFreeTests(unittest.TestCase):
                 self.assertEqual(result['status'], 'accepted')
                 self.assertEqual(self.events[0], ('suspend', '201', action != 'speaker'))
                 self.assertEqual(self.supervisor.suspend_for_control.call_args.kwargs['wait_for_call'],
-                                 action in ('dial', 'ring', 'alert'))
+                                 action in ('dial', 'media_play', 'ring', 'alert'))
                 self.assertEqual(self.events[1], ('reserve', '201'))
                 self.assertEqual(self.events[-2:], [('release', '201'), ('resume', '201')])
                 self.assertIn(('io',), self.events)
-                if action in ('dial', 'ring', 'alert'):
+                if action in ('dial', 'media_play', 'ring', 'alert'):
                     self.assertLess(self.events.index(('dispatch', ('201',))), self.events.index(('io',)))
                 self.gateway.db.execute("UPDATE alerts SET state='ended'")
                 self.gateway.db.commit()

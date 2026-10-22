@@ -172,6 +172,29 @@ class RadioWidebandOwnership(unittest.TestCase):
 
 
 class IncomingRadioNegotiation(unittest.TestCase):
+    def test_media_fixture_preserves_generated_marker_and_clear(self):
+        provision = fixture.module("media_fixture_provision", ROOT / "scripts/provision.py")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            provision.generate(
+                {"node_ipv4": "127.0.0.1", "lan_cidr": "127.0.0.0/8", "ntp_ipv4": "127.0.0.1",
+                 "gateway": {"enabled": True, "ami_client_ipv4": "127.0.0.1"},
+                 "radio": {"enabled": True, "stations": ["echo"], "max_seconds": 30}},
+                {"phones": [{"model": "CP-7945G", "verified": True, "mac": "020000000001",
+                             "label": "Fixture", "extension": "201", "transport": "udp",
+                             "firmware_load": "SIP45.9-4-2SR4-3S"}]}, root)
+            original = (root / "asterisk/extensions.conf").read_text()
+            secret = json.loads((root / "gateway-ami-secret.json").read_text())
+        configured = fixture.media_fixture_dialplan(original)
+        self.assertIn("Set(CISCO_RADIO=1:702:${UNIQUEID})", configured)
+        self.assertIn("same => n(cisco-radio-v1),Set(CISCO_RADIO=1:702:${UNIQUEID})", configured)
+        self.assertIn("AGI(/etc/asterisk/radio_fixture_agi.py,echo)\n same => n,Set(CISCO_RADIO=)", configured)
+        self.assertIn("exten => 799,1,Goto(home,702,1)", configured)
+        self.assertEqual(secret['username'], 'cisco_gateway')
+        for invalid in ('', original + original):
+            with self.assertRaisesRegex(RuntimeError, 'generated radio route missing'):
+                fixture.media_fixture_dialplan(invalid)
+
     @staticmethod
     def answer(payloads):
         mappings = {0: "PCMU/8000", 8: "PCMA/8000", 9: "G722/8000",

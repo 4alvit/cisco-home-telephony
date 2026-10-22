@@ -71,7 +71,7 @@ class GatewayTests(unittest.TestCase):
             {'extension': '210', 'room': None, 'online': False}])
         self.assertEqual(set(listing['phones'][0]), {
             'id', 'lines', 'room', 'dnd', 'autoanswer', 'dnd_pending', 'alert', 'online', 'channels', 'capabilities',
-            'motion_image'})
+            'motion_image', 'media'})
         self.assertEqual(listing['phones'][0]['motion_image'], {'eligible': True, 'reason': None})
         encoded = json.dumps(listing)
         for private in ('a' * 48, 'b' * 48, 'u' * 24, 'p' * 24, 'c' * 64,

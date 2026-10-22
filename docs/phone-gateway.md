@@ -5,7 +5,7 @@
 The optional gateway connects HA to the existing local Cisco phones. It supports
 numeric dialing, answering a selected ringing line, exact-channel hangup,
 explicit speaker-button toggling, PBX Do Not Disturb, opt-in auto-answer, text
-pages, photographs and one-time speaker intercom calls. The separate `cisco_phone_control` HA integration supplies
+pages, photographs, catalog radio playback and one-time speaker intercom calls. The separate `cisco_phone_control` HA integration supplies
 entities and recurring alarms/timers. Scheduled alerts keep the phone ringing
 until a person answers, rejects the call or presses **Stop alert**. They never
 auto-answer and play no audio after an answer. A button press is not evidence
@@ -113,6 +113,13 @@ call, DND or alert checks. Every mutation is a JSON POST to
 `/v1/phones/<primary-line>/<action>` with a unique `idempotency_key`.
 
 - `dial`: `line`, `number`; only explicit configured numbers are accepted.
+- `media_play`: `line`, `source`; starts an advertised radio service on the
+  selected owned line. The source must be classified as `radio` and present in
+  `dial_allowlist`. A busy handset, DND, active alert or uncertain voice ownership
+  is refused. A supervised assistant may hand off through its existing guard.
+- `media_stop`: `source`, `line`, `channel`, `uniqueid` copied from the observed
+  `phone.media` object. Only that exact, freshly revalidated radio session is
+  stopped, using AMI Uniqueid. A changed or ordinary call is never substituted.
 - `answer` / `hangup`: `line`, `channel`, `uniqueid` copied from a fresh inventory.
 - `speaker`: `mode: "toggle"`; only an idle phone is accepted. This emulates a
   physical button, so there is no invented boolean speaker state.
@@ -153,6 +160,54 @@ busy, DND or stale/ambiguous ownership; an unavailable dependency returns503.
 An ambiguous network outcome is never retried automatically. Reusing a completed
 idempotency key returns its recorded result; a pending key returns a conflict.
 Retain keys for one logical timer/alarm occurrence, not across different events.
+
+### Radio state and Home Assistant media players
+
+The `media` capability and `phone.media` object let the existing
+[Cisco phone controls integration](https://github.com/ha-homelab/asterisk-telephony/blob/main/docs/media-player.md)
+attach one **Radio** media player to each physical handset device, including
+configured offline phones. Two SIP lines share the player. The catalog is the
+intersection of advertised radio services and the dialing allowlist.
+
+The object always contains `state`, `source`, `line`, `channel`, `uniqueid` and
+`reason`. States are `idle`, `buffering`, `playing`, `blocked` and `unknown`.
+Only `buffering` and `playing` carry a source and call identity; their reason is
+null. Inactive states have null identity fields. Blocked/unknown reasons are
+`offline`, `dnd`, `alert`, `call`, `voice`, `unavailable`, `ambiguous` or `unmarked`.
+
+A matching generated PBX dialplan is required as well as the gateway update.
+The radio route sets `CISCO_RADIO=1:<source>:<Uniqueid>` on its actual caller and
+clears it immediately after the radio AGI returns. The gateway validates this
+marker against a second channel snapshot. **Playing** also requires exactly
+one matching Up AudioSocket partner in the same bridge. This proves the radio
+path is connected; it does not measure speaker sound or expose song metadata.
+A manually dialed catalog radio number is recognized by the same mechanism.
+An older, unmarked PBX cannot authorize radio Stop or report verified Playing.
+
+Before advertising idle media readiness or starting radio, the gateway checks
+`DIALPLAN_EXISTS(home,<source>,cisco-radio-v1)` against the loaded PBX routes.
+The versioned label is attached to the ownership-marker instruction. Missing
+or malformed support leaves an idle player's media capability unavailable and
+refuses Play before voice handoff. The selected route is checked again before
+phone commands. This uses the active dialplan rather than a global variable
+that could survive a rollback. An already verified radio call retains its
+media state and exact Stop even if route support subsequently disappears.
+
+Regenerate and activate the PBX configuration while preserving existing secrets.
+For an immutable configuration Secret mounted as the entire `/etc/asterisk`
+directory, create its replacement, update the workload reference and perform a
+planned PBX restart; a reload cannot read files absent from that mount. Preserve
+AstDB/DND and other runtime state if the workload stores it on ephemeral volumes.
+Use the [operations guide](asterisk-operations.md) and verify the effective radio
+route before accepting the update.
+
+The HA player supports catalog browse, source selection, `play_media` for a
+numeric advertised station and exact-session Stop. Stop before changing stations.
+It does not accept arbitrary URLs, media-source IDs, announcements or queues,
+and does not advertise pause, seek or volume. An unavailable phone is never
+queued for later playback. Existing calls, alerts and voice admission retain
+priority. Keep any private entity IDs, labels and deployment evidence outside
+public Git.
 
 ### Intercom deployment and call ownership
 
