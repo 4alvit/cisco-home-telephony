@@ -33,6 +33,12 @@ not mean the first frame at the instant motion occurred. The event time shown
 in the title is the original notification event time; it is not a verified
 camera exposure timestamp. The source may itself supply cached imagery.
 
+The title is limited to **32 characters**, as required by Cisco's
+[displayable-object schema](https://www.cisco.com/c/en/us/td/docs/voice_ip_comm/cuipph/all_models/xsi/7_0/english/programming/guide/70xsi/xsi70sch.html).
+Long camera labels are shortened so the complete UTC event timestamp remains
+visible. A longer title can be accepted by the push endpoint while the phone
+fails to display the image page.
+
 This version sends a still, with no automatic slideshow or camera audio. It
 does not forward an MP4, animated GIF or video call to the phone. The existing
 [Camera Preview](camera-preview.md) is a separate, explicitly started feature;

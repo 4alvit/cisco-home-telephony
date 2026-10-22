@@ -122,8 +122,18 @@ class DispatchTests(unittest.TestCase):
         self.assertTrue(http.streams[0].closed)
         self.assertEqual(len(http.posts), 2)
         self.assertIn(' | Event ', http.posts[0][1]['title'])
-        self.assertLessEqual(len(http.posts[0][1]['title']), 48)
+        self.assertLessEqual(len(http.posts[0][1]['title']), 32)
         self.assertFalse(result['display_verified'])
+
+    def test_event_title_fits_cisco_schema_and_preserves_complete_utc_event_time(self):
+        event_at = 1792628291
+        suffix = ' | Event 10-22 00:18:11Z'
+        for label in ('Front', 'A' * 13, 'B' * 48):
+            with self.subTest(label_length=len(label)):
+                title = motion.event_title(label, event_at)
+                self.assertTrue(title.endswith(suffix))
+                self.assertEqual(title, label[:32 - len(suffix)] + suffix)
+                self.assertEqual(len(title), min(len(label) + len(suffix), 32))
 
     def test_busy_offline_dnd_and_alert_no_camera_or_state(self):
         for field, value in [('online', False), ('dnd', True), ('dnd_pending', True),
