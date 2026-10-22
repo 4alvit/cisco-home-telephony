@@ -118,7 +118,8 @@ The standalone [helper](../scripts/cisco_motion_snapshot.py) uses Python's
 standard library and the gateway motion-image action. It does not require FFmpeg,
 Pillow in HA, a new SIP account or a firmware change. **Deploy the updated
 gateway supporting `motion_image` and `idle_close_seconds` before installing this helper.**
-Older gateways ignore that optional field and leave a static image open.
+Gateways that lack idle-close support ignore that optional field and leave a
+static image open.
 The deployed gateway still needs its normal image-conversion dependencies.
 For compatibility, the helper can use the ordinary image action on older
 gateways for phones without voice profiles. Voice-configured phones remain
