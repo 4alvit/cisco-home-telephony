@@ -69,6 +69,10 @@ conversion to MPP is not required.
 - **Preview a configured camera:** [bounded camera preview](docs/camera-preview.md)
   adds an optional, automatically refreshed view to the phone applications.
   Ordinary calls and voice sessions retain priority; pictures are not live video.
+- **Show motion alerts on free phones:** [motion snapshots](docs/motion-notifications.md)
+  sends the first received frame from a Home Assistant notification camera to
+  online, idle Cisco handsets. Busy phones and every phone with a configured
+  voice-assistant profile are skipped, including gaps between voice sessions.
 - **Experiment with incoming video:** the [SIP video lab](docs/sip-video-bridge.md)
   receives a synthetic loopback SIP/H.264 call and decodes phone-sized pictures.
   This isolated prototype decodes after capture; it does not bridge phone audio
