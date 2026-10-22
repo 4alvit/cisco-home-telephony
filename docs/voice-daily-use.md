@@ -144,8 +144,14 @@ If the integration is unavailable, use the configured CLI.
 - **No response to the wake phrase:** confirm readiness, use the configured
   phrase, and try a short question near the phone in a quiet setting. Room-wide
   pickup is not guaranteed. There is no wake acknowledgment sound to listen for.
-- **Wake detected, but no question followed:** check status before trying again;
-  do not assume the session stayed armed while it waited for speech.
+- **Wake detected, but no question followed:** with local endpointing and an
+  explicitly enabled `rearm_after_turn` profile, a local no-speech decision
+  aborts the empty request. After Home Assistant closes that request and audio
+  cleanup succeeds, the same session can become ready again. Wait for readiness
+  before repeating the wake phrase and question. This does not extend the
+  session's original time limit or count as a completed reply. Manual activation,
+  profiles without rearming, missing input audio and other failures still stop
+  the session. Failed request closure or audio cleanup never silently rearms.
 - **Thinking or Speaking:** let the turn finish before asking again. If no sound
   is heard, inspect the [playback diagnostics](voice-quickstart.md#inspect-playback-progress);
   do not treat completed software playback as an audibility test.

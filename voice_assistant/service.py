@@ -11,7 +11,7 @@ import time
 from typing import Any, AsyncIterator, Callable, Protocol
 
 from .audio import UtteranceEndpoint
-from .ha import AssistError, validate_wake_word_phrase
+from .ha import AssistError, EmptyWakeTurn, validate_wake_word_phrase
 
 
 FRAME_BYTES = 640  # 20 ms, signed little-endian int16, mono, 16 kHz
@@ -99,7 +99,7 @@ class _Session:
     stream_id: str | None = None
     conversation_id: str | None = None
     preroll: deque[bytes] = field(default_factory=deque)
-    queue: asyncio.Queue[bytes | None] | None = None
+    queue: asyncio.Queue[bytes | None | EmptyWakeTurn] | None = None
     task: asyncio.Task[None] | None = None
     captured_frames: int = 0
     input_closed: bool = False
@@ -108,6 +108,7 @@ class _Session:
     revision: int = 0
     wake_detection: bool = False
     endpoint: UtteranceEndpoint | None = None
+    empty_abort: EmptyWakeTurn | None = None
     lifecycle_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
@@ -237,6 +238,7 @@ class AssistantService:
             item.queue = None
             item.task = None
             item.endpoint = None
+            item.empty_abort = None
             if self._owner == phone_id:
                 self._owner = None
                 self._quiet_until = self._clock() + self.settings.duplicate_window_seconds
@@ -329,12 +331,13 @@ class AssistantService:
         item.preroll.clear()
         item.input_closed = False
         item.error = None
+        item.empty_abort = None
         item.endpoint = (UtteranceEndpoint(self._clock(), self.settings.speech_rms_threshold)
                          if self.settings.local_endpointing else None)
         if item.captured_frames * .02 >= self.settings.max_utterance_seconds:
             self.end_utterance(phone_id, stream_id)
         self._emit(phone_id, "listening")
-        item.task = asyncio.create_task(self._run_turn(phone_id, stream_id))
+        item.task = asyncio.create_task(self._run_turn(phone_id, stream_id, item.revision))
         item.task.add_done_callback(lambda task: self._cancelled_before_start(phone_id, task))
 
     def _cancelled_before_start(self, phone_id: str, task: asyncio.Task[None]) -> None:
@@ -346,6 +349,7 @@ class AssistantService:
         self._quiet_until = self._clock() + self.settings.duplicate_window_seconds
         item.queue = None
         item.endpoint = None
+        item.empty_abort = None
         item.preroll.clear()
         item.detector.reset()
         item.stream_id = None
@@ -369,8 +373,18 @@ class AssistantService:
         if decision == "end_of_speech":
             self.end_utterance(phone_id, stream_id)
             self._emit(phone_id, "thinking")
+        elif (decision == "no_speech" and item.wake_detection
+              and self.settings.rearm_after_turn and item.queue is not None):
+            # Fence late HA events/replies immediately. Abort the iterator with
+            # an identity-checked local exception, never EOS (which runs STT).
+            # The outer task stays cancellable by Stop while HA closes its turn.
+            item.empty_abort = EmptyWakeTurn()
+            item.stream_id = None
+            item.input_closed = True
+            while not item.queue.empty():
+                item.queue.get_nowait()
+            item.queue.put_nowait(item.empty_abort)
         elif decision is not None:
-            # No speech is not an invitation to execute an intent or rearm.
             item.error = decision
             item.stream_id = None
             if item.task is not None:
@@ -404,11 +418,13 @@ class AssistantService:
             finally:
                 pending.cancel()
                 await asyncio.gather(pending, return_exceptions=True)
+            if isinstance(frame, EmptyWakeTurn):
+                raise frame
             if frame is None:
                 return
             yield frame
 
-    async def _run_turn(self, phone_id: str, stream_id: str) -> None:
+    async def _run_turn(self, phone_id: str, stream_id: str, revision: int) -> None:
         item = self._sessions[phone_id]
 
         async def event(message: dict[str, Any]) -> None:
@@ -460,13 +476,23 @@ class AssistantService:
                    if item.endpoint is not None else None)
         completed = False
         duplicate = False
+        empty = False
+        cancelled = False
         try:
+            # Capture may expire before this task's first instruction. There is
+            # then no HA request to cancel and no audio to replay.
+            if item.empty_abort is not None:
+                raise item.empty_abort
             await asyncio.wait_for(turn(), self.settings.turn_timeout_seconds)
             completed = True
         except asyncio.CancelledError:
-            pass
+            cancelled = True
         except asyncio.TimeoutError:
             item.error = "turn_timeout"
+        except EmptyWakeTurn as error:
+            empty = error is item.empty_abort and not result_received
+            if not empty:
+                item.error = "turn_failed"
         except AssistError as error:
             # Only HA's exact typed rejection is a benign competing wake. Never
             # replay this audio or convert other provider failures into success.
@@ -498,9 +524,18 @@ class AssistantService:
                 other.detector.reset()
                 if other.stream_id is not None and other.state == "armed":
                     self._emit_armed(other_id)
+            if item.empty_abort is not None and not (empty or cancelled) and item.error is None:
+                # A provider swallowed the local abort or returned a late answer.
+                # Neither proves that the empty request was cleanly cancelled.
+                item.error = "empty_turn_not_aborted"
+            item.empty_abort = None
             if item.error:
                 item.stream_id = None
                 self._emit(phone_id, "error", item.error)
+            elif (empty and item.revision == revision and item.stream_id is None
+                  and item.wake_detection and self.settings.rearm_after_turn):
+                item.stream_id = stream_id
+                self._emit_armed(phone_id)
             elif ((completed or duplicate) and item.stream_id == stream_id and item.wake_detection
                   and self.settings.rearm_after_turn):
                 self._emit_armed(phone_id)

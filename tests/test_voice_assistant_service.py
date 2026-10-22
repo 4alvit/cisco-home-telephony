@@ -757,10 +757,11 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         now[0] = 110.0
         service.feed_pcm("alpha", stream, bytes(640))
         await service.wait_idle("alpha")
-        self.assertEqual(service.status("alpha").reason, "no_speech")
-        self.assertEqual(service.status("alpha").state, "error")
+        self.assertEqual(service.status("alpha").state, "armed")
+        self.assertEqual(service._sessions["alpha"].stream_id, stream)
         self.assertEqual(self.playback.plays, [])
-        self.assertFalse(service.feed_pcm("alpha", stream, FRAME))
+        self.assertEqual(self.assist.calls, [])  # expired before the task started
+        self.assertTrue(service.feed_pcm("alpha", stream, bytes(640)))
 
     async def test_first_audio_timeout_cancels_ha_and_does_not_rearm(self):
         now = [100.0]

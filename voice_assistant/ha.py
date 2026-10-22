@@ -35,6 +35,13 @@ class AssistError(RuntimeError):
         super().__init__(message)
 
 
+class EmptyWakeTurn(AssistError):
+    """Local capture aborted before speech; never constructed from server data."""
+
+    def __init__(self):
+        super().__init__("local-empty-wake-turn")
+
+
 class AssistTimeout(AssistError):
     def __init__(self):
         super().__init__("timeout")
@@ -305,6 +312,7 @@ class HAClient:
             raise ValueError("conversation_id must be a string or None")
         validate_wake_word_phrase(wake_word_phrase)
         ws = None
+        empty_wake_turn = False
         try:
             async with _timeout(self.timeout):
                 async with _timeout(self.connection_timeout):
@@ -319,6 +327,9 @@ class HAClient:
                 return await self._exchange(ws, audio, conversation_id, on_event, wake_word_phrase)
         except (TimeoutError, asyncio.TimeoutError):
             raise AssistTimeout() from None
+        except EmptyWakeTurn:
+            empty_wake_turn = True
+            raise
         except AssistError:
             raise
         except asyncio.CancelledError:
@@ -332,7 +343,10 @@ class HAClient:
                     async with _timeout(self.close_timeout):
                         await ws.close()
                 except Exception:
-                    pass
+                    # A benign empty wake may rearm only after this request
+                    # has closed. Other failures retain their existing policy.
+                    if empty_wake_turn:
+                        raise AssistError("empty-turn-close-failed") from None
 
     async def inspect_pipeline(self):
         """Read the explicitly selected pipeline and its two speech entities.
