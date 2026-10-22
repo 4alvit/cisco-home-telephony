@@ -137,9 +137,11 @@ provides `voice-wake-amd64.tar.gz`, `SHA256SUMS`, `image.json`, `receipt.json`
 and `source.json`. Download all five into a new private directory. Verify
 `SHA256SUMS` with `sha256sum -c SHA256SUMS` (or `shasum -a 256 -c SHA256SUMS`
 on macOS), and confirm that the source record identifies
-`7f4b589d9a2863a6dfd0bf205267ce16b9ff0fe2`. Compare the imported image's
-configuration ID and `linux/amd64` platform with the supplied metadata; keep
-the receipt with the archive. This is the wake-capable image required for
+`7f4b589d9a2863a6dfd0bf205267ce16b9ff0fe2`. Before conversion, compare the
+exported archive's configuration ID and `linux/amd64` platform with the supplied
+metadata. After import, verify the final manifest and any configuration/rootfs
+mapping as described below; the converted configuration ID need not equal the
+exported Docker ID. Keep the receipt with the archive. This is the wake-capable image required for
 hands-free operation, not the lean manual voice image. Supply private
 profiles, credentials and wake models separately.
 
