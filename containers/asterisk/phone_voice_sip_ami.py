@@ -258,6 +258,16 @@ class AmiPort:
                     and self.seen_phone is False and self.used is False
                     and self.thread is None and self.grant is None)
 
+    def seal_startup_stop(self):
+        """Seal a drained, observed startup after its exact PBX cleanup."""
+        with self._lifecycle_lock:
+            self._sealed = True
+            self.stop_event.set()
+            return (self.start_attempted is True and self._start_active is False
+                    and self.originate_attempted is True and self.seen_phone is True
+                    and self.deadline_armed is True and self.absence_confirmed is True
+                    and self.used is False and self.thread is None and self.grant is None)
+
     def _observe(self):
         while not self.stop_event.is_set():
             try:

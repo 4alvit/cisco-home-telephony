@@ -6,12 +6,15 @@ import errno
 from pathlib import Path
 import signal
 import sys
+import threading
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
 from tests.test_voice_session_sip import Assistant, Port, TOKEN, runner
 from tests.test_phone_voice_sip import FRAME, packet
+from phone_voice_sip import BoundaryError
+from phone_voice_sip_ami import AmiPort
 
 
 class LifecyclePort(Port):
@@ -58,6 +61,31 @@ class LifecycleAssistant(Assistant):
         self.close_started.set()
         await self.close_release.wait()
         self.close_completed = True
+
+
+class StartupStopPort(LifecyclePort):
+    """Pause after the one Speaker, using the real startup sealing predicate."""
+    seal_startup_stop = AmiPort.seal_startup_stop
+
+    def __init__(self):
+        super().__init__()
+        self.release.clear()
+        self._lifecycle_lock = threading.RLock()
+        self._start_active = self._sealed = self.used = False
+        self.thread = None
+        self.start_attempted = self.seen_phone = False
+        self.startup_stage = 'guard'
+
+    async def start(self):
+        self.start_attempted = self._start_active = True
+        self.originate_attempted = self.deadline_armed = True
+        self.speaker_attempted = self.seen_phone = True
+        self.entered.set()
+        try:
+            await self.release.wait()
+            raise self.failure or BoundaryError('explicit_stop')
+        finally:
+            self._start_active = False
 
 
 class LoopbackLifecycleTests(unittest.IsolatedAsyncioTestCase):
@@ -303,6 +331,66 @@ class LoopbackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assert_startup_cleaned(await self.finished(task))
         self.assertTrue(server_writer.is_closing())
         self.assertEqual(await asyncio.wait_for(reader.read(), 1), b'')
+
+    async def test_post_originate_stop_proves_cleanup_without_session_or_audio(self):
+        self.port = StartupStopPort()
+        with patch.dict(runner.os.environ, {
+                'CISCO_VOICE_SESSION_ID': TOKEN.hex,
+                'CISCO_VOICE_LAUNCH_CHALLENGE': 'a' * 64}):
+            task = self.launch()
+            await asyncio.wait_for(self.port.entered.wait(), 1)
+            reader, _, _, server_writer = await self.connect()
+            self.signals[signal.SIGTERM]()
+            self.port.release.set()
+            report = await self.finished(task)
+        self.assertEqual(self.sessions, [])
+        self.assertIsNone(report['result'])
+        self.assertEqual(report['cleanup_errors'], [])
+        self.assertEqual(report['startup_diagnostic']['reason'], 'explicit_stop')
+        self.assertEqual(report['startup_diagnostic']['stage'], 'sip_start')
+        self.assertEqual(report['cleanup_proof'], {
+            'version': 1, 'kind': 'safe_sip_startup_stop', 'transport': 'sip_audiosocket',
+            'session_id': TOKEN.hex, 'challenge': 'a' * 64, 'originate_attempted': True,
+            'startup_drained': True, 'startup_sealed': True, 'phone_seen': True,
+            'cleanup_complete': True})
+        self.assertTrue(self.port._sealed)
+        self.assertTrue(self.assistant.close_completed)
+        self.assertEqual(self.port.hangups, 1)
+        self.assertEqual(self.assistant.frames, [])
+        self.assertEqual([report[key] for key in
+                          ('turns_completed', 'input_frames', 'output_frames')], [0, 0, 0])
+        self.assertTrue(server_writer.is_closing())
+        self.assertEqual(await asyncio.wait_for(reader.read(), 1), b'')
+
+    async def test_later_stop_cannot_convert_different_startup_failure_into_stop_proof(self):
+        self.port = StartupStopPort()
+        self.port.failure = BoundaryError('call_setup_timeout')
+        with patch.dict(runner.os.environ, {
+                'CISCO_VOICE_SESSION_ID': TOKEN.hex,
+                'CISCO_VOICE_LAUNCH_CHALLENGE': 'a' * 64}):
+            task = self.launch()
+            await asyncio.wait_for(self.port.entered.wait(), 1)
+            self.signals[signal.SIGTERM]()
+            self.port.release.set()
+            report = await self.finished(task)
+        self.assertNotIn('cleanup_proof', report)
+        self.assertIsNone(report['result'])
+        self.assertTrue(report['pbx_call_absent'])
+        self.assertEqual(report['startup_diagnostic']['reason'], 'call_setup_timeout')
+
+    async def test_cleanup_stop_flag_without_an_actual_signal_cannot_issue_proof(self):
+        self.port = StartupStopPort()
+        with patch.dict(runner.os.environ, {
+                'CISCO_VOICE_SESSION_ID': TOKEN.hex,
+                'CISCO_VOICE_LAUNCH_CHALLENGE': 'a' * 64}):
+            task = self.launch()
+            await asyncio.wait_for(self.port.entered.wait(), 1)
+            self.port.release.set()
+            report = await self.finished(task)
+        self.assertNotIn('cleanup_proof', report)
+        self.assertTrue(self.port.stop_event.is_set())
+        self.assertTrue(report['pbx_call_absent'])
+        self.assertEqual(report['startup_diagnostic']['reason'], 'explicit_stop')
 
     async def test_cancel_during_start_after_accept_still_closes_peer_service_and_pbx(self):
         self.port.release.clear()
