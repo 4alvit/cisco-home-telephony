@@ -230,6 +230,15 @@ the snapshot before applying and inspect the server-side dry run.
 and [init-container accounting](https://kubernetes.io/docs/concepts/workloads/pods/init-containers/#resource-sharing-within-containers)
 describe the scheduler's rules.
 
+Before a reviewed replacement, inspect pending workloads and queued CI jobs
+for the same node, together with allocated CPU and memory requests. A free
+capacity snapshot does not reserve a Pod slot: a queued runner can claim the
+old Pod's resources during a required zero-replica barrier. Coordinate with the
+CI owner to pause or drain expendable CI across the replacement and keep it
+paused until the gateway is Ready. If the replacement stays Pending, recheck
+scheduling events and current allocations. Do not blindly lower resource
+requests or stop production workloads to make it fit.
+
 Choose a CPU request and limit explicitly. A small request may fit a busy node
 but does not establish adequate voice latency. Measure CPU throttling, memory,
 turn duration and concurrent workload contention during separately attended
