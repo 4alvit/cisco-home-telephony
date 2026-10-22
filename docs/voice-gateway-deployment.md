@@ -459,3 +459,21 @@ resources as deployment cleanup.
 - **Slow turns or restarts:** inspect throttling, OOM/restart history, network
   reachability and the selected Assist pipeline. Synthetic smoke and scheduler
   fit are separate from measured end-to-end voice performance.
+
+### Measure slow answers
+
+Correlate one request from STT completion through HA intent start/end to TTS;
+a gap identifies the waiting stage, not its cause. Replay the exact recognized
+text through the configured HA conversation agent with its tools and context.
+Measure cold and warm trials separately, recording model-load and prompt-cache
+state, response correctness and latency. Warm-only, arithmetic-only or direct
+model tests do not establish reliable performance of that HA path. For Ollama,
+compare `load_duration`, `prompt_eval_duration` and `eval_duration`, in nanoseconds,
+with the actual `prompt_eval_count` from its
+[response metrics](https://docs.ollama.com/api/chat). Prompt evaluation can dominate
+even a short answer; [`num_ctx`](https://docs.ollama.com/modelfile#valid-parameters-and-values)
+sets the context-window limit, not the actual input token count. If measured cold
+turns exceed the configured turn budget, use always-on local compute sized for
+the model, context and concurrent workload, then retest the complete HA path.
+Simply lengthening turn or session limits does not fix the bottleneck; preserve
+finite sessions and Stop/cleanup budgets.

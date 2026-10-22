@@ -175,6 +175,10 @@ If the integration is unavailable, use the configured CLI.
 - **Thinking or Speaking:** let the turn finish before asking again. If no sound
   is heard, inspect the [playback diagnostics](voice-quickstart.md#inspect-playback-progress);
   do not treat completed software playback as an audibility test.
+- **Slow answers:** distinguish completed recognition, waiting for Home Assistant
+  to process the request, and speech synthesis. Ask the administrator to follow
+  [slow-answer diagnostics](voice-gateway-deployment.md#measure-slow-answers)
+  using the actual request and configured agent before changing timeouts.
 - **Wrong language or voice:** the administrator must select the intended Home
   Assistant pipeline and TTS voice in the private profile. Switching from an
   Echo-style device to SIP does not select that pipeline automatically. Local
