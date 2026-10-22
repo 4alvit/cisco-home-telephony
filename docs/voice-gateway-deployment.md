@@ -132,18 +132,26 @@ the extracted **base Secret only** during step 4; otherwise the preserved mount
 refers to a nonexistent Secret and the Pod cannot start. Do not apply
 `base-list.json`, which also contains the original Deployment.
 
-For a published installation, [Beta 17](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.17)
+For a published installation, [Beta 18](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.18)
 provides `voice-wake-amd64.tar.gz`, `SHA256SUMS`, `image.json`, `receipt.json`
 and `source.json`. Download all five into a new private directory. Verify
 `SHA256SUMS` with `sha256sum -c SHA256SUMS` (or `shasum -a 256 -c SHA256SUMS`
 on macOS), and confirm that the source record identifies
-`f0102f401108c4c7ae60b02be012d8739664a887`. Before conversion, compare the
+`6e7d56439ccf56a8d2263b6d6a7c44fa1c7627b5`. Before conversion, compare the
 exported archive's configuration ID and `linux/amd64` platform with the supplied
 metadata. After import, verify the final manifest and any configuration/rootfs
 mapping as described below; the converted configuration ID need not equal the
 exported Docker ID. Keep the receipt with the archive. This is the wake-capable image required for
 hands-free operation, not the lean manual voice image. Supply private
 profiles, credentials and wake models separately.
+
+Beta 18 adds the gateway media capability for the companion
+**Cisco phone controls 0.7.0b1**. Its [HA media player](https://github.com/ha-homelab/asterisk-telephony/blob/main/docs/media-player.md)
+provides one player per physical handset, with configured numeric radio stations
+and Stop restricted to the exact observed radio call. Coordinate the matching HA
+component and gateway update with regeneration and activation of the PBX radio
+routes, following the [radio requirements](phone-gateway.md#radio-state-and-home-assistant-media-players).
+Verify actual media state and playback after the coordinated update.
 
 Alternatively, build and smoke-test the dedicated image using the
 [voice image instructions](voice-k3s.md#build-and-check-the-voice-runtime), or
