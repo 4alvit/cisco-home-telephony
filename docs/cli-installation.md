@@ -66,7 +66,7 @@ git rev-parse HEAD
 
 This example selects [Beta 17](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.17).
 Confirm that the printed commit is
-`96109316909fd8b4fa3609bd205b9d669bfbce24` before continuing. For another
+`f0102f401108c4c7ae60b02be012d8739664a887` before continuing. For another
 release, use its recorded full source commit and matching server image; the
 latest default branch is not a release pin.
 

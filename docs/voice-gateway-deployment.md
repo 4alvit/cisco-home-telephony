@@ -137,7 +137,7 @@ provides `voice-wake-amd64.tar.gz`, `SHA256SUMS`, `image.json`, `receipt.json`
 and `source.json`. Download all five into a new private directory. Verify
 `SHA256SUMS` with `sha256sum -c SHA256SUMS` (or `shasum -a 256 -c SHA256SUMS`
 on macOS), and confirm that the source record identifies
-`96109316909fd8b4fa3609bd205b9d669bfbce24`. Before conversion, compare the
+`f0102f401108c4c7ae60b02be012d8739664a887`. Before conversion, compare the
 exported archive's configuration ID and `linux/amd64` platform with the supplied
 metadata. After import, verify the final manifest and any configuration/rootfs
 mapping as described below; the converted configuration ID need not equal the
