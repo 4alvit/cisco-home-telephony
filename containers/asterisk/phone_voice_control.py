@@ -954,6 +954,45 @@ class VoiceControl:
                          for key in ('turns_completed', 'input_frames', 'output_frames')))
         return True
 
+    def _sip_startup_stop_proof(self, s, report, raw):
+        """Validate a stopped, observed startup without inventing a media result."""
+        _require(s.profile.media_transport == 'sip_audiosocket')
+        self._completed_child(s, raw, (1,))
+        _require(s.stop_requested is True and s.stop_at is not None
+                 and s.requested_reason in ('explicit_stop', 'lease_expired', 'call_preempted', 'shutdown'))
+        proof = report['cleanup_proof']
+        _require(type(proof) is dict and set(proof) == {
+            'version', 'kind', 'transport', 'session_id', 'challenge', 'originate_attempted',
+            'startup_drained', 'startup_sealed', 'phone_seen', 'cleanup_complete'})
+        _require(type(proof['version']) is int and proof['version'] == 1
+                 and proof['kind'] == 'safe_sip_startup_stop'
+                 and proof['transport'] == 'sip_audiosocket' and proof['session_id'] == s.session_id
+                 and type(proof['challenge']) is str
+                 and re.fullmatch(r'[0-9a-f]{64}', proof['challenge'])
+                 and type(s.launch_challenge) is str
+                 and hmac.compare_digest(proof['challenge'], s.launch_challenge)
+                 and all(proof[key] is True for key in ('originate_attempted', 'startup_drained',
+                     'startup_sealed', 'phone_seen', 'cleanup_complete')))
+        diagnostic = report.get('startup_diagnostic')
+        _require(valid_startup_diagnostic(diagnostic)
+                 and diagnostic['reason'] == 'explicit_stop'
+                 and diagnostic['stage'] == 'sip_start' and diagnostic['error_type'] == 'BoundaryError')
+        _require(set(report) == {
+            'transport', 'session_id', 'recorded_audio', 'error', 'result', 'cleanup_errors',
+            'turns_completed', 'originate_attempted', 'speaker_attempted', 'pbx_deadline_armed',
+            'pbx_call_absent', 'safe_no_media_started', 'input_frames', 'output_frames',
+            'cleanup_proof', 'startup_diagnostic'}
+                 and report['transport'] == 'sip_audiosocket' and report['session_id'] == s.session_id
+                 and report['error'] == 'voice_session_failed' and report['result'] is None
+                 and report['originate_attempted'] is True and type(report['speaker_attempted']) is bool
+                 and report['pbx_deadline_armed'] is True and report['pbx_call_absent'] is True
+                 and report['safe_no_media_started'] is False and report['recorded_audio'] is False
+                 and type(report['cleanup_errors']) is list and report['cleanup_errors'] == []
+                 and s.turns_completed == 0
+                 and all(type(report[key]) is int and report[key] == 0
+                         for key in ('turns_completed', 'input_frames', 'output_frames')))
+        return True
+
     def _save_failure(self, s, raw, report, *, cleanup_evidence_verified):
         """Best-effort, bounded diagnostic evidence; never a recovery authority."""
         if (s.profile.media_transport != 'sip_audiosocket'
@@ -1076,11 +1115,19 @@ class VoiceControl:
         try:
             _require(isinstance(report, dict))
             if 'cleanup_proof' in report:
-                validate = self._no_sip_proof if s.profile.media_transport == 'sip_audiosocket' else self._no_media_proof
-                never_started = validate(s, report, raw)
-                clean, reason = True, 'voice_session_failed'
-                s.phase_reason = 'start_failed'
-                s.completion_reason = 'start_failed'
+                proof = report['cleanup_proof']
+                if (s.profile.media_transport == 'sip_audiosocket' and type(proof) is dict
+                        and proof.get('kind') == 'safe_sip_startup_stop'):
+                    confirmed = self._sip_startup_stop_proof(s, report, raw)
+                    clean, reason = True, None
+                    s.completion_reason = s.requested_reason
+                    s.phase_reason = 'call' if s.requested_reason == 'call_preempted' else s.requested_reason
+                else:
+                    validate = self._no_sip_proof if s.profile.media_transport == 'sip_audiosocket' else self._no_media_proof
+                    never_started = validate(s, report, raw)
+                    clean, reason = True, 'voice_session_failed'
+                    s.phase_reason = 'start_failed'
+                    s.completion_reason = 'start_failed'
             elif s.profile.media_transport == 'sip_audiosocket':
                 confirmed, clean, reason = self._sip_stop_report(s, report, raw)
             else:

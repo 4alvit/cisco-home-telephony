@@ -112,6 +112,48 @@ class AmiTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(BoundaryError):
             await port.start()
 
+    async def test_stop_after_speaker_drains_start_and_cleans_exact_call(self):
+        gateway, port = self.make()
+        original = gateway.execute
+
+        def stop_after_speaker(*args):
+            original(*args)
+            port.stop_event.set()
+
+        with patch.object(gateway, 'execute', side_effect=stop_after_speaker):
+            with self.assertRaisesRegex(BoundaryError, 'explicit_stop'):
+                await port.start()
+        self.assertTrue(port.originate_attempted)
+        self.assertTrue(port.seen_phone)
+        self.assertTrue(port.deadline_armed)
+        self.assertTrue(port.speaker_attempted)
+        self.assertFalse(port._start_active)
+        self.assertIsNone(port.grant)
+        self.assertEqual(gateway.keys, ['Key:Speaker'])
+        self.assertTrue(await port.hangup_and_confirm())
+        self.assertEqual([value['Channel'] for name, value in gateway.actions
+                          if name == 'Hangup'], ['99.1'])
+        self.assertTrue(port.seal_startup_stop())
+        with self.assertRaises(BoundaryError):
+            await port.start()
+
+    async def test_startup_stop_seal_refuses_unseen_active_or_unfinished_lifecycle(self):
+        for field, value in (('start_attempted', False), ('_start_active', True),
+                             ('originate_attempted', False), ('seen_phone', False),
+                             ('deadline_armed', False), ('absence_confirmed', False),
+                             ('used', True), ('thread', object()), ('grant', object())):
+            with self.subTest(field=field):
+                gateway, port = self.make()
+                port.start_attempted = port.originate_attempted = port.seen_phone = True
+                port.deadline_armed = port.absence_confirmed = True
+                setattr(port, field, value)
+                self.assertFalse(port.seal_startup_stop())
+                self.assertTrue(port._sealed)
+                self.assertTrue(port.stop_event.is_set())
+                with self.assertRaises(BoundaryError):
+                    await port.start()
+                self.assertEqual(gateway.actions, [])
+
     async def test_mismatched_token_or_missing_native_timeout_never_answers(self):
         for option in ('wrong_token', 'missing_deadline'):
             gateway, port = self.make()
@@ -541,6 +583,18 @@ def no_sip_report(session, challenge):
     }
 
 
+def startup_stop_report(session):
+    report = no_sip_report(session.session_id, session.launch_challenge)
+    report.update(originate_attempted=True, speaker_attempted=True,
+                  pbx_deadline_armed=True, safe_no_media_started=False,
+                  startup_diagnostic={'version': 1, 'reason': 'explicit_stop',
+                      'error_type': 'BoundaryError', 'stage': 'sip_start',
+                      'ami_stage': 'guard', 'ami_action': 'other', 'ami_error': 'other'})
+    report['cleanup_proof'].update(kind='safe_sip_startup_stop', originate_attempted=True,
+                                  startup_drained=True, startup_sealed=True, phone_seen=True)
+    return report
+
+
 class SipNoOriginateTests(control_tests.NoMediaCleanupTests):
     """Run the PR12 owner/EOF/exit/journal durability matrix for SIP as well."""
     def setUp(self):
@@ -617,6 +671,143 @@ class SipNoOriginateTests(control_tests.NoMediaCleanupTests):
         manager.tick()
         self.assertFalse(session.cleanup_verified)
         self.assertTrue(manager._journal(session.profile)['reserved'])
+
+
+class SipStartupStopTests(ControlFixture):
+    """An acknowledged Stop during startup needs its own exact cleanup proof."""
+
+    def setUp(self):
+        super().setUp()
+        self.transport['media_transport'] = 'sip_audiosocket'
+        self.voice['wake']['mode'] = 'onnx'
+        self.write_inputs()
+
+    def prepared(self, index=0, *, stop=True):
+        self.configuration['state_directory'] = '.local/startup-stop-' + str(index)
+        self.write_inputs()
+        manager = self.make_control()
+        state = self.start(manager)
+        session = manager._sessions[state['session_id']]
+        if stop:
+            self.stop(manager, session.session_id)
+        return manager, session, self.runners[-1], startup_stop_report(session)
+
+    def assert_reserved(self, manager, session):
+        self.assertFalse(session.cleanup_verified)
+        self.assertTrue(manager._journal(session.profile)['reserved'])
+
+    def test_exact_parent_stop_releases_without_a_fabricated_session_result(self):
+        manager, session, child, report = self.prepared()
+        previous_directory = session.directory
+        self.assertIsNone(report['result'])
+        child.finish(report, code=1)
+        manager.tick()
+        state = self.status(manager)
+        self.assertEqual(state['state'], 'stopped')
+        self.assertIsNone(state['error'])
+        self.assertTrue(state['stop_requested'])
+        self.assertTrue(state['stop_confirmed'])
+        self.assertEqual(state['turns_completed'], 0)
+        self.assertTrue(session.cleanup_verified)
+        self.assertFalse(manager._journal(session.profile)['reserved'])
+        self.assertLess(session.lease_fd, 0)
+        self.assertIsNone(session.directory)
+        self.assertFalse(previous_directory.exists())
+        self.assertEqual(session.completion_reason, 'explicit_stop')
+
+    def test_unsolicited_proof_cannot_release_without_parent_stop(self):
+        manager, session, child, report = self.prepared(stop=False)
+        child.finish(report, code=1)
+        manager.tick()
+        self.assert_reserved(manager, session)
+
+    def test_incomplete_parent_stop_identity_cannot_release(self):
+        for index, (field, value) in enumerate((('stop_at', None),
+                ('stop_requested', False), ('requested_reason', None))):
+            with self.subTest(field=field):
+                manager, session, child, report = self.prepared(index)
+                setattr(session, field, value)
+                child.finish(report, code=1)
+                manager.tick()
+                self.assert_reserved(manager, session)
+
+    def test_missing_mismatched_or_contradictory_startup_stop_proofs_stay_reserved(self):
+        mutations = [lambda r: r.pop('cleanup_proof'),
+                     lambda r: r.pop('startup_diagnostic'),
+                     lambda r: r['startup_diagnostic'].update(reason='call_setup_timeout'),
+                     lambda r: r['startup_diagnostic'].update(stage='peer_accept'),
+                     lambda r: r['startup_diagnostic'].update(error_type='RuntimeError')]
+        for field, values in {
+            'kind': ('safe_no_sip_originate',), 'session_id': ('0' * 32,),
+            'challenge': ('0' * 64, None), 'version': (True,),
+            'originate_attempted': (False,), 'startup_drained': (False,),
+            'startup_sealed': (False,), 'phone_seen': (False,), 'cleanup_complete': (False,),
+        }.items():
+            for value in values:
+                mutations.append(lambda r, f=field, v=value: r['cleanup_proof'].__setitem__(f, v))
+        for field in ('challenge', 'startup_drained', 'startup_sealed', 'phone_seen'):
+            mutations.append(lambda r, f=field: r['cleanup_proof'].pop(f))
+        for field, values in {
+            'cleanup_errors': (['connection_cleanup_failed'],), 'pbx_call_absent': (False,),
+            'pbx_deadline_armed': (False,), 'originate_attempted': (False,),
+            'safe_no_media_started': (True,), 'recorded_audio': (True,),
+            'turns_completed': (1,), 'input_frames': (1, False), 'output_frames': (1,),
+            'speaker_attempted': (1,), 'result': ({'stop_confirmed': True},),
+        }.items():
+            for value in values:
+                mutations.append(lambda r, f=field, v=value: r.__setitem__(f, v))
+        for index, mutate in enumerate(mutations):
+            with self.subTest(case=index):
+                manager, session, child, report = self.prepared(index)
+                mutate(report)
+                child.finish(report, code=1)
+                manager.tick()
+                self.assert_reserved(manager, session)
+
+    def test_first_parent_stop_reason_is_preserved(self):
+        for index, reason in enumerate(('lease_expired', 'call_preempted', 'shutdown')):
+            with self.subTest(reason=reason):
+                manager, session, child, report = self.prepared(index, stop=False)
+                with manager._lock:
+                    manager._request_stop(session, reason=reason)
+                child.finish(report, code=1)
+                manager.tick()
+                self.assertEqual(session.state, 'stopped')
+                self.assertTrue(session.cleanup_verified)
+                self.assertEqual(session.completion_reason, reason)
+
+    def test_killed_abnormal_live_or_incomplete_child_cannot_release(self):
+        for index, (code, killed, complete) in enumerate((
+                (-9, True, True), (1, True, True), (2, False, True),
+                (0, False, True), (None, False, True), (1, False, False))):
+            with self.subTest(code=code, killed=killed, complete=complete):
+                manager, session, child, report = self.prepared(index)
+                child.finish(report, code=code)
+                session.killed = killed
+                if not complete:
+                    child.result = None
+                manager.tick()
+                self.clock.advance(control.REPORT_GRACE_SECONDS + 1)
+                manager.tick()
+                self.assert_reserved(manager, session)
+
+    def test_changed_owner_is_preserved_instead_of_accepting_cleanup(self):
+        manager, session, child, report = self.prepared()
+        path = manager._paths(session.profile)[1]
+        original = path.read_bytes()
+        changed = json.loads(original)
+        changed['session_id'] = 'f' * 32
+        path.write_text(json.dumps(changed))
+        before = path.read_bytes()
+        child.finish(report, code=1)
+        try:
+            with self.assertRaises(control.ControlError):
+                manager.tick()
+            self.assertEqual(path.read_bytes(), before)
+            self.assertFalse(session.cleanup_verified)
+            self.assertGreaterEqual(session.lease_fd, 0)
+        finally:
+            path.write_bytes(original)
 
 
 if __name__ == '__main__':

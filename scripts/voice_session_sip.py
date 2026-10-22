@@ -99,6 +99,7 @@ async def run(args, config, private, phone, voice):
               'cleanup_errors': [], 'turns_completed': 0}
     stop_waiter = None
     cancelled = False
+    stop_signalled = startup_stopped = rejected_connection = False
     signal_handlers = []
     stage, failure_reason = 'service_build', None
 
@@ -127,6 +128,11 @@ async def run(args, config, private, phone, voice):
         if session is not None:
             session.request_stop()
 
+    def signal_stop():
+        nonlocal stop_signalled
+        stop_signalled = True
+        stop()
+
     def event(value):
         if value.reason != 'new_session':
             try:
@@ -136,9 +142,11 @@ async def run(args, config, private, phone, voice):
                 stop()
 
     def connected(reader, writer):
+        nonlocal rejected_connection
         # No task is spawned, and a second peer never replaces the first one.
         if (accepted.done() or stopped.is_set() or
                 writer.get_extra_info('peername', (None,))[0] != '127.0.0.1'):
+            rejected_connection = True
             # These transports belong to this listener but never to the media
             # session. Abort promptly rather than retain an unbounded peer list.
             close_connection(writer, abort=True)
@@ -148,7 +156,7 @@ async def run(args, config, private, phone, voice):
 
     try:
         for number in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(number, stop)
+            loop.add_signal_handler(number, signal_stop)
             signal_handlers.append(number)
         # ONNX construction happens before ringing or listening sockets.
         service = build_service(voice, Path(args.workspace).resolve(), sink,
@@ -197,6 +205,9 @@ async def run(args, config, private, phone, voice):
         cancelled = True
     except Exception as error:
         report['error'] = 'voice_session_failed'
+        startup_stopped = (stop_signalled and stage == 'sip_start'
+                           and isinstance(error, BoundaryError) and bool(error.args)
+                           and type(error.args[0]) is str and error.args[0] == 'explicit_stop')
         # Capture the first cause before cleanup changes the port state.
         report['startup_diagnostic'] = startup_diagnostic(error, stage, port, reason=failure_reason)
     finally:
@@ -273,6 +284,18 @@ async def run(args, config, private, phone, voice):
             loop.remove_signal_handler(number)
     if cancelled:
         raise asyncio.CancelledError
+    if (identity is not None and startup_stopped and session is None and wire is None
+            and not rejected_connection and report['result'] is None
+            and report['cleanup_errors'] == [] and report['pbx_call_absent'] is True
+            and report['turns_completed'] == 0 and report['input_frames'] == 0
+            and report['output_frames'] == 0 and port.seal_startup_stop()):
+        report['cleanup_proof'] = {
+            'version': 1, 'kind': 'safe_sip_startup_stop', 'transport': 'sip_audiosocket',
+            'session_id': identity[0], 'challenge': identity[1],
+            'originate_attempted': True, 'startup_drained': True, 'startup_sealed': True,
+            'phone_seen': True, 'cleanup_complete': True,
+        }
+        return report
     if (identity is not None and report['error'] == 'voice_session_failed'
             and report['result'] is None and report['cleanup_errors'] == []
             and not connections and wire is None and report['pbx_call_absent'] is True

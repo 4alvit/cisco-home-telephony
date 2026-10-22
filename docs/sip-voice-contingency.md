@@ -203,6 +203,13 @@ needs the updated gateway and both CLI files; it needs no HA update.
   An attempted but never-observed asynchronous originate remains reserved because
   it could still appear later. Its private deadline prevents a late indefinite
   call. Ambiguous cleanup stays `recovery_required`; do not delete the journal.
+- A manager-requested Stop during call setup uses a separate startup-stop proof
+  when the call was observed and its native deadline verified, but no voice
+  session was admitted. The child must finish normally after draining and
+  sealing startup, closing local transports and confirming exact-call absence.
+  The manager also checks the original launch identity and zero media/turns.
+  This does not accept unseen originates, failed cleanup or an old diagnostic
+  receipt as permission to release a reservation.
 
 The 300-second inner-session budget includes preparation and call setup.
 Hands-free renewal does not extend an existing phone-channel lease. The native PBX timeout
