@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1030" role="img" aria-labelledby="title desc">
+<title id="title">Motion snapshots from Home Assistant to idle Cisco phones</title>
+<desc id="desc">The original Home Assistant motion notification goes to iPhone and Apple Watch first. A local event starts a separate automation, which selects configured online idle physical phones without a gateway voice profile, fetches the first complete JPEG from that same notification camera, and uses the existing authenticated gateway to display one PNG. Busy phones and all voice-configured phones are skipped, including idle gaps between voice sessions. This version does not stream video or change calls.</desc>
+<defs>
+ <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#80dcd0"/></marker>
+ <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#b5a5ff"/></marker>
+</defs>
+<rect width="1440" height="1030" rx="20" fill="#102238"/>
+<g font-family="Arial, Helvetica, sans-serif">
+ <text x="60" y="64" font-size="34" font-weight="700" fill="#f4f8fc">Motion snapshots on Cisco phones</text>
+ <text x="60" y="103" font-size="21" fill="#bbcadc">One event, the same camera, one still image — with calls kept in control</text>
+ <rect x="60" y="154" width="280" height="132" rx="18" fill="#183b4c" stroke="#80dcd0" stroke-width="2"/>
+ <rect x="490" y="154" width="400" height="132" rx="18" fill="#183b4c" stroke="#80dcd0" stroke-width="2"/>
+ <rect x="1050" y="154" width="330" height="132" rx="18" fill="#183b4c" stroke="#80dcd0" stroke-width="2"/>
+ <g fill="#f4f8fc" font-size="25" font-weight="700">
+  <text x="85" y="199">Motion event</text><text x="515" y="199">Existing HA notification</text><text x="1075" y="199">iPhone + Apple Watch</text>
+ </g>
+ <g fill="#c5d9e5" font-size="20">
+  <text x="85" y="235">Selects a camera</text><text x="515" y="235">Original action runs first</text><text x="1075" y="235">Original media delivery</text>
+  <text x="85" y="262">and notification content</text><text x="515" y="262">Mobile path stays independent</text><text x="1075" y="262">No Cisco dependency</text>
+ </g>
+ <g fill="none" stroke="#80dcd0" stroke-width="3" marker-end="url(#arrow)"><path d="M343 219H477"/><path d="M893 219H1037"/></g>
+ <path d="M690 289V331" fill="none" stroke="#b5a5ff" stroke-width="3" marker-end="url(#arrow-purple)"/>
+ <rect x="440" y="344" width="500" height="130" rx="18" fill="#302e56" stroke="#b5a5ff" stroke-width="2"/>
+ <text x="465" y="384" font-size="25" font-weight="700" fill="#f4f8fc">Local HA event + consumer</text>
+ <text x="465" y="419" font-size="20" fill="#ded8ff">cisco_motion_snapshot_requested</text>
+ <text x="465" y="451" font-size="20" fill="#ded8ff">Parallel consumer; excess work is dropped</text>
+ <path d="M437 410H260V529" fill="none" stroke="#b5a5ff" stroke-width="3" marker-end="url(#arrow-purple)"/>
+ <rect x="60" y="542" width="400" height="192" rx="18" fill="#243b58" stroke="#88bdff" stroke-width="2"/>
+ <rect x="520" y="542" width="400" height="192" rx="18" fill="#463c2a" stroke="#f3c571" stroke-width="2"/>
+ <rect x="980" y="542" width="400" height="192" rx="18" fill="#243b58" stroke="#88bdff" stroke-width="2"/>
+ <g fill="#f4f8fc" font-size="25" font-weight="700">
+  <text x="85" y="587">1  Select eligible phones</text><text x="545" y="587">2  Acquire one frame</text><text x="1005" y="587">3  Existing gateway</text>
+ </g>
+ <g font-size="20">
+  <g fill="#c8def7"><text x="85" y="626">Online; no configured voice profile</text><text x="85" y="659">One result per physical handset</text><text x="85" y="692">Skip busy, DND and alert states</text></g>
+  <g fill="#f7dfb5"><text x="545" y="626">Authenticated HA camera stream</text><text x="545" y="659">Same selected camera entity</text><text x="545" y="692">First complete JPEG, then close</text></g>
+  <g fill="#c8def7"><text x="1005" y="626">Authenticated image action</text><text x="1005" y="659">Convert to a bounded PNG</text><text x="1005" y="692">Fetch through Cisco XML Services</text></g>
+ </g>
+ <g fill="none" stroke="#80dcd0" stroke-width="3" marker-end="url(#arrow)"><path d="M463 637H507"/><path d="M923 637H967"/><path d="M1180 737V786"/></g>
+ <rect x="980" y="799" width="400" height="163" rx="18" fill="#1c443d" stroke="#88ddab" stroke-width="2"/>
+ <text x="1005" y="842" font-size="25" font-weight="700" fill="#f4f8fc">Cisco 7945G: one still</text>
+ <text x="1005" y="877" font-size="20" fill="#c8eed6">298 × 156 Services image area</text>
+ <text x="1005" y="910" font-size="20" fill="#c8eed6">Press Exit to dismiss</text>
+ <text x="1005" y="939" font-size="18" fill="#c8eed6">API acceptance ≠ verified screen rendering</text>
+ <rect x="60" y="799" width="860" height="163" rx="18" fill="#182e47" stroke="#5b7492" stroke-width="1.5"/>
+ <text x="85" y="842" font-size="24" font-weight="700" fill="#f4f8fc">First version: a still, not a video player</text>
+ <text x="85" y="879" font-size="20" fill="#c3d2e5">All voice-configured phones are skipped, including idle gaps between calls.</text>
+ <text x="85" y="912" font-size="20" fill="#c3d2e5">A 120-second resource lifetime does not erase pixels already displayed.</text>
+ <text x="85" y="941" font-size="18" fill="#c3d2e5">Private configuration and tokens · no call, speaker or microphone action</text>
+ <text x="60" y="1004" font-size="18" fill="#9eb2c9">Source design and acceptance guidance. Deployment and physical-screen results must be recorded separately.</text>
+</g>
+</svg>

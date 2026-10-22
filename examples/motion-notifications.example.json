@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "gateway": {"base_url": "http://192.0.2.10:8080", "token_file": "gateway-token.txt"},
+  "home_assistant": {"base_url": "http://192.0.2.20:8123", "token_file": "ha-token.txt"},
+  "cameras": {
+    "front": {"entity_id": "camera.front_notification", "label": "Front motion"}
+  },
+  "destinations": ["201", "203"],
+  "state_directory": "state",
+  "cooldown_seconds": 60,
+  "max_event_age_seconds": 90
+}
