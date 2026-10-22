@@ -488,16 +488,46 @@ syntax error. An accepted call still needs state/audio verification. Full
 
 ## Updating and removing the client
 
-From the checkout, inspect local changes and fast-forward only when ready:
+The installation above checks out a release tag in **detached HEAD** state.
+Do not use `git pull` there. Select the next release and its recorded full
+source commit, and check compatibility with the installed server before
+updating. The example below reselects Beta 17; substitute both values when
+moving to another release.
+
+From the checkout, inspect local changes first. Preserve any uncommitted work
+before switching revisions; use a separate clean clone if necessary. Fetch
+the selected tag and inspect its commit:
 
 ```bash
 git status --short
-git pull --ff-only
+target_release=v0.1.0-beta.17
+git fetch --no-tags origin "refs/tags/$target_release:refs/tags/$target_release"
+git rev-parse "$target_release^{commit}"
+```
+
+For Beta 17, the result must be
+`f0102f401108c4c7ae60b02be012d8739664a887`. If it differs from the selected
+release's recorded commit, stop and resolve the mismatch. After verification,
+switch explicitly to that commit:
+
+```bash
+git switch --detach f0102f401108c4c7ae60b02be012d8739664a887
+```
+
+If you used a separate clone, inspect and repoint your existing `cisco` symlink
+to that verified checkout before running the checks below. Otherwise, the
+command still runs the old checkout. See the installation steps above for the
+link target and keep any unrelated executable intact.
+
+```bash
 cisco --help
 cisco 212
 ```
 
-The symlink follows the updated code. Keep the two scripts at the same revision.
+The symlink follows the code in this checkout. Keep the two scripts at the same
+revision. If you deliberately maintain a branch checkout instead, `git pull
+--ff-only` applies only to that branch with its configured upstream; it does
+not select a verified release.
 The private configuration under `~/.config/cisco-home/` is independent of Git;
 an update does not rotate tokens, reconfigure Asterisk or migrate gateway state.
 New server capabilities may require a separate coordinated deployment.
