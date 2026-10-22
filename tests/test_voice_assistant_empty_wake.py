@@ -1,4 +1,4 @@
-"""Local empty capture recovery; all HA and audio transports are in-memory."""
+"""Local/HA empty turn recovery; all HA and audio transports are in-memory."""
 
 import asyncio
 import json
@@ -35,15 +35,35 @@ class TrackedSocket(SimulatedHASocket):
         self.closed = True
 
 
+class STTErrorSocket(TrackedSocket):
+    """HA VAD followed by a provider error, without a synthetic success reply."""
+
+    async def send(self, message):
+        if isinstance(message, bytes) and len(message) == 1:
+            self.eos += 1
+            return
+        await super().send(message)
+
+    def finish_stt(self, code="stt-no-text-recognized", *, late=False):
+        self._event("stt-vad-start")
+        self._event("stt-vad-end")
+        if late:
+            self._event("intent-start")
+        self._event("error", {"code": code, "message": "synthetic private provider detail"})
+        self._event("run-end")
+
+
 class EmptyWakeTests(unittest.IsolatedAsyncioTestCase):
-    def make(self, *, assist=None, close_mode=None, playback=None, rearm=True, timeout=2):
+    def make(self, *, assist=None, close_mode=None, playback=None, rearm=True, timeout=2,
+             stt_error=False):
         self.now = [100.0]
         self.sockets = []
         self.playback = playback or Playback()
         self.events, self.replies = [], []
 
         async def connect(_url):
-            socket = TrackedSocket(close_mode)
+            socket_type = STTErrorSocket if stt_error and not self.sockets else TrackedSocket
+            socket = socket_type(close_mode)
             self.sockets.append(socket)
             return socket
 
@@ -214,17 +234,23 @@ class EmptyWakeTests(unittest.IsolatedAsyncioTestCase):
                     self.cleaning.set()
                     await asyncio.Event().wait()
 
-        playback = BlockingStop()
-        service = self.make(playback=playback)
-        stream = await self.started()
-        self.expire(stream)
-        await asyncio.wait_for(playback.cleaning.wait(), 1)
-        self.assertTrue(self.sockets[0].closed)
-        await asyncio.wait_for(service.stop("alpha", reason="lease_expired"), 1)
-        self.assertEqual(service.status("alpha").reason, "lease_expired")
-        self.assertIsNone(service._sessions["alpha"].stream_id)
-        self.assertEqual(self.playback.plays, [])
-        self.assertEqual([event.state for event in self.events].count("armed"), 1)
+        for stt_error in (False, True):
+            with self.subTest(stt_error=stt_error):
+                playback = BlockingStop()
+                service = self.make(playback=playback, stt_error=stt_error)
+                stream = await self.started()
+                if stt_error:
+                    self.sockets[0].finish_stt()
+                else:
+                    self.expire(stream)
+                await asyncio.wait_for(playback.cleaning.wait(), 1)
+                self.assertTrue(self.sockets[0].closed)
+                await asyncio.wait_for(service.stop("alpha", reason="lease_expired"), 1)
+                self.assertEqual(service.status("alpha").reason, "lease_expired")
+                self.assertIsNone(service._sessions["alpha"].stream_id)
+                self.assertEqual(self.playback.plays, [])
+                self.assertEqual([event.state for event in self.events].count("armed"), 1)
+                await service.close()
 
     async def test_ha_close_failure_or_deadline_cannot_rearm(self):
         for mode in ("failure", "block"):
@@ -299,7 +325,8 @@ class EmptyWakeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(service._sessions["alpha"].stream_id)
 
     async def test_unrelated_error_or_forged_empty_exception_cannot_rearm(self):
-        for failure in (AssistError("stt-no-text-recognized"), EmptyWakeTurn()):
+        for failure in (AssistError("stt-no-text-recognized"),
+                        AssistError("stt-stream-failed"), EmptyWakeTurn()):
             with self.subTest(failure=failure.code):
                 class FailingAssist(Assist):
                     async def run(self, *args, **kwargs):
@@ -310,4 +337,103 @@ class EmptyWakeTests(unittest.IsolatedAsyncioTestCase):
                 await self.idle()
                 self.assertEqual(service.status("alpha").reason, "turn_failed")
                 self.assertIsNone(service._sessions["alpha"].stream_id)
+                await service.close()
+
+    async def test_ha_empty_stt_waits_for_close_then_same_stream_can_answer(self):
+        service = self.make(stt_error=True, close_mode="block")
+        stream = await self.started()
+        revision = service._sessions["alpha"].revision
+        first = self.sockets[0]
+        first.finish_stt()
+        await asyncio.wait_for(first.closing.wait(), 1)
+        self.assertFalse(first.closed)
+        self.assertNotEqual(service.status("alpha").state, "armed")
+        first.release_close.set()
+        await self.idle()
+        self.assertTrue(first.closed)
+        self.assertEqual(service.status("alpha").state, "armed")
+        self.assertEqual(service._sessions["alpha"].stream_id, stream)
+        self.assertEqual(service._sessions["alpha"].revision, revision)
+        self.assertIsNone(service._sessions["alpha"].conversation_id)
+        self.assertEqual(self.playback.plays, [])
+        self.assertEqual(self.replies, [])
+        self.assertNotIn("speaking", [event.state for event in self.events])
+
+        service.feed_pcm("alpha", stream, FRAME)
+        for _ in range(100):
+            if len(self.sockets) == 2:
+                break
+            await asyncio.sleep(0)
+        self.assertEqual(len(self.sockets), 2)
+        self.sockets[1].release_close.set()
+        service.feed_pcm("alpha", stream, SPEECH)
+        self.now[0] += 2.5
+        service.feed_pcm("alpha", stream, bytes(640))
+        await self.idle()
+        self.assertEqual(service.status("alpha").state, "armed")
+        self.assertEqual(len(self.playback.plays), 1)
+        self.assertEqual(len(self.replies), 1)
+
+    async def test_ha_empty_stt_manual_or_no_rearm_remains_terminal(self):
+        for manual, rearm in ((True, True), (False, False)):
+            with self.subTest(manual=manual, rearm=rearm):
+                service = self.make(stt_error=True, rearm=rearm)
+                await self.started(manual=manual)
+                self.sockets[0].finish_stt()
+                await self.idle()
+                self.assertTrue(self.sockets[0].closed)
+                self.assertEqual(service.status("alpha").reason, "turn_failed")
+                self.assertIsNone(service._sessions["alpha"].stream_id)
+                self.assertEqual(self.playback.plays, [])
+                self.assertEqual(self.replies, [])
+                await service.close()
+
+    async def test_ha_empty_stt_close_failure_or_deadline_is_terminal(self):
+        for mode in ("failure", "block"):
+            with self.subTest(close_mode=mode):
+                service = self.make(stt_error=True, close_mode=mode)
+                await self.started()
+                self.sockets[0].finish_stt()
+                await self.idle()
+                self.assertEqual(service.status("alpha").reason, "turn_failed")
+                self.assertIsNone(service._sessions["alpha"].stream_id)
+                self.assertEqual(self.playback.plays, [])
+                self.assertEqual(self.replies, [])
+                await service.close()
+
+    async def test_stop_lease_or_replacement_during_empty_stt_close_wins(self):
+        for action in ("user_stop", "lease_expired", "replace"):
+            with self.subTest(action=action):
+                service = self.make(stt_error=True, close_mode="block")
+                stream = await self.started()
+                self.sockets[0].finish_stt()
+                await asyncio.wait_for(self.sockets[0].closing.wait(), 1)
+                if action == "replace":
+                    replacement = await asyncio.wait_for(service.listen("alpha"), 1)
+                    self.assertEqual(service._sessions["alpha"].stream_id, replacement)
+                else:
+                    await asyncio.wait_for(service.stop("alpha", reason=action), 1)
+                    self.assertIsNone(service._sessions["alpha"].stream_id)
+                    self.assertEqual(service.status("alpha").reason, action)
+                self.sockets[0].release_close.set()
+                await self.idle()
+                self.assertNotEqual(service._sessions["alpha"].stream_id, stream)
+                self.assertFalse(service.feed_pcm("alpha", stream, FRAME))
+                self.assertEqual(self.playback.plays, [])
+                self.assertEqual(self.replies, [])
+                await service.close()
+
+    async def test_ha_provider_failure_or_late_empty_stt_cannot_rearm(self):
+        for code, late in (("stt-stream-failed", False),
+                           ("stt-no-text-recognized", True)):
+            with self.subTest(code=code, late=late):
+                service = self.make(stt_error=True)
+                await self.started()
+                self.sockets[0].finish_stt(code, late=late)
+                await self.idle()
+                self.assertTrue(self.sockets[0].closed)
+                self.assertEqual(service.status("alpha").reason, "turn_failed")
+                self.assertIsNone(service._sessions["alpha"].stream_id)
+                self.assertEqual(self.playback.plays, [])
+                self.assertEqual(self.replies, [])
                 await service.close()
