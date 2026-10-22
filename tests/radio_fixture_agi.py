@@ -19,7 +19,7 @@ class FixtureCall(radio.Call):
         data = Path("/tmp/radio-fixture.mp3").read_bytes()
         # Fixture-only upper bound: smoke tests can observe normal completion
         # without waiting for the production minimum station time limit.
-        super().__init__(station, min(seconds, 3), token, **kwargs,
+        super().__init__(station, min(seconds, 5), token, **kwargs,
                          opener=lambda _station: (Source(), io.BytesIO(data)))
         instances.append(self)
 

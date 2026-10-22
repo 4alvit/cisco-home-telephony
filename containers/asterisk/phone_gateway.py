@@ -792,11 +792,109 @@ class Gateway:
         found = [alert for alert in self.alerts() if alert['phone'] == phone_id]
         return ({key: found[-1][key] for key in ('id', 'line', 'kind', 'state', 'reason')} if found else None)
 
+    def media_sources(self):
+        """Only configured radio services are music destinations, never arbitrary URLs."""
+        return {item['number'] for item in self.config.get('services', [])
+                if item['kind'] == 'radio' and item['number'] in self.config['dial_allowlist']}
+
+    @staticmethod
+    def media_state(state, reason=None, channel=None, source=None):
+        return {'state': state, 'source': source,
+                'line': channel['Channel'].split('/')[1].split('-')[0] if channel else None,
+                'channel': channel['Channel'] if channel else None,
+                'uniqueid': channel['Uniqueid'] if channel else None, 'reason': reason}
+
+    def media_snapshot(self, ami, endpoints, channels, phones=None):
+        """Bind a radio-only dialplan marker to a second fresh channel snapshot.
+
+        The marker is set on the actual radio caller, including calls dialled on
+        the handset. A missing marker on an older PBX never authorizes Stop.
+        Connected media means a verified AudioSocket bridge, not proof of sound.
+        """
+        phones = list(self.phones.values()) if phones is None else list(phones)
+        sources, markers = self.media_sources(), {}
+        for phone in phones:
+            owned = own_channels(phone, channels)
+            if len(owned) != 1:
+                continue
+            channel = owned[0]
+            if channel.get('Context') != 'home' or channel.get('Exten') not in sources:
+                continue
+            name, uid = channel['Channel'], channel.get('Uniqueid')
+            if not isinstance(uid, str) or not re.fullmatch(r'[0-9]+\.[0-9]+', uid):
+                continue
+            try:
+                response = ami.action('Getvar', Channel=name, Variable='CISCO_RADIO')
+            except Refused as error:
+                if getattr(error, 'ami_error', None) != 'no_such_channel':
+                    raise
+                response = []
+            values = [item.get('Value') for item in response
+                      if item.get('Response') == 'Success' and item.get('Variable') == 'CISCO_RADIO']
+            markers[(name, uid)] = values[0] if len(values) == 1 else None
+        if markers:
+            endpoints, channels = ami.snapshot()
+        states = {}
+        for phone in phones:
+            result = self._media_state(phone, endpoints, channels, markers, sources)
+            states[phone['id']] = result
+        return endpoints, channels, states
+
+    def _media_state(self, phone, endpoints, channels, markers, sources):
+        if not all(endpoints.get(line) not in (None, 'Unavailable', 'Invalid') for line in phone['lines']):
+            return self.media_state('blocked', 'offline')
+        owned = own_channels(phone, channels)
+        if len(owned) > 1:
+            return self.media_state('unknown', 'ambiguous')
+        if not owned:
+            states = {endpoints.get(line) for line in phone['lines']}
+            if states.intersection(('In use', 'Busy', 'Ringing', 'Ring+Inuse', 'On Hold')):
+                return self.media_state('blocked', 'call')
+            if states != {'Not in use'}:
+                return self.media_state('unknown', 'unavailable')
+            if self.preference(phone['id'])['dnd'] or phone['id'] in self.dnd_pending:
+                return self.media_state('blocked', 'dnd')
+            alert = self.latest_alert(phone['id'])
+            if alert and alert['state'] != 'ended':
+                return self.media_state('blocked', 'alert')
+            admission = self.motion_image_admission(phone)
+            if not admission['eligible']:
+                return self.media_state('blocked', 'voice')
+            return self.media_state('idle')
+        channel = owned[0]
+        if self.is_alert_channel(channel):
+            return self.media_state('blocked', 'alert')
+        if re.fullmatch(r'cisco-voice-[0-9a-f]{32}', channel.get('Linkedid', '')):
+            return self.media_state('blocked', 'voice')
+        source, uid = channel.get('Exten'), channel.get('Uniqueid')
+        if channel.get('Context') != 'home' or source not in sources:
+            return self.media_state('blocked', 'call')
+        marker = markers.get((channel['Channel'], uid))
+        if marker == '':
+            return self.media_state('unknown', 'unmarked')
+        if (not isinstance(uid, str) or not re.fullmatch(r'[0-9]+\.[0-9]+', uid)
+                or marker != f'1:{source}:{uid}'
+                or channel.get('Application') not in ('AGI', 'Dial')):
+            return self.media_state('unknown', 'unavailable')
+        bridge = channel.get('BridgeId')
+        if not bridge:
+            return self.media_state('buffering', channel=channel, source=source)
+        members = [item for item in channels if item.get('BridgeId') == bridge]
+        audio = [item for item in members if re.fullmatch(
+            r'AudioSocket/127\.0\.0\.1:[0-9]{1,5}-[0-9a-f-]{36}', item.get('Channel', ''))
+            and item.get('Linkedid') == channel.get('Linkedid')
+            and item.get('ChannelStateDesc') == 'Up']
+        if (len(members) == 2 and len(audio) == 1
+                and channel.get('Linkedid') and channel.get('ChannelStateDesc') == 'Up'):
+            return self.media_state('playing', channel=channel, source=source)
+        return self.media_state('unknown', 'ambiguous')
+
     def listing(self):
         with self.lock, AMI(self.config['ami']) as ami:
             endpoints, channels = ami.snapshot()
             self.reconcile_alerts(ami, channels)
             self.reconcile_intercoms(ami, channels)
+            endpoints, channels, media = self.media_snapshot(ami, endpoints, channels)
             return {'ami_fresh': True, 'observed_at': time.time(),
                     'dial_allowlist': self.config['dial_allowlist'],
                     'ring_allowlist': self.config.get('ring_allowlist', ['640']),
@@ -812,11 +910,12 @@ class Gateway:
                  'motion_image': self.motion_image_admission(phone),
                  'dnd_pending': phone['id'] in self.dnd_pending,
                  'alert': self.latest_alert(phone['id']),
+                 'media': media[phone['id']],
                  'online': all(endpoints.get(line) not in (None, 'Unavailable', 'Invalid') for line in phone['lines']),
                  'channels': [{'name': item['Channel'], 'uniqueid': item.get('Uniqueid'),
                                'state': item.get('ChannelStateDesc'), 'line': item['Channel'].split('/')[1].split('-')[0]}
                               for item in own_channels(phone, channels)],
-                 'capabilities': ['dial', 'intercom', 'answer', 'hangup', 'speaker_toggle', 'message', 'image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop'] + (['voice'] if any(
+                 'capabilities': ['dial', 'intercom', 'answer', 'hangup', 'speaker_toggle', 'message', 'image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop', 'media'] + (['voice'] if any(
                      profile.phone_id == phone['id'] for profile in self._voice_profiles) else [])}
                 for phone in self.phones.values()]}
 
@@ -1004,9 +1103,22 @@ class Gateway:
 
     def mutate(self, phone_id, action, body):
         require(phone_id in self.phones, 'unknown_phone', 404)
-        require(action in ('dial', 'intercom', 'answer', 'hangup', 'speaker', 'message', 'image', 'motion_image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop'),
+        require(action in ('dial', 'intercom', 'answer', 'hangup', 'speaker', 'message', 'image', 'motion_image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop', 'media_play', 'media_stop'),
                 'unknown_action', 404)
         require(isinstance(body, dict), 'json_object_required', 400)
+        if action in ('media_play', 'media_stop'):
+            fields = {'idempotency_key', 'source', 'line'}
+            if action == 'media_stop':
+                fields |= {'channel', 'uniqueid'}
+            require(set(body) == fields, 'invalid_media_request', 400)
+            require(isinstance(body['source'], str) and body['source'] in self.media_sources(),
+                    'media_source_not_allowed', 400)
+            require(body['line'] in self.phones[phone_id]['lines'], 'line_does_not_belong_to_phone', 400)
+            if action == 'media_stop':
+                require(isinstance(body['channel'], str) and re.fullmatch(
+                    r'PJSIP/' + re.escape(body['line']) + r'-[0-9a-f]+', body['channel'])
+                    and isinstance(body['uniqueid'], str)
+                    and re.fullmatch(r'[0-9]+\.[0-9]+', body['uniqueid']), 'invalid_media_identity', 400)
         if action == 'motion_image':
             body = dict(body)
             body.setdefault('idle_close_seconds', 45)
@@ -1051,10 +1163,10 @@ class Gateway:
         # Ordinary calls first retire only a supervised leg, then retain the
         # existing physical reservation and fresh call checks. Finite sessions
         # keep their existing behavior. Intercom suspends both endpoints itself.
-        phones = (phone,) if action in ('dial', 'speaker', 'message', 'image', 'answer') else ()
-        handoff = (phone,) if action in ('dial', 'answer', 'ring', 'alert', 'speaker') else ()
+        phones = (phone,) if action in ('dial', 'media_play', 'speaker', 'message', 'image', 'answer') else ()
+        handoff = (phone,) if action in ('dial', 'media_play', 'answer', 'ring', 'alert', 'speaker') else ()
         with self.suspend_hands_free(*handoff, resume=action != 'speaker',
-                                    wait_for_call=action in ('dial', 'ring', 'alert')) as managed:
+                                    wait_for_call=action in ('dial', 'media_play', 'ring', 'alert')) as managed:
             if managed and action in ('ring', 'alert'):
                 phones = (phone,)
             with self.reserve_phone_controls(*phones):
@@ -1077,6 +1189,16 @@ class Gateway:
         with AMI(self.config['ami']) as ami:
             endpoints, channels = ami.snapshot()
             self.reconcile_alerts(ami, channels)
+            if action == 'media_stop':
+                endpoints, channels, states = self.media_snapshot(ami, endpoints, channels, [phone])
+                media = states[phone['id']]
+                require(media['state'] in ('buffering', 'playing') and all(
+                    body[key] == media[key] for key in ('source', 'line', 'channel', 'uniqueid')),
+                    'media_identity_changed')
+                # Asterisk accepts Uniqueid here. Never fall back to a channel
+                # name that could have been reused after the final snapshot.
+                ami.action('Hangup', Channel=media['uniqueid'], Cause='16')
+                return {key: media[key] for key in ('source', 'line', 'channel', 'uniqueid')}
             if action == 'intercom':
                 return self.intercom(ami, phone, line, body.get('number'))
             if action == 'alert_stop':
@@ -1106,9 +1228,11 @@ class Gateway:
                                     for row in self.alerts()), 'alert_already_active')
                 self.notify(phone, 'image' if action == 'motion_image' else action, body)
                 return {'resource_ttl_seconds': 120}
-            if action in ('dial', 'ring', 'alert'):
+            if action in ('dial', 'media_play', 'ring', 'alert'):
                 require(not owned and all(endpoints.get(endpoint) == 'Not in use' for endpoint in phone['lines']), 'phone_busy')
                 require(not self.preference(phone['id'])['dnd'], 'do_not_disturb')
+                if action == 'media_play':
+                    require(phone['id'] not in self.dnd_pending, 'do_not_disturb')
                 require(not any(row['phone'] == phone['id'] and row['state'] != 'ended' for row in self.alerts()),
                         'alert_already_active')
                 if action == 'alert':
@@ -1138,7 +1262,7 @@ class Gateway:
                     ami.action('Originate', Channel='PJSIP/' + line, Context='home', Exten=destination, Priority='1',
                                Timeout='20000', Async='true', CallerID='Home alarm <640>')
                     return {'ring_timeout_seconds': 20, 'destination': destination}
-                number = body.get('number')
+                number = body.get('source') if action == 'media_play' else body.get('number')
                 require(number in self.config['dial_allowlist'], 'number_not_allowed', 400)
                 index = phone['lines'].index(line) + 1
                 # The Dial URI has NO line-selector suffix. Select the real
@@ -1146,7 +1270,7 @@ class Gateway:
                 self._mark_hands_free_call(phone)
                 execute(phone, 'Key:Line' + str(index))
                 execute(phone, 'Dial:' + number)
-                return {'line': line, 'number': number}
+                return {'line': line, 'source' if action == 'media_play' else 'number': number}
             if action == 'speaker':
                 require(body.get('mode') == 'toggle', 'only_explicit_toggle_supported', 400)
                 require(not owned, 'speaker_toggle_requires_idle_phone')
