@@ -1,8 +1,9 @@
 # Motion snapshots on Cisco phones
 
 A Home Assistant motion notification can also show **one still image** on
-configured, online, idle Cisco 7945G phones that have no gateway voice
-profile. The original iPhone/Apple Watch notification runs first. It then
+configured, online, idle Cisco 7945G phones. A configured voice profile is
+allowed when hands-free is disabled and the voice session has fully stopped.
+The original iPhone/Apple Watch notification runs first. It then
 fires a local HA event; a separate automation invokes the snapshot helper.
 A camera or phone failure cannot suppress the original notification.
 
@@ -67,8 +68,8 @@ Updates follow motion notifications, not a continuous refresh timer:
 - User interaction or an application focus change can delay or cancel native
   dismissal. A later push may still be skipped while the phone is occupied.
   The 45 seconds is not an unconditional wall-clock deadline.
-- Duplicate or stale events, calls, DND, alerts, offline state and configured
-  voice profiles still prevent delivery. A visible image is never a live view.
+- Duplicate or stale events, calls, DND, alerts, offline state and active or
+  uncertain voice state still prevent delivery. A visible image is never a live view.
 - A newly fetched frame is only as fresh as the camera's source. The title
   shows the notification time, not a verified camera exposure time.
 
@@ -89,33 +90,40 @@ and [HTTP interface](https://www.cisco.com/c/en/us/td/docs/voice_ip_comm/cuipph/
 ## Calls and hands-free take priority
 
 Here, an eligible phone means a configured physical handset with current
-online status and no observed call, DND or ringing-alert conflict. A phone
-whose gateway inventory advertises the `voice` capability is always excluded
-with reason `voice_configured`, even when momentarily idle or hands-free is
-disabled. This deliberately avoids racing a voice-session renewal; there is
-no override in this helper. Both line
+online status and no observed call, DND or ringing-alert conflict. A voice
+profile does not permanently exclude that handset: the updated gateway
+advertises `motion_image` eligibility and accepts the guarded `motion_image`
+action when hands-free is disabled and voice ownership is quiescent. Enabled
+hands-free, including gaps between sessions, and active, stopping or uncertain
+voice ownership still prevent delivery. Both line
 numbers map to the same handset and are deduplicated. Selection occurs before
 camera acquisition; no eligible destination means no camera request.
 
 The gateway remains the authority for its current call and voice reservations.
+It rechecks the voice guard while reserving the phone for image dispatch; the
+helper's earlier eligibility result is not permission to bypass that check.
+It never stops the assistant to display a motion notification.
 The final image request also uses Cisco's native **Priority 2**, which executes
 only if idle. A phone that becomes busy after preflight can therefore skip the
 page. No delayed notification is queued for the end of a call.
 
-**All voice-configured phones are skipped, including idle gaps between
-sessions.** Online or powered on does not mean eligible. This feature never stops the assistant
-or another call just to show a picture. Unavailable or ambiguous state is not
+**Enabled hands-free remains excluded, including idle gaps between sessions.**
+Online or powered on does not mean eligible. Unavailable or ambiguous state is not
 a reason to force the display. Backlight and native call-screen behavior still
 require physical acceptance on the installed firmware.
 
 ## Install the helper and private configuration
 
 The standalone [helper](../scripts/cisco_motion_snapshot.py) uses Python's
-standard library and the gateway image action. It does not require FFmpeg,
+standard library and the gateway motion-image action. It does not require FFmpeg,
 Pillow in HA, a new SIP account or a firmware change. **Deploy the updated
-gateway supporting `idle_close_seconds` before installing this helper.**
-Older gateways ignore that optional field and leave a static image open.
+gateway supporting `motion_image` and `idle_close_seconds` before installing this helper.**
+Gateways that lack idle-close support ignore that optional field and leave a
+static image open.
 The deployed gateway still needs its normal image-conversion dependencies.
+For compatibility, the helper can use the ordinary image action on older
+gateways for phones without voice profiles. Voice-configured phones remain
+excluded with `voice_configured` until the guarded gateway is installed.
 
 Install the helper as `/config/housekeeping/cisco_motion_snapshot.py` in the
 HA runtime. For a deployment where the HA configuration directory is mounted
@@ -175,8 +183,11 @@ variables and HTTP redirects are not used; configure the final trusted
 endpoint rather than a login or redirect URL.
 
 - `destinations: []` selects no phones. `destinations: ["*"]` is an explicit
-  all-phone candidate opt-in, bounded to ten physical handsets. Eligibility
-  exclusions still apply, including `voice_configured`.
+  all-phone candidate opt-in, bounded to ten physical handsets. It includes
+  currently powered-off phones in the configured scope. No per-phone update
+  is needed when one comes online: the next new motion event checks it again.
+  An offline phone cannot receive a picture, and missed events are not queued.
+  Eligibility exclusions still apply at delivery time.
 - `cooldown_seconds` is at least 60 seconds per physical phone, regardless of
   which camera triggered. This prevents two line numbers or repeated events
   from flooding the same screen.
@@ -251,8 +262,8 @@ Dry-run reads inventory and performs preflight only. It does **not** fetch the
 camera, send an image, or write deduplication/cooldown state. It still needs
 valid private configuration, credentials and gateway access.
 
-For a bounded physical test, temporarily select **one already-idle phone
-without a gateway voice profile** in the private destination list and run a
+For a bounded physical test, temporarily select **one already-eligible phone**
+in the private destination list and run a
 fresh command without `--dry-run`.
 Leave active calls and hands-free sessions alone. Confirm the picture, title,
 legibility and Exit on the phone; an API acceptance result alone is
@@ -280,8 +291,18 @@ Exit or another UI event. The page is not an ongoing camera monitor.
 
 - **No selected phones:** check `destinations`, inventory membership and the
   dry-run result. The helper deduplicates both lines of a handset.
-- **`voice_configured`:** the phone has a gateway voice profile. It is excluded
-  even if the assistant is disabled or between calls; there is no override.
+- **Only one phone receives a picture:** `destinations: ["*"]` includes every
+  configured handset, then the helper checks each independently. Inspect
+  dry-run `eligible` and `skipped`, including both line registrations. Two
+  numbers on one physical phone produce one picture. Offline phones remain
+  configured and are reconsidered on the next event after reconnecting.
+- **`voice_configured`:** this older gateway does not advertise guarded
+  motion-image eligibility. Upgrade the gateway first; do not remove the
+  fallback guard from the helper.
+- **Voice/hands-free busy or unavailable:** disable hands-free and allow its
+  current session to stop completely if the phone should receive pictures.
+  A configured voice profile can stay installed. Enabled hands-free remains
+  excluded even between sessions; an unknown state fails closed.
 - **Busy, DND or alert conflict:** skipping is expected. Do not bypass the idle
   rule or hang up a call to display the notification.
 - **API accepted, but no picture:** the phone may have become busy, failed to

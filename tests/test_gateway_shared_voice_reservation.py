@@ -88,6 +88,57 @@ class GatewaySharedReservationTests(unittest.TestCase):
         self.fixture.start(self.wake)
         self.assertEqual(len(self.fixture.launches), 1)
 
+    def attach_idle_supervisor(self):
+        supervisor = gateway.app_module('phone_voice_hands_free').HandsFreeSupervisor(
+            self.control, lambda _phone: 'idle', self.gateway._phone_voice_context, monitor=False)
+        self.gateway.hands_free = supervisor
+        self.gateway.dnd_pending.clear()
+        self.addCleanup(supervisor.close)
+        return supervisor
+
+    def test_motion_image_fences_external_start_through_display_io(self):
+        self.attach_idle_supervisor()
+        attempts = []
+
+        def display(_phone, action, body):
+            self.assertEqual(action, 'image')
+            self.assertEqual(body['idle_close_seconds'], 45)
+            try:
+                self.fixture.start(self.wake)
+            except wake_fixture.control.ControlError as error:
+                attempts.append(error.reason)
+
+        with mock.patch.object(self.gateway, 'notify', side_effect=display):
+            result = self.gateway.mutate('201', 'motion_image', {
+                'idempotency_key': 'motion-reserved'})
+        self.assertEqual(result['status'], 'accepted')
+        self.assertEqual(attempts, ['voice_phone_busy'])
+        self.assertEqual(self.fixture.launches, [])
+        self.fixture.start(self.wake)
+        self.assertEqual(len(self.fixture.launches), 1)
+
+    def test_motion_image_and_admission_refuse_active_external_voice(self):
+        self.attach_idle_supervisor()
+        self.fixture.start(self.wake)
+        self.assertEqual(self.gateway.motion_image_admission(self.gateway.phones['201']),
+                         {'eligible': False, 'reason': 'voice_phone_busy'})
+        with mock.patch.object(gateway, 'AMI') as ami:
+            with self.assertRaises(gateway.Refused) as caught:
+                self.gateway.mutate('201', 'motion_image', {'idempotency_key': 'motion-external-busy'})
+        self.assertEqual(caught.exception.reason, 'voice_phone_busy')
+        ami.assert_not_called()
+        self.sent.assert_not_called()
+
+    def test_motion_display_failure_releases_both_ownership_fences(self):
+        supervisor = self.attach_idle_supervisor()
+        with mock.patch.object(self.gateway, 'notify', side_effect=OSError('synthetic timeout')):
+            with self.assertRaises(OSError):
+                self.gateway.mutate('201', 'motion_image', {'idempotency_key': 'motion-failed-display'})
+        self.assertIsNone(supervisor._entries['201'].fd)
+        self.assertEqual(supervisor._entries['201'].suspended, 0)
+        self.fixture.start(self.wake)
+        self.assertEqual(len(self.fixture.launches), 1)
+
     def add_destination(self):
         profile = self.control.config.profiles[0]
         second = replace(profile, phone_id="203", lines=("203", "204"),

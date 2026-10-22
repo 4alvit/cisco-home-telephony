@@ -70,7 +70,9 @@ class GatewayTests(unittest.TestCase):
             {'extension': '209', 'room': "Operator's Mac", 'online': True},
             {'extension': '210', 'room': None, 'online': False}])
         self.assertEqual(set(listing['phones'][0]), {
-            'id', 'lines', 'room', 'dnd', 'autoanswer', 'dnd_pending', 'alert', 'online', 'channels', 'capabilities'})
+            'id', 'lines', 'room', 'dnd', 'autoanswer', 'dnd_pending', 'alert', 'online', 'channels', 'capabilities',
+            'motion_image'})
+        self.assertEqual(listing['phones'][0]['motion_image'], {'eligible': True, 'reason': None})
         encoded = json.dumps(listing)
         for private in ('a' * 48, 'b' * 48, 'u' * 24, 'p' * 24, 'c' * 64,
                         '192.168.50.', 'SEP001122334455'):
@@ -409,6 +411,48 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(len(set(app_ids)), 2)
         self.assertEqual(self.send.call_count, 2)
         self.assertEqual(FakeAMI.calls, [])
+
+    def test_motion_image_has_scoped_idle_close_and_idempotent_replay(self):
+        self.server.dnd_pending.clear()
+        body = self.image_request_body('motion-notification', 'Motion', (0, 0, 255))
+        result = self.server.mutate('201', 'motion_image', body)
+        push = self.send.call_args
+        self.assertEqual(push.kwargs, {'priority': 2})
+        path = gateway.parse.urlsplit(push.args[1]).path
+        document = ET.fromstring(self.server.resources[('201', path)][1])
+        app_id = document.get('appId')
+        self.assertRegex(app_id, r'^image_[0-9a-f]{32}$')
+        self.assertEqual(document.get('onAppFocusGained'), f'App:Close:1:45:{app_id}')
+        self.assertEqual(self.server.mutate('201', 'motion_image', body), result)
+        self.assertEqual(self.send.call_count, 1)
+        self.assertEqual(FakeAMI.calls, [])
+
+    def test_motion_image_requires_45_second_idle_close(self):
+        for value in (None, True, 44, 46, '45', 45.0):
+            with self.subTest(value=value):
+                body = self.image_request_body('bad-motion-close', 'Motion', (0, 0, 255))
+                body['idle_close_seconds'] = value
+                with self.assertRaises(gateway.Refused) as caught:
+                    self.server.mutate('201', 'motion_image', body)
+                self.assertEqual(caught.exception.reason, 'bad_idle_close_seconds')
+        self.send.assert_not_called()
+
+    def test_motion_image_rechecks_dnd_call_endpoint_and_alert_before_display(self):
+        body = self.image_request_body('guard-motion', 'Motion', (0, 0, 255))
+        for reason in ('dnd', 'dnd_pending', 'channel', 'endpoint', 'alert'):
+            with self.subTest(reason=reason):
+                self.server.db.execute('UPDATE preferences SET dnd=?', (reason == 'dnd',))
+                self.server.dnd_pending = {'201'} if reason == 'dnd_pending' else set()
+                FakeAMI.channels = ([{'Channel': 'PJSIP/202-abcd', 'Uniqueid': 'call'}]
+                                    if reason == 'channel' else [])
+                FakeAMI.endpoints['202'] = 'In use' if reason == 'endpoint' else 'Not in use'
+                alerts = [{'phone': '201', 'state': 'ringing'}] if reason == 'alert' else []
+                with patch.object(self.server, 'reconcile_alerts'), \
+                     patch.object(self.server, 'alerts', return_value=alerts):
+                    with self.assertRaises(gateway.Refused):
+                        self.server.mutate('201', 'motion_image', body)
+        self.send.assert_not_called()
+        self.assertEqual(self.server.resources, {})
 
     def test_invalid_idle_image_close_is_rejected_before_any_effects(self):
         for seconds in (None, True, False, -1, 0, 5, 9, 121, 86400, 45.0, '45', [], {}):

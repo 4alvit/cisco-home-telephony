@@ -388,6 +388,65 @@ class HandsFreeSupervisor:
         with self.manager._lock:
             return self._view(self._entries[p.phone_id], target)
 
+    def _notification_idle(self, entry):
+        self._require(not entry.enabled, 'hands_free_enabled')
+        self._require(not entry.blocked and not entry.storage_failed
+                      and entry.error is None, 'voice_state_unavailable')
+        session = entry.session
+        self._require(not entry.pending and not entry.launching
+                      and not entry.retry_pending and entry.control_pending is None
+                      and not entry.suspended
+                      and (session is None or session.lease_fd < 0
+                           and session.state not in ACTIVE and session.cleanup_verified),
+                      'voice_phone_busy')
+
+    @contextmanager
+    def reserve_idle_notification(self, phone_id):
+        """Admit a passive image only while supervised capture is disabled.
+
+        Hold the desired-state owner fence and inhibit launch during the image
+        request. Unlike call handoff this never stops a session or edits its
+        journal. The caller must additionally reserve the finite voice lease.
+        A later explicit enable may proceed after the request; the native image
+        is idle-only and its close timer names only that image application.
+        """
+        entry, acquired, entered = None, False, False
+        with self.manager._lock:
+            self._require(not self._closed and not self.manager._closed,
+                          'voice_control_closed', 503)
+            entry = self._entries.get(phone_id)
+            if entry is not None:
+                self._notification_idle(entry)
+                if entry.fd is None:
+                    # A status cached while another process owned the phone is
+                    # not authoritative. Read under its owner flock, without
+                    # _own/_restore: refusal must not repair or persist state.
+                    probe = _Desired(entry.profile, entry.line)
+                    try:
+                        self._acquire(probe)
+                        self._load(probe)
+                        self._notification_idle(probe)
+                        self._load(entry)
+                        entry.fd, probe.fd = probe.fd, None
+                        acquired = True
+                    finally:
+                        self._release(probe)
+                entry.suspended += 1
+                entered = True
+        try:
+            yield
+        finally:
+            if entered:
+                with self.manager._lock:
+                    entry.suspended -= 1
+                    # Concurrent explicit enable retains its normal ownership;
+                    # otherwise the read-only probe leaves no lasting owner.
+                    if acquired and not entry.enabled and not entry.pending \
+                            and entry.control_pending is None and not entry.launching \
+                            and not entry.suspended and entry.session is None:
+                        self._release(entry)
+                    self._wake.set()
+
     def admit(self, phone_id, generation):
         with self.manager._lock:
             entry = self._entries[phone_id]

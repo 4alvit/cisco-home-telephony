@@ -202,6 +202,55 @@ class GatewayHandsFreeTests(unittest.TestCase):
         execute.assert_not_called()
         self.gateway.voice.reserve_control.assert_not_called()
 
+    def test_motion_image_uses_passive_guard_and_finite_reservation_without_handoff(self):
+        self.gateway.dnd_pending.clear()
+        @contextlib.contextmanager
+        def passive(phone_id):
+            self.inhibited.add(phone_id)
+            self.events.append(('passive', phone_id))
+            try:
+                yield
+            finally:
+                self.inhibited.remove(phone_id)
+                self.events.append(('passive_done', phone_id))
+        self.supervisor.reserve_idle_notification.side_effect = passive
+
+        def display(phone, action, body):
+            self.assertEqual(self.inhibited, {'201'})
+            self.assertEqual(self.reserved, {'201'})
+            self.assertEqual(action, 'image')
+            self.assertEqual(body['idle_close_seconds'], 45)
+            self.events.append(('display',))
+
+        with mock.patch.object(self.gateway, 'notify', side_effect=display):
+            result = self.gateway.mutate('201', 'motion_image', {'idempotency_key': 'passive-motion'})
+        self.assertEqual(result['status'], 'accepted')
+        self.assertEqual(self.events, [('passive', '201'), ('reserve', '201'),
+                                      ('display',), ('release', '201'), ('passive_done', '201')])
+        self.supervisor.suspend_for_control.assert_not_called()
+        self.supervisor.mark_control_dispatch.assert_not_called()
+        self.gateway.voice.stop.assert_not_called()
+
+    def test_motion_image_refusal_and_listing_are_fail_closed(self):
+        for reason in ('hands_free_enabled', 'voice_phone_busy', 'voice_state_unavailable'):
+            with self.subTest(reason=reason):
+                self.supervisor.reserve_idle_notification.side_effect = self.core.ControlError(reason)
+                self.assertEqual(self.gateway.motion_image_admission(self.gateway.phones['201']),
+                                 {'eligible': False, 'reason': reason})
+                with mock.patch.object(gateway, 'AMI') as ami, mock.patch.object(self.gateway, 'notify') as notify:
+                    with self.assertRaises(gateway.Refused) as caught:
+                        self.gateway.mutate('201', 'motion_image', {'idempotency_key': 'blocked-motion'})
+                self.assertEqual(caught.exception.reason, reason)
+                ami.assert_not_called()
+                notify.assert_not_called()
+        self.gateway.voice.reserve_control.assert_not_called()
+        self.supervisor.suspend_for_control.assert_not_called()
+
+    def test_motion_listing_hides_unknown_error_details(self):
+        self.supervisor.reserve_idle_notification.side_effect = OSError('sensitive path')
+        self.assertEqual(self.gateway.motion_image_admission(self.gateway.phones['201']),
+                         {'eligible': False, 'reason': 'voice_state_unavailable'})
+
     def test_idle_observation_requires_both_lines_no_channels_and_fresh_complete_data(self):
         self.assertEqual(self.gateway._hands_free_observe('201'), 'idle')
         for state, expected in (('In use', 'busy'), ('Ringing', 'busy'),

@@ -152,6 +152,84 @@ class HandsFreeTests(unittest.TestCase):
     def record(self):
         return json.loads(self.supervisor._paths(self.supervisor._entries['201'])[1].read_text())
 
+    def test_idle_notification_is_temporary_and_does_not_create_journal(self):
+        entry = self.supervisor._entries['201']
+        _, journal = self.supervisor._paths(entry)
+        with self.supervisor.reserve_idle_notification('201'):
+            self.assertEqual(entry.suspended, 1)
+            self.assertIsNotNone(entry.fd)
+            self.supervisor.tick()
+            self.assertIsNotNone(entry.fd)
+            self.assertFalse(journal.exists())
+        self.assertEqual(entry.suspended, 0)
+        self.assertIsNone(entry.fd)
+        self.assertFalse(journal.exists())
+        self.assertEqual(self.runners, [])
+
+    def test_idle_notification_refuses_enabled_pending_and_uncertain_states(self):
+        entry = self.supervisor._entries['201']
+        for field, value in (('enabled', True), ('pending', True), ('launching', True),
+                             ('blocked', True), ('storage_failed', True),
+                             ('retry_pending', True), ('control_pending', {'id': 'pending'})):
+            with self.subTest(field=field), mock.patch.object(entry, field, value):
+                with self.assertRaises(control.ControlError):
+                    with self.supervisor.reserve_idle_notification('201'):
+                        self.fail('unsafe state admitted')
+                self.assertEqual(entry.suspended, 0)
+        self.assertEqual(self.runners, [])
+
+    def test_idle_notification_rechecks_external_state_without_repair_writes(self):
+        self.enable()
+        self.disable()
+        entry = self.supervisor._entries['201']
+        _, journal = self.supervisor._paths(entry)
+        self.supervisor.tick()
+        self.assertIsNone(entry.fd)
+        record = json.loads(journal.read_text())
+        record['enabled'], record['pending'] = True, True
+        journal.write_text(json.dumps(record))
+        before = journal.read_bytes()
+        with self.assertRaises(control.ControlError):
+            with self.supervisor.reserve_idle_notification('201'):
+                self.fail('stale disabled state admitted')
+        self.assertEqual(journal.read_bytes(), before)
+        self.assertIsNone(entry.fd)
+        self.assertFalse(entry.enabled)
+        self.assertEqual(self.runners, [])
+
+    def test_idle_notification_refuses_another_desired_state_owner(self):
+        _, other = self.new_manager()
+        with other.reserve_idle_notification('201'):
+            with self.assertRaises(control.ControlError) as caught:
+                with self.supervisor.reserve_idle_notification('201'):
+                    self.fail('external owner admitted')
+            self.assertEqual(caught.exception.reason, 'hands_free_owner_unavailable')
+        with self.supervisor.reserve_idle_notification('201'):
+            pass
+
+    def test_enable_during_idle_notification_waits_until_dispatch_finishes(self):
+        with self.supervisor.reserve_idle_notification('201'):
+            self.enable()
+            self.supervisor.tick()
+            self.clock.advance(3)
+            self.supervisor.tick()
+            self.assertEqual(self.runners, [])
+        self.assertTrue(self.status()['enabled'])
+        session = self.start()
+        self.assertEqual(len(self.runners), 1)
+        self.assertEqual(session.handle.stops, 0)
+
+    def test_idle_notification_exception_releases_owner(self):
+        with self.assertRaisesRegex(RuntimeError, 'synthetic'):
+            with self.supervisor.reserve_idle_notification('201'):
+                raise RuntimeError('synthetic')
+        entry = self.supervisor._entries['201']
+        self.assertEqual(entry.suspended, 0)
+        self.assertIsNone(entry.fd)
+        _, other = self.new_manager()
+        with other.reserve_idle_notification('201'):
+            pass
+
     def test_default_status_and_dry_run_are_read_only(self):
         self.assertEqual(self.status()['state'], 'disabled')
         self.assertFalse(self.state.exists())

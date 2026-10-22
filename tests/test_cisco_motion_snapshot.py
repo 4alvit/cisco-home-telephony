@@ -288,6 +288,102 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(len(http.streams), 1)
         self.assertEqual(http.posts, [])
 
+    def test_disabled_voice_phone_uses_guarded_motion_action(self):
+        http = FakeHTTP(inventory('201'))
+        phone = http.data['phones'][0]
+        phone['capabilities'].append('voice')
+        phone['motion_image'] = {'eligible': True, 'reason': None}
+        self.config['destinations'] = ['*']
+        result = self.run_event(http)
+        self.assertEqual(result['accepted'], ['201'])
+        self.assertEqual(http.posts[0][0], '/v1/phones/201/motion_image')
+        self.assertEqual(http.posts[0][1]['idle_close_seconds'], 45)
+
+    def test_motion_guard_refusal_and_unknown_state_fetch_no_camera(self):
+        for reason in ('hands_free_enabled', 'voice_phone_busy', 'voice_state_unavailable'):
+            with self.subTest(reason=reason):
+                http = FakeHTTP(inventory('201'))
+                http.data['phones'][0]['motion_image'] = {'eligible': False, 'reason': reason}
+                self.config['destinations'] = ['*']
+                result = self.run_event(http)
+                self.assertEqual(result['skipped'], [{'phone': '201', 'reason': reason}])
+                self.assertEqual(http.streams, [])
+                self.assertEqual(http.posts, [])
+
+    def test_voice_enabled_during_camera_fetch_skips_motion_post(self):
+        http = FakeHTTP(inventory('201'))
+        http.data['phones'][0]['motion_image'] = {'eligible': True, 'reason': None}
+        self.config['destinations'] = ['*']
+        def change(obj):
+            if obj.reads == 2:
+                obj.data['phones'][0]['motion_image'] = {
+                    'eligible': False, 'reason': 'hands_free_enabled'}
+        http.on_read = change
+        result = self.run_event(http)
+        self.assertEqual(result['skipped'], [{'phone': '201', 'reason': 'hands_free_enabled'}])
+        self.assertEqual(len(http.streams), 1)
+        self.assertEqual(http.posts, [])
+
+    def test_invalid_motion_guard_is_not_treated_as_eligible(self):
+        for guard in (None, {}, True, {'eligible': 1, 'reason': None},
+                      {'eligible': True, 'reason': 'busy'},
+                      {'eligible': False, 'reason': None},
+                      {'eligible': False, 'reason': 'private remote response!'},
+                      {'eligible': True, 'reason': None, 'extra': True}):
+            with self.subTest(guard=guard):
+                http = FakeHTTP(inventory('201'))
+                http.data['phones'][0]['motion_image'] = guard
+                self.config['destinations'] = ['*']
+                result = self.run_event(http)
+                self.assertEqual(result['reason'], 'invalid_inventory')
+                self.assertEqual(http.streams, [])
+                self.assertEqual(http.posts, [])
+
+    def test_wildcard_keeps_offline_phones_configured_for_next_new_event(self):
+        ids = [str(201 + i * 2) for i in range(10)]
+        http = FakeHTTP(inventory(*ids))
+        self.config['destinations'] = ['*']
+        for phone in http.data['phones']:
+            phone['motion_image'] = {'eligible': True, 'reason': None}
+            phone['online'] = False
+        first = self.run_event(http)
+        self.assertEqual(len(first['skipped']), 10)
+        self.assertEqual(http.streams, [])
+        self.assertEqual(self.config['destinations'], ['*'])
+        for phone in http.data['phones']:
+            phone['online'] = True
+        second = self.run_event(http, event='event_reconnected')
+        self.assertEqual(second['accepted'], ids)
+        self.assertEqual(len(http.streams), 1)
+        self.assertEqual([path for path, _ in http.posts],
+                         ['/v1/phones/' + phone + '/motion_image' for phone in ids])
+
+    def test_voice_gateway_downgrade_on_recheck_does_not_fall_back_to_image(self):
+        http = FakeHTTP(inventory('201'))
+        phone = http.data['phones'][0]
+        phone['capabilities'].append('voice')
+        phone['motion_image'] = {'eligible': True, 'reason': None}
+        self.config['destinations'] = ['*']
+        def change(obj):
+            if obj.reads == 2:
+                obj.data['phones'][0].pop('motion_image')
+        http.on_read = change
+        result = self.run_event(http)
+        self.assertEqual(result['skipped'], [{'phone': '201', 'reason': 'voice_configured'}])
+        self.assertEqual(http.posts, [])
+
+    def test_nonvoice_gateway_downgrade_does_not_bypass_motion_guard(self):
+        http = FakeHTTP(inventory('201'))
+        http.data['phones'][0]['motion_image'] = {'eligible': True, 'reason': None}
+        self.config['destinations'] = ['*']
+        def change(obj):
+            if obj.reads == 2:
+                obj.data['phones'][0].pop('motion_image')
+        http.on_read = change
+        result = self.run_event(http)
+        self.assertEqual(result['skipped'], [{'phone': '201', 'reason': 'motion_guard_unavailable'}])
+        self.assertEqual(http.posts, [])
+
     def test_later_target_dnd_change_during_previous_post_is_respected(self):
         http = FakeHTTP()
         def change(obj):

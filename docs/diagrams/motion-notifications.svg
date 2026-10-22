@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1030" role="img" aria-labelledby="title desc">
 <title id="title">Motion snapshots from Home Assistant to idle Cisco phones</title>
-<desc id="desc">The original Home Assistant motion notification goes to iPhone and Apple Watch first. A local event starts a separate automation, which selects configured online idle physical phones without a gateway voice profile, fetches the first complete JPEG from that same notification camera, and uses the authenticated gateway to display one PNG. A unique application ID requests native closing after 45 seconds of application idle time, freeing the screen for the next eligible event. Interaction can delay or cancel closing. Updates have a minimum 60-second cooldown; events during cooldown are dropped. Busy phones and all voice-configured phones are skipped. This version does not stream video or change calls.</desc>
+<desc id="desc">The original Home Assistant motion notification goes to iPhone and Apple Watch first. A local event starts a separate automation, which selects configured online idle physical phones with quiescent voice state, fetches the first complete JPEG from that same notification camera, and uses the authenticated gateway to display one PNG. A unique application ID requests native closing after 45 seconds of application idle time, freeing the screen for the next eligible event. Interaction can delay or cancel closing. Updates have a minimum 60-second cooldown; events during cooldown are dropped. Busy phones, enabled hands-free and uncertain voice state are skipped. Offline phones stay configured for future events. This version does not stream video or change calls.</desc>
 <defs>
  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#80dcd0"/></marker>
  <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#b5a5ff"/></marker>
@@ -33,9 +33,9 @@
   <text x="85" y="587">1  Select eligible phones</text><text x="545" y="587">2  Acquire one frame</text><text x="1005" y="587">3  Existing gateway</text>
  </g>
  <g font-size="20">
-  <g fill="#c8def7"><text x="85" y="626">Online; no configured voice profile</text><text x="85" y="659">One result per physical handset</text><text x="85" y="692">Skip busy, DND and alert states</text></g>
+  <g fill="#c8def7"><text x="85" y="626">Online; voice stopped, hands-free off</text><text x="85" y="659">One result per physical handset</text><text x="85" y="692">Skip busy, DND and alert states</text></g>
   <g fill="#f7dfb5"><text x="545" y="626">Authenticated HA camera stream</text><text x="545" y="659">Same selected camera entity</text><text x="545" y="692">First complete JPEG, then close</text></g>
-  <g fill="#c8def7"><text x="1005" y="626">Authenticated image action</text><text x="1005" y="659">Convert to a bounded PNG</text><text x="1005" y="692">Fetch through Cisco XML Services</text></g>
+  <g fill="#c8def7"><text x="1005" y="626">Guarded motion-image action</text><text x="1005" y="659">Convert to a bounded PNG</text><text x="1005" y="692">Fetch through Cisco XML Services</text></g>
  </g>
  <g fill="none" stroke="#80dcd0" stroke-width="3" marker-end="url(#arrow)"><path d="M463 637H507"/><path d="M923 637H967"/><path d="M1180 737V786"/></g>
  <rect x="980" y="799" width="400" height="163" rx="18" fill="#1c443d" stroke="#88ddab" stroke-width="2"/>

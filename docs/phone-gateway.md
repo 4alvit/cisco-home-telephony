@@ -107,7 +107,9 @@ automatically after recovery.
 All API requests require `Authorization: Bearer <private-token>` from a configured
 HA source. `GET /v1/phones` returns stable primary IDs, assigned lines, live AMI
 registration/call state, PBX DND, auto-answer, the latest `alert` and capability names. It does not
-return credentials. Every mutation is a JSON POST to
+return credentials. The `motion_image` object reports current voice-guard
+eligibility (`eligible` and `reason`); it does not override the separate online,
+call, DND or alert checks. Every mutation is a JSON POST to
 `/v1/phones/<primary-line>/<action>` with a unique `idempotency_key`.
 
 - `dial`: `line`, `number`; only explicit configured numbers are accepted.
@@ -139,6 +141,12 @@ return credentials. Every mutation is a JSON POST to
   for lifecycle limits and firmware acceptance.
   EXIF orientation is applied, metadata is removed, and the picture is converted
   to a bounded RGB PNG fitting the7945G's **298×156** Services pane.
+- `motion_image`: the same image payload, with native idle closing fixed at
+  45 seconds. It rechecks idle registration, DND, alerts and voice ownership
+  before dispatch. A voice profile is allowed when hands-free is disabled and
+  its session has fully stopped; active or uncertain ownership is rejected.
+  It never stops or disables an assistant and retains native `Priority=2`.
+  See [all-phone motion delivery](motion-notifications.md).
 
 Successful requests return `status: "accepted"` and `action_id`. HTTP409 means
 busy, DND or stale/ambiguous ownership; an unavailable dependency returns503.
