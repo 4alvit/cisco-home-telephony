@@ -139,8 +139,12 @@ call, DND or alert checks. Every mutation is a JSON POST to
 - `ring`: `line`, `destination` (default 640). This legacy finite call rings for
   at most 20 seconds and runs the allowlisted destination after answer. It is
   **not the timer/alarm scheduler path**. Manual 640 remains a finite tone test.
-- `message`: `title`, `text` (up to2000characters).
+- `message`: `title`, `text` (up to 2000 characters). Manual text uses native
+  `Priority=0` to foreground its page, replacing a visible menu or motion image.
+  Existing fresh call and voice-ownership checks still apply. The plain text
+  page issues no call, speaker or audio commands.
 - `image`: `title`, `image_base64`; PNG/JPEG up to2MiB and16million source pixels.
+  Images retain native idle-only `Priority=2` delivery.
   Optional `idle_close_seconds` is an integer from 10 to 120. It assigns a unique
   Cisco application ID and requests native idle-time closing for that image.
   Omit it to keep the existing manual-dismissal behavior. See
@@ -157,8 +161,12 @@ call, DND or alert checks. Every mutation is a JSON POST to
 
 Successful requests return `status: "accepted"` and `action_id`. HTTP409 means
 busy, DND or stale/ambiguous ownership; an unavailable dependency returns503.
+Acceptance, including a Cisco Execute `Status=0`, is not proof that the page
+rendered or someone saw it. Image requests can be discarded by a busy native
+interface. The gateway does not automatically resend a notification.
 An ambiguous network outcome is never retried automatically. Reusing a completed
-idempotency key returns its recorded result; a pending key returns a conflict.
+idempotency key returns its recorded result without reopening the page; a pending
+key returns a conflict.
 Retain keys for one logical timer/alarm occurrence, not across different events.
 
 ### Radio state and Home Assistant media players

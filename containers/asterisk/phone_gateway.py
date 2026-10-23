@@ -1124,8 +1124,9 @@ class Gateway:
         ET.SubElement(key, 'URL').text = 'SoftKey:Exit'
         ET.SubElement(key, 'Position').text = '1'
         uri = self.resource(phone, ET.tostring(root, encoding='utf-8', xml_declaration=True), 'text/xml; charset=utf-8')
-        # Unlike Key:/Dial:, an HTTP URI obeys Priority=2 (idle-only).
-        execute(phone, uri, priority=2)
+        # Manual text foregrounds the page after call/voice admission;
+        # images retain the phone's native idle-only delivery.
+        execute(phone, uri, priority=0 if action == 'message' else 2)
 
     def mutate(self, phone_id, action, body):
         require(phone_id in self.phones, 'unknown_phone', 404)

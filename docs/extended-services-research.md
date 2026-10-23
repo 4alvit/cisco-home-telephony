@@ -361,7 +361,7 @@ display. The model-specific limits and centering are in Cisco's
 chapters 3 and 5. Cisco's [image-format note](https://community.cisco.com/t5/collaboration-knowledge-base/image-format-for-7945-7965-phones/ta-p/3633019)
 also discusses simpler PNG encoding for these models.
 
-Request an idle-only display with:
+The gateway requests an idle-only image or motion display with:
 
 ```xml
 <CiscoIPPhoneExecute>
@@ -371,9 +371,18 @@ Request an idle-only display with:
 
 **Priority applies only to HTTP URLs. Internal `Key:`, `Dial:` and `Play:` URIs
 execute immediately regardless of Priority.** Priority 2 can discard a busy-phone
-request; a successful CGI response is not proof that a person saw the message.
+request; a successful CGI response, including Execute `Status=0`, is not proof
+that the page rendered or a person saw it.
 Keep one ExecuteItem per request and check the response's item status, then use
 an observed screenshot for attended acceptance.
+
+Manual `message` requests instead use HTTP `Priority=0`: the plain text page
+foregrounds over the current menu or image after the gateway's existing fresh
+call and voice-ownership checks. The page contains no call or audio commands.
+Image and automatic motion requests remain at `Priority=2`. Neither path
+automatically resends notifications; replaying a completed idempotency key returns
+the saved result without reopening the page. See the
+[gateway action contract](phone-gateway.md).
 
 ### Pictures, sprites and SMS are different features
 

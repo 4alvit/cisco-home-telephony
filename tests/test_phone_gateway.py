@@ -321,13 +321,47 @@ class GatewayTests(unittest.TestCase):
             self.server.resource(phone, b'<next/>', 'text/xml')
         self.assertNotIn(('201', path), self.server.resources)
 
-    def test_message_is_escaped_and_pushed_as_idle_http_url(self):
-        self.request('message', text='<unsafe>&literal', title='Private')
+    def test_message_is_plain_text_and_foregrounds_once_on_idempotent_replay(self):
+        result = self.request('message', text='<unsafe>&literal', title='Private')
+        self.assertEqual(result['status'], 'accepted')
         call = self.send.call_args
         self.assertTrue(call.args[1].startswith('http://192.168.50.10:18080/content/'))
-        self.assertEqual(call.kwargs['priority'], 2)
+        self.assertEqual(call.kwargs, {'priority': 0})
         content = next(iter(self.server.resources.values()))[1]
         self.assertIn(b'&lt;unsafe&gt;&amp;literal', content)
+        document = ET.fromstring(content)
+        self.assertEqual(document.tag, 'CiscoIPPhoneText')
+        self.assertEqual(document.attrib, {})
+        self.assertEqual([child.tag for child in document], ['Title', 'Prompt', 'Text', 'SoftKeyItem'])
+        self.assertEqual(document.findtext('Title'), 'Private')
+        self.assertEqual(document.findtext('Text'), '<unsafe>&literal')
+        self.assertEqual(document.findtext('SoftKeyItem/URL'), 'SoftKey:Exit')
+        resources = dict(self.server.resources)
+        self.assertEqual(self.request('message', text='<unsafe>&literal', title='Private'), result)
+        self.assertEqual(self.send.call_count, 1)
+        self.assertEqual(self.server.resources, resources)
+        self.assertEqual(FakeAMI.calls, [])
+
+    def test_foreground_message_still_rejects_a_call_on_either_line(self):
+        for line in ('201', '202'):
+            with self.subTest(line=line):
+                FakeAMI.channels = [{'Channel': f'PJSIP/{line}-abc', 'Uniqueid': '123.4',
+                                     'ChannelStateDesc': 'Up'}]
+                with self.assertRaisesRegex(gateway.Refused, 'phone_busy'):
+                    self.request('message', text='A manual message')
+                self.send.assert_not_called()
+                self.assertEqual(self.server.resources, {})
+                self.assertEqual(FakeAMI.calls, [])
+
+    def test_ambiguous_foreground_message_failure_never_resends(self):
+        self.send.side_effect = OSError('response lost')
+        with self.assertRaises(OSError):
+            self.request('message', text='A manual message')
+        with self.assertRaisesRegex(gateway.Refused, 'previous_action_outcome_unknown'):
+            self.request('message', text='A manual message')
+        self.assertEqual(self.send.call_count, 1)
+        self.assertEqual(self.send.call_args.kwargs, {'priority': 0})
+        self.assertEqual(FakeAMI.calls, [])
 
     def image_request_body(self, key, title, color):
         with Image.new('RGB', (3, 2), color) as image:
