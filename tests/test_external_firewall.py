@@ -48,10 +48,27 @@ class Kernel:
                 [fw.raw_hook(self.cfg), ['-A', 'PREROUTING', '-j', 'FOREIGN_RAW'],
                  ['-A', 'FOREIGN_RAW', '-p', 'tcp', '-m', 'tcp', '--dport', '443', '-j', 'RETURN']]
                 + copy.deepcopy(raw[f'ipv{family}_rules']))
+            self.tables[family, 'mangle'] = (
+                {'PREROUTING': 'ACCEPT', 'INPUT': 'ACCEPT', 'FORWARD': 'ACCEPT',
+                 'OUTPUT': 'ACCEPT', 'POSTROUTING': 'ACCEPT', 'FOREIGN_MANGLE': '-'},
+                [['-A', 'INPUT', '-j', 'FOREIGN_MANGLE'],
+                 ['-A', 'FOREIGN_MANGLE', '-j', 'RETURN']])
             self.tables[family, 'filter'] = (
                 {'INPUT': 'ACCEPT', 'OUTPUT': 'ACCEPT', 'FORWARD': 'DROP', 'FOREIGN_FILTER': '-'},
                 [['-A', 'INPUT', '-j', 'FOREIGN_FILTER'],
                  ['-A', 'FOREIGN_FILTER', '-p', 'tcp', '-m', 'tcp', '--dport', '22', '-j', 'ACCEPT']])
+
+    def seed_pre_mangle(self, cfg, opened=True):
+        """Reproduce deployed filter-only rules without invoking the new apply."""
+        for family in (4, 6):
+            chains, rules = self.tables[family, 'raw']
+            chain = cfg['raw_baseline']['chain']
+            self.tables[family, 'raw'] = (chains, [r for r in rules if r[1] != chain]
+                                          + fw.raw_body(cfg, family, opened))
+            chains, rules = self.tables[family, 'filter']
+            chains[fw.CHAIN] = '-'
+            self.tables[family, 'filter'] = (chains, [fw.hook()] + rules
+                                             + fw.filter_body(cfg, family, opened))
 
     def run(self, argv, data=None):
         if argv[0] == 'ss':
@@ -180,7 +197,7 @@ class ExternalFirewallTests(unittest.TestCase):
             fw.apply(cfg, 'apply')
             with self.assertRaises(ValueError): fw.capture('192.168.50.10', 5070, 'TEST_TELEPHONY', 'synthetic-telephony/node')
 
-    def test_check_is_read_only_and_apply_orders_both_filters_before_raw(self):
+    def test_check_is_read_only_and_apply_orders_both_input_layers_before_raw(self):
         kernel = Kernel()
         with patch.object(fw, 'run', side_effect=kernel.run):
             before = fw.state(config())
@@ -189,10 +206,13 @@ class ExternalFirewallTests(unittest.TestCase):
             fw.apply(config(), 'apply')
             after = fw.state(config())
             fw.same_foreign(before, after)
-            self.assertEqual([(f, t) for f, t, _ in kernel.writes], [(6, 'filter'), (4, 'filter'), (4, 'raw')])
+            self.assertEqual([(f, t) for f, t, _ in kernel.writes], [(6, 'mangle'), (4, 'mangle'), (6, 'filter'), (4, 'filter'), (4, 'raw')])
             self.assertIn('open', after['raw4']['states'])
             self.assertIn('open', after['filter4']['states'])
             self.assertTrue(after['filter4']['first'])
+            for family in (4, 6):
+                self.assertTrue(after[f'mangle{family}']['first'])
+                self.assertIn('open', after[f'mangle{family}']['states'])
             fw.apply(config(), 'apply')  # idempotent, also preserves foreign rules
             fw.same_foreign(after, fw.state(config()))
 
@@ -216,14 +236,14 @@ class ExternalFirewallTests(unittest.TestCase):
             state = fw.state(config())
         self.assertIn('closed', state['raw4']['states'])
         self.assertIn('closed', state['filter4']['states'])
-        self.assertEqual([(f, t) for f, t, _ in kernel.writes][-3:], [(4, 'raw'), (6, 'filter'), (4, 'filter')])
+        self.assertEqual([(f, t) for f, t, _ in kernel.writes][-5:], [(4, 'raw'), (6, 'mangle'), (4, 'mangle'), (6, 'filter'), (4, 'filter')])
 
     def test_rollback_closes_sip_even_with_running_listener(self):
         kernel = Kernel(); kernel.listener = True
         with patch.object(fw, 'run', side_effect=kernel.run):
             fw.apply(config(), 'apply'); kernel.writes.clear()
             result = fw.apply(config(), 'rollback')
-        self.assertEqual([(f, t) for f, t, _ in kernel.writes], [(4, 'raw'), (6, 'filter'), (4, 'filter')])
+        self.assertEqual([(f, t) for f, t, _ in kernel.writes], [(4, 'raw'), (6, 'mangle'), (4, 'mangle'), (6, 'filter'), (4, 'filter')])
         self.assertIn('closed', result['state']['raw4']['states'])
         closed = fw.filter_body(config(), 4, False)
         self.assertEqual(packet_decision(closed, port=5070, state='ESTABLISHED', direction='REPLY'), 'DROP')
@@ -234,11 +254,15 @@ class ExternalFirewallTests(unittest.TestCase):
         with patch.object(fw, 'run', side_effect=kernel.run):
             fw.apply(config(), 'apply')
             with self.assertRaises(RuntimeError): fw.apply(config(), 'remove')
-            self.assertIn('closed', fw.state(config())['filter4']['states'])
+            for table in ('mangle', 'filter'):
+                for family in (4, 6):
+                    self.assertIn('closed', fw.state(config())[f'{table}{family}']['states'])
             kernel.listener = False
             after = fw.apply(config(), 'remove')['state']
         self.assertIn('closed', after['raw4']['states'])
-        self.assertFalse(after['filter4']['exists'] or after['filter6']['exists'])
+        for table in ('mangle', 'filter'):
+            for family in (4, 6):
+                self.assertFalse(after[f'{table}{family}']['exists'])
 
     def test_legacy_closed_rewrite_can_be_explicitly_reapplied(self):
         kernel = Kernel()
@@ -273,6 +297,113 @@ def profile_config():
 
 
 class ProfileTftpFirewallTests(unittest.TestCase):
+    def test_pre_mangle_v1_and_v2_upgrade_preserves_earlier_filter_accept(self):
+        for cfg in (config(), profile_config()):
+            for opened in (False, True):
+                kernel = Kernel()
+                kernel.seed_pre_mangle(cfg, opened)
+                for family in (4, 6):
+                    kernel.tables[family, 'filter'][1].insert(0, ['-A', 'INPUT', '-j', 'ACCEPT'])
+                with self.subTest(version=cfg.get('version', 1), opened=opened), \
+                        patch.object(fw, 'run', side_effect=kernel.run):
+                    before = fw.state(cfg)
+                    self.assertFalse(before['mangle4']['exists'])
+                    self.assertFalse(before['mangle6']['exists'])
+                    self.assertFalse(fw.apply(cfg, 'status')['profile_tftp']['effective'])
+                    fw.apply(cfg, 'check')
+                    self.assertEqual(kernel.writes, [])
+                    fw.apply(cfg, 'apply')
+                    after = fw.state(cfg)
+                    fw.same_foreign(before, after)
+                    for family in (4, 6):
+                        self.assertTrue(after[f'mangle{family}']['first'])
+                        self.assertTrue(after[f'filter{family}']['attached'])
+                        self.assertFalse(after[f'filter{family}']['first'])
+                        parent = [r for r in kernel.tables[family, 'filter'][1] if r[1] == 'INPUT']
+                        self.assertEqual(parent[:2], [['-A', 'INPUT', '-j', 'ACCEPT'], fw.hook()])
+                        actual = [r for r in kernel.tables[family, 'mangle'][1] if r[1] == fw.CHAIN]
+                        self.assertEqual(actual, fw.filter_body(cfg, family, True))
+                    if 'profile_tftp' in cfg:
+                        self.assertTrue(fw.apply(cfg, 'status')['profile_tftp']['effective'])
+                    tables = copy.deepcopy(kernel.tables)
+                    fw.apply(cfg, 'apply')
+                    self.assertEqual(kernel.tables, tables)
+
+    def test_foreign_filter_prepend_does_not_change_readiness_or_get_reordered(self):
+        cfg = profile_config(); kernel = Kernel()
+        with patch.object(fw, 'run', side_effect=kernel.run):
+            fw.apply(cfg, 'apply')
+            for family in (4, 6):
+                kernel.tables[family, 'filter'][1].insert(0, ['-A', 'INPUT', '-j', 'ACCEPT'])
+            tables = copy.deepcopy(kernel.tables)
+            self.assertTrue(fw.apply(cfg, 'status')['profile_tftp']['effective'])
+            fw.apply(cfg, 'apply')
+            self.assertEqual(kernel.tables, tables)
+            # Exact filter protection is still required, even with early guards.
+            kernel.tables[4, 'filter'][1].remove(fw.hook())
+            self.assertFalse(fw.apply(cfg, 'status')['profile_tftp']['effective'])
+
+    def test_mangle_owned_drift_and_foreign_references_refuse_before_writes(self):
+        for family in (4, 6):
+            for kind in ('body', 'duplicate_hook', 'foreign_reference', 'dangling'):
+                cfg = profile_config(); kernel = Kernel()
+                with patch.object(fw, 'run', side_effect=kernel.run):
+                    fw.apply(cfg, 'apply')
+                    chains, rules = kernel.tables[family, 'mangle']
+                    if kind == 'body':
+                        next(r for r in rules if r[1] == fw.CHAIN)[-1] = 'ACCEPT'
+                    elif kind == 'duplicate_hook':
+                        rules.append(fw.hook())
+                    elif kind == 'foreign_reference':
+                        rules.append(['-A', 'OUTPUT', '-j', fw.CHAIN])
+                    else:
+                        del chains[fw.CHAIN]
+                    kernel.writes.clear()
+                    with self.subTest(family=family, kind=kind), self.assertRaises(RuntimeError):
+                        fw.apply(cfg, 'apply')
+                    self.assertEqual(kernel.writes, [])
+
+    def test_input_layer_open_failures_close_raw_and_both_layers(self):
+        for failed in ((6, 'mangle'), (4, 'mangle'), (6, 'filter'), (4, 'filter'), (4, 'raw')):
+            cfg = profile_config(); kernel = Kernel()
+            kernel.fail = lambda event: event[:2] == failed
+            with self.subTest(failed=failed), patch.object(fw, 'run', side_effect=kernel.run):
+                with self.assertRaisesRegex(RuntimeError, 'closed INPUT guard retained'):
+                    fw.apply(cfg, 'apply')
+                after = fw.state(cfg)
+                self.assertEqual([(f, t) for f, t, _ in kernel.writes][-5:],
+                                 [(4, 'raw'), (6, 'mangle'), (4, 'mangle'), (6, 'filter'), (4, 'filter')])
+                self.assertIn('closed', after['raw4']['states'])
+                for table in ('mangle', 'filter'):
+                    for family in (4, 6):
+                        self.assertIn('closed', after[f'{table}{family}']['states'])
+                        self.assertTrue(after[f'{table}{family}']['attached'])
+                self.assertFalse(fw.apply(cfg, 'status')['profile_tftp']['effective'])
+
+    def test_mangle_kernel_preflight_failure_has_no_mutations(self):
+        cfg = profile_config(); kernel = Kernel()
+        def reject_mangle(argv, data=None):
+            if argv[0].endswith('-restore') and data.startswith('*mangle\n'):
+                raise RuntimeError('Synthetic unsupported mangle rule')
+            return kernel.run(argv, data)
+        with patch.object(fw, 'run', side_effect=reject_mangle), self.assertRaises(RuntimeError):
+            fw.apply(cfg, 'apply')
+        self.assertEqual(kernel.writes, [])
+
+    def test_remove_closes_raw_then_both_layers_before_deleting_guards(self):
+        cfg = profile_config(); kernel = Kernel()
+        with patch.object(fw, 'run', side_effect=kernel.run):
+            before = fw.state(cfg)
+            fw.apply(cfg, 'apply'); kernel.writes.clear()
+            after = fw.apply(cfg, 'remove')['state']
+            self.assertEqual([(f, t) for f, t, _ in kernel.writes],
+                             [(4, 'raw'), (6, 'mangle'), (4, 'mangle'), (6, 'filter'), (4, 'filter'),
+                              (4, 'filter'), (6, 'filter'), (4, 'mangle'), (6, 'mangle')])
+            fw.same_foreign(before, after)
+            for table in ('mangle', 'filter'):
+                for family in (4, 6):
+                    self.assertFalse(after[f'{table}{family}']['exists'])
+
     def test_exact_phone_and_destination_rules_with_default_drops(self):
         cfg = profile_config()
         self.assertEqual(fw.validate(cfg), cfg)
@@ -394,7 +525,7 @@ class ProfileTftpFirewallTests(unittest.TestCase):
         for old_mode, name in (('apply', 'legacy_open'), ('rollback', 'legacy_closed')):
             kernel = Kernel(); cfg = profile_config()
             with self.subTest(old_mode=old_mode), patch.object(fw, 'run', side_effect=kernel.run):
-                fw.apply(config(), old_mode)
+                kernel.seed_pre_mangle(config(), opened=old_mode == 'apply')
                 before = fw.state(cfg)
                 self.assertIn(name, before['filter4']['states'])
                 if old_mode == 'apply': self.assertIn('legacy_open', before['raw4']['states'])
@@ -406,7 +537,7 @@ class ProfileTftpFirewallTests(unittest.TestCase):
                 fw.apply(cfg, 'check')
                 self.assertEqual(kernel.writes, [])
                 fw.apply(cfg, 'apply')
-                self.assertEqual([(f, t) for f, t, _ in kernel.writes], [(6, 'filter'), (4, 'filter'), (4, 'raw')])
+                self.assertEqual([(f, t) for f, t, _ in kernel.writes], [(6, 'mangle'), (4, 'mangle'), (6, 'filter'), (4, 'filter'), (4, 'raw')])
                 self.assertTrue(fw.apply(cfg, 'status')['profile_tftp']['effective'])
                 fw.same_foreign(before, fw.state(cfg))
                 tables = copy.deepcopy(kernel.tables)
@@ -423,10 +554,11 @@ class ProfileTftpFirewallTests(unittest.TestCase):
             self.assertEqual(status['profile_tftp'], {'configured': False, 'effective': False, 'phone_count': 0})
             fw.apply(cfg, 'apply')
             for family in (4, 6):
-                chains, rules = kernel.tables[family, 'filter']
+                chains, rules = kernel.tables[family, 'mangle']
                 rules.remove(fw.hook()); rules.append(fw.hook())
                 self.assertFalse(fw.apply(cfg, 'status')['profile_tftp']['effective'])
                 fw.apply(cfg, 'apply')
+                self.assertTrue(fw.apply(cfg, 'status')['profile_tftp']['effective'])
             fw.transition(cfg, 4, 'filter', opened=False)
             self.assertFalse(fw.apply(cfg, 'status')['profile_tftp']['effective'])
             fw.apply(cfg, 'apply')
@@ -462,7 +594,7 @@ class ProfileTftpFirewallTests(unittest.TestCase):
                     fw.apply(cfg, 'apply'); kernel.writes.clear()
                     fw.apply(cfg, 'rollback')
                 state = fw.state(cfg)
-                self.assertEqual([(f, t) for f, t, _ in kernel.writes][-3:], [(4, 'raw'), (6, 'filter'), (4, 'filter')])
+                self.assertEqual([(f, t) for f, t, _ in kernel.writes][-5:], [(4, 'raw'), (6, 'mangle'), (4, 'mangle'), (6, 'filter'), (4, 'filter')])
                 self.assertIn('closed', state['raw4']['states'])
                 self.assertIn('closed', state['filter4']['states'])
                 raw = [r for r in kernel.tables[4, 'raw'][1] if r[1] == cfg['raw_baseline']['chain']]
@@ -536,6 +668,7 @@ class KernelRuntimeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('PASS: kernel parser', result.stdout)
         self.assertIn('PASS: version 2 kernel TFTP', result.stdout)
+        self.assertIn('PASS: early mangle INPUT', result.stdout)
 
 
 if __name__ == '__main__': unittest.main()
