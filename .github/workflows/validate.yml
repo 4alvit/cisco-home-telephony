@@ -75,6 +75,15 @@ jobs:
           retention-days: 1
       - name: Build both PBX images and verify binary versions
         run: bash scripts/build-images.sh cisco-home-ci
+      - name: Verify firewall policies in disconnected network namespaces
+        run: |
+          docker build -t cisco-home-ci/firewall-test:bookworm - <<'DOCKERFILE'
+          FROM cisco-home-ci/tftp:bookworm
+          RUN apt-get update && apt-get install -y --no-install-recommends python3 iptables iproute2 \
+              && rm -rf /var/lib/apt/lists/*
+          DOCKERFILE
+          EXTERNAL_FIREWALL_TEST_IMAGE=cisco-home-ci/firewall-test:bookworm \
+            .venv/bin/python -m unittest discover -s tests -p test_external_firewall.py -v
       - name: Isolated smoke with synthetic generated configuration
         run: bash scripts/smoke-containers.sh cisco-home-ci
       - name: Verify isolated L16 media and native call expiry
