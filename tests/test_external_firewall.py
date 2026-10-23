@@ -668,6 +668,7 @@ class KernelRuntimeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('PASS: kernel parser', result.stdout)
         self.assertIn('PASS: version 2 kernel TFTP', result.stdout)
+        self.assertIn('PASS: early mangle INPUT', result.stdout)
 
 
 if __name__ == '__main__': unittest.main()
