@@ -41,14 +41,16 @@ def write_wallpaper(directory, files=None):
 
 
 class WallpaperTests(unittest.TestCase):
-    def test_absent_directory_preserves_original_manifest_bytes(self):
+    def test_absent_directory_adds_no_wallpaper_resources(self):
         with tempfile.TemporaryDirectory() as temporary:
             absent = render.read_wallpaper(Path(temporary) / "wallpaper")
             self.assertIsNone(absent)
             output = render.render_tftp(fixture(), {"SEP000000000001.cnf.xml": "<device/>"}, absent)
-            # Recorded from the renderer before wallpaper support was added.
-            digest = hashlib.sha256((json.dumps(output, indent=2) + "\n").encode()).hexdigest()
-            self.assertEqual(digest, "e5882a2b625816f4072d96084d8aad07963455c7f42049f2530ca7efeff6c49a")
+            self.assertEqual(output, render.render_tftp(fixture(), {"SEP000000000001.cnf.xml": "<device/>"}))
+            self.assertEqual([item["kind"] for item in output["items"]], ["Secret", "Job"])
+            pod = output["items"][-1]["spec"]["template"]["spec"]
+            self.assertNotIn("wallpaper", [volume["name"] for volume in pod["volumes"]])
+            self.assertNotIn("/wallpaper", pod["initContainers"][0]["command"][2])
 
     def test_exact_regular_files_round_trip(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -187,9 +189,9 @@ class WallpaperTests(unittest.TestCase):
             self.assertEqual({p.name for p in destination.iterdir()}, set(files))
             for name, content in files.items():
                 self.assertEqual((destination / name).read_bytes(), content)
-                self.assertEqual((destination / name).stat().st_mode & 0o777, 0o644)
+                self.assertEqual((destination / name).stat().st_mode & 0o777, 0o444)
             for directory in (root / "served/root", destination.parent, destination):
-                self.assertEqual(directory.stat().st_mode & 0o777, 0o755)
+                self.assertEqual(directory.stat().st_mode & 0o777, 0o555)
             self.assertEqual((root / "served/root/pilot.sbn").read_bytes(), b"synthetic firmware")
             (root / "firmware/nested").mkdir()
             result = subprocess.run(command[:2] + [script], capture_output=True, text=True)

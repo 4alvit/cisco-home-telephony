@@ -7,8 +7,8 @@ TFTP owner; it does not read, apply or restart the Asterisk configuration.
 
 **Acceptance status:** a physical 7945G completed an ordinary warm reboot on
 2026-10-22 with only its profile, dial plan and three wallpaper assets available.
-The profile transfer completed and both lines registered freshly. No firmware
-request was observed; missing optional `be-sip.jar` and `g3-tones.xml` did not
+The profile transfer completed and both lines registered freshly. A subsequent phone-originated radio call negotiated G.722 with a 16 kHz
+internal audio path. No firmware request was observed; missing optional `be-sip.jar` and `g3-tones.xml` did not
 block that boot. This is one pilot, not fleet-wide or cold-boot qualification.
 The persistent Deployment, final managed image, node restart and cold phone boot
 still require the gates below before being described as installed and accepted.
