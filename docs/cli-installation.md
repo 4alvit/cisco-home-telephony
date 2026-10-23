@@ -30,7 +30,7 @@ Before installing a client, the deployment needs:
 - Optionally, Home Assistant with the companion **Cisco phone controls 0.3.0
   or later** integration for countdown timers and recurring alarms.
 - For the optional [HA radio media player](https://github.com/ha-homelab/asterisk-telephony/blob/main/docs/media-player.md),
-  use **Cisco phone controls 0.7.0b1** with the matching media-capable gateway
+  use **Cisco phone controls 0.7.0b2** with the matching media-capable gateway
   and regenerated, active PBX radio routes; see the
   [radio requirements](phone-gateway.md#radio-state-and-home-assistant-media-players).
   Installing only the CLI does not add media-player entities to HA.
@@ -63,15 +63,15 @@ python3 --version
 git --version
 mkdir -p "$HOME/src"
 cd "$HOME/src"
-git clone --branch v0.1.0-beta.18 --single-branch \
-  https://github.com/4alvit/cisco-home-telephony.git cisco-home-telephony-beta18
-cd cisco-home-telephony-beta18
+git clone --branch v0.1.0-beta.19 --single-branch \
+  https://github.com/4alvit/cisco-home-telephony.git cisco-home-telephony-beta19
+cd cisco-home-telephony-beta19
 git rev-parse HEAD
 ```
 
-This example selects [Beta 18](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.18).
+This example selects [Beta 19](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.19).
 Confirm that the printed commit is
-`6e7d56439ccf56a8d2263b6d6a7c44fa1c7627b5` before continuing. For another
+`4aaeb264fade4911466010b8c39169e990355a68` before continuing. For another
 release, use its recorded full source commit and matching server image; the
 latest default branch is not a release pin.
 
@@ -496,7 +496,7 @@ syntax error. An accepted call still needs state/audio verification. Full
 The installation above checks out a release tag in **detached HEAD** state.
 Do not use `git pull` there. Select the next release and its recorded full
 source commit, and check compatibility with the installed server before
-updating. The example below reselects Beta 18; substitute both values when
+updating. The example below reselects Beta 19; substitute both values when
 moving to another release.
 
 From the checkout, inspect local changes first. Preserve any uncommitted work
@@ -505,18 +505,18 @@ the selected tag and inspect its commit:
 
 ```bash
 git status --short
-target_release=v0.1.0-beta.18
+target_release=v0.1.0-beta.19
 git fetch --no-tags origin "refs/tags/$target_release:refs/tags/$target_release"
 git rev-parse "$target_release^{commit}"
 ```
 
-For Beta 18, the result must be
-`6e7d56439ccf56a8d2263b6d6a7c44fa1c7627b5`. If it differs from the selected
+For Beta 19, the result must be
+`4aaeb264fade4911466010b8c39169e990355a68`. If it differs from the selected
 release's recorded commit, stop and resolve the mismatch. After verification,
 switch explicitly to that commit:
 
 ```bash
-git switch --detach 6e7d56439ccf56a8d2263b6d6a7c44fa1c7627b5
+git switch --detach 4aaeb264fade4911466010b8c39169e990355a68
 ```
 
 If you used a separate clone, inspect and repoint your existing `cisco` symlink
