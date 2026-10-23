@@ -16,12 +16,14 @@ import uuid
 
 
 PROFILE_NAME = "SEP020000000001.cnf.xml"
+WALLPAPER_NAME = "Desktops/320x212x16/List.xml"
 PROFILE_XML = ("<device><loadInformation>SIP45.synthetic</loadInformation>"
                "<sipProfile><dialTemplate>dialplan.xml</dialTemplate></sipProfile>"
                "<vendorConfig><g722CodecSupport>2</g722CodecSupport></vendorConfig>"
                "<!--" + "synthetic-profile-only " * 400 + "--></device>\n")
 FILES = {PROFILE_NAME: PROFILE_XML,
-         "dialplan.xml": '<DIALTEMPLATE><TEMPLATE MATCH="2.." Timeout="0"/></DIALTEMPLATE>\n'}
+         "dialplan.xml": '<DIALTEMPLATE><TEMPLATE MATCH="2.." Timeout="0"/></DIALTEMPLATE>\n',
+         WALLPAPER_NAME: '<CiscoIPPhoneImageList/>\n'}
 LOCK = "/run/cisco-tftp/owner.lock"
 READY = "/run/cisco-tftp/held.json"
 RESUME = "/run/cisco-tftp/resume"
@@ -31,15 +33,43 @@ import json, os, pathlib, sys
 files = json.load(sys.stdin)
 root = pathlib.Path('/srv/tftp')
 assert not any(root.iterdir()), 'Synthetic served volume was not empty'
+wallpaper = root / 'Desktops' / '320x212x16'
+wallpaper.mkdir(parents=True)
 for name, content in files.items():
     target = root / name
     target.write_text(content, encoding='utf-8')
     target.chmod(0o444)
+wallpaper.chmod(0o555)
+wallpaper.parent.chmod(0o555)
 root.chmod(0o555)
 os.chmod('/run/cisco-tftp', 0o700)
 """
 
-CLIENT = r"""
+DENIAL_CLASSIFIER = r"""
+DENIAL_CASES = ((1, 'SIP45.synthetic.loads'), (1, 'apps45.synthetic.sbn'),
+                (1, '../SEP020000000001.cnf.xml'), (1, './../SEP020000000001.cnf.xml'),
+                (1, '/SEP020000000001.cnf.xml'), (1, '/etc/passwd'),
+                (2, 'new-upload.xml'), (2, 'SEP020000000001.cnf.xml'))
+
+def require_denial(request_opcode, filename, packet):
+    import json
+    size = len(packet) if type(packet) is bytes else None
+    operation = int.from_bytes(packet[:2], 'big') if size is not None and size >= 2 else None
+    code = int.from_bytes(packet[2:4], 'big') if operation == 5 and size >= 4 else None
+    framed = (size is not None and size >= 5 and packet[-1] == 0
+              and b'\0' not in packet[4:-1])
+    known = type(request_opcode) is int and (request_opcode, filename) in DENIAL_CASES
+    if not (known and operation == 5 and code in (1, 2) and framed):
+        detail = {
+            'filename': filename if type(filename) is str and any(filename == item[1] for item in DENIAL_CASES) else 'other',
+            'request_opcode': request_opcode if type(request_opcode) is int and 0 <= request_opcode <= 65535 else 'other',
+            'response_operation': operation, 'error_code': code,
+            'length': size, 'valid_error_framing': bool(framed and operation == 5),
+        }
+        raise AssertionError('Forbidden TFTP request was not denied: ' + json.dumps(detail, sort_keys=True))
+"""
+
+CLIENT = DENIAL_CLASSIFIER + r"""
 import errno, hashlib, json, os, pathlib, socket, struct, sys, time
 mode, name = sys.argv[1:]
 host = '127.0.0.1'
@@ -47,9 +77,9 @@ host = '127.0.0.1'
 def request(sock, opcode, filename):
     sock.sendto(struct.pack('!H', opcode) + filename.encode('ascii') + b'\0octet\0', (host, 69))
 
-def receive(sock):
+def receive(sock, minimum=4):
     packet, peer = sock.recvfrom(2048)
-    assert peer[0] == host and len(packet) >= 4, 'Malformed or foreign TFTP response'
+    assert peer[0] == host and len(packet) >= minimum, 'Malformed or foreign TFTP response'
     return packet, peer
 
 def download(hold=False):
@@ -92,18 +122,20 @@ def download(hold=False):
 if mode in ('read', 'hold'):
     download(mode == 'hold')
 elif mode == 'deny':
-    for opcode, filename in ((1, 'SIP45.synthetic.loads'), (1, 'apps45.synthetic.sbn'),
-                             (1, '../' + name), (1, '/etc/passwd'),
-                             (2, 'new-upload.xml'), (2, name)):
+    for opcode, filename in DENIAL_CASES:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.bind((host, 0))
             sock.settimeout(5)
             request(sock, opcode, filename)
-            packet, _ = receive(sock)
-            operation, code = struct.unpack('!HH', packet[:4])
-            assert operation == 5 and code in (1, 2), 'Forbidden RRQ/WRQ was not denied'
+            packet, _ = receive(sock, minimum=0)
+            require_denial(opcode, filename, packet)
     root = pathlib.Path('/srv/tftp')
-    assert {p.name for p in root.iterdir()} == {name, 'dialplan.xml'}, 'WRQ created a file'
+    expected_files = {name, 'dialplan.xml', 'Desktops/320x212x16/List.xml'}
+    expected_dirs = {'Desktops', 'Desktops/320x212x16'}
+    entries = {p.relative_to(root).as_posix(): p for p in root.rglob('*')}
+    assert set(entries) == expected_files | expected_dirs, 'WRQ changed served entries'
+    assert all(not p.is_symlink() and (p.is_file() if key in expected_files else p.is_dir())
+               for key, p in entries.items()), 'WRQ changed served entry types'
     assert os.statvfs(root).f_flag & os.ST_RDONLY, 'Served root mount is writable'
     try:
         fd = os.open(root / name, os.O_WRONLY)
@@ -112,7 +144,7 @@ elif mode == 'deny':
     else:
         os.close(fd)
         raise AssertionError('Served profile is writable')
-    print(json.dumps({'denied': 6}), flush=True)
+    print(json.dumps({'denied': len(DENIAL_CASES)}), flush=True)
 else:
     raise AssertionError('Unknown synthetic client mode')
 """
@@ -252,11 +284,11 @@ class Fixture:
         require("TFTP owner already active" in logs.stdout + logs.stderr,
                 "Second owner failed for a reason other than the held lock")
 
-    def download(self, container):
-        result = json.loads(self.execute(container, CLIENT, "read", PROFILE_NAME).stdout)
-        require(result == {"bytes": len(PROFILE_XML.encode()),
-                           "sha256": hashlib.sha256(PROFILE_XML.encode()).hexdigest()},
-                "Downloaded profile did not match the synthetic fixture")
+    def download(self, container, filename=PROFILE_NAME):
+        result = json.loads(self.execute(container, CLIENT, "read", filename).stdout)
+        expected = FILES[filename].encode()
+        require(result == {"bytes": len(expected), "sha256": hashlib.sha256(expected).hexdigest()},
+                "Downloaded file did not match the synthetic fixture")
 
     def process_state(self, container, identity):
         return json.loads(self.execute(container, PROCESS_STATE, json.dumps(identity)).stdout)
@@ -269,6 +301,7 @@ class Fixture:
         first = self.start("owner")
         wait_for(lambda: self.ready(first), "Managed TFTP readiness did not pass")
         self.download(first)
+        self.download(first, WALLPAPER_NAME)
         self.execute(first, CLIENT, "deny", PROFILE_NAME, timeout=35)
         self.download(first)  # An existing-profile WRQ must not change its bytes.
         self.denied_owner("contender")

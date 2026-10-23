@@ -17,6 +17,7 @@ import sys
 import time
 
 DAEMON = "/usr/sbin/in.tftpd"
+RULES_FILE = "/usr/local/etc/cisco-tftp.rules"
 PROC = Path("/proc")
 
 
@@ -58,7 +59,8 @@ def checked_arguments(arguments):
             or address.is_unspecified or address.is_multicast
             or host == "255.255.255.255"):
         raise Refused("Managed TFTP requires an explicit IPv4 address")
-    return (arguments if "--ipv4" in seen else ["--ipv4", *arguments]), host, roots[0]
+    managed = arguments if "--ipv4" in seen else ["--ipv4", *arguments]
+    return ["--map-file", RULES_FILE, *managed], host, roots[0]
 
 
 def check_root(root):
@@ -297,7 +299,9 @@ def main():
                 print("Could not signal owned TFTP daemon; retaining ownership", file=sys.stderr)
 
     try:
-        for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        # Policy is immutable image content; managed HUP must not reload it.
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        for number in (signal.SIGTERM, signal.SIGINT):
             signal.signal(number, forward)
         if pending is not None:
             return 128 + pending

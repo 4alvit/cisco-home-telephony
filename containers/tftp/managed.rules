@@ -1,0 +1,4 @@
+# Fixed managed policy: deny all writes and non-relative/traversal names.
+Pa .*
+a (^|/)\.\.(/|$)
+a ^/

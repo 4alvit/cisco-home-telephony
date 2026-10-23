@@ -137,7 +137,13 @@ and share `owner.lock`. The supervisor validates the private lock inode, acquire
 an exclusive lock before starting the daemon, and retains it until the listener
 and adopted transfer children have finished. It never unlinks the lock inode.
 The fixed IPv4 listener is read-only; neither new-file nor existing-file uploads
-are allowed. Profile Pods mount no firmware directory. The init container copies
+are allowed. The managed image also carries a fixed TFTP remap policy that
+rejects every write request, absolute paths and parent-directory traversal
+before file access. This is required in addition to `--secure`: a chroot alone
+can resolve `../profile` to an existing profile inside the same root. The
+wrapper selects the packaged policy; operators cannot override its path.
+See the [Debian TFTP server reference](https://manpages.debian.org/bookworm/tftpd-hpa/tftpd.8.en.html)
+for `--secure`, `--map-file` and the deny/write-only remap operations. Profile Pods mount no firmware directory. The init container copies
 only validated Secret keys into regular files, then sets files to `0444` and
 directories to `0555`; the server sees a read-only volume.
 

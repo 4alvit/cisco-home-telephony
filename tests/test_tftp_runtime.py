@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import subprocess
@@ -143,7 +144,8 @@ sys.exit(int(os.environ.get('TFTP_TEST_EXIT', '0')))
         process.communicate(timeout=3)
         self.assertEqual(process.returncode, 0)
         arguments = json.loads(files["ready"].read_text())["args"]
-        self.assertEqual(arguments, ["--ipv4", *ARGS[:-1], str(self.served)])
+        self.assertEqual(arguments, ["--map-file", runtime.RULES_FILE,
+                                     "--ipv4", *ARGS[:-1], str(self.served)])
         self.assertEqual(self.control.stat().st_mode & 0o777, 0o700)
         self.assertEqual(self.lock.stat().st_mode & 0o777, 0o600)
         inode = self.lock.stat().st_ino
@@ -229,6 +231,14 @@ sys.exit(int(os.environ.get('TFTP_TEST_EXIT', '0')))
         child.communicate(timeout=3)
         self.assertEqual(child.returncode, 0)
 
+    def test_managed_hup_does_not_reload_daemon_or_release_ownership(self):
+        first, files = self.start(hold=True)
+        self.ready(first, files["ready"])
+        first.send_signal(signal.SIGHUP)
+        self.assertIn("owner already active", self.refused())
+        self.assertIsNone(first.poll())
+        self.assertFalse(files["stopping"].exists())
+
     def test_lock_symlink_is_rejected_without_touching_target(self):
         target = self.root / "target"
         target.write_text("untouched")
@@ -264,6 +274,8 @@ sys.exit(int(os.environ.get('TFTP_TEST_EXIT', '0')))
 
     def test_upload_daemonization_and_ambiguous_bind_are_rejected(self):
         invalid = [ARGS + ["--create"], ARGS + ["-c"], ARGS + ["--listen"],
+                   ARGS + ["--map-file", "/tmp/other.rules"],
+                   ARGS + ["-m", "/tmp/other.rules"],
                    [arg for arg in ARGS if arg != "--foreground"],
                    ["::1:69" if arg == "127.0.0.1:69" else arg for arg in ARGS],
                    ["0.0.0.0:69" if arg == "127.0.0.1:69" else arg for arg in ARGS],
@@ -276,6 +288,33 @@ sys.exit(int(os.environ.get('TFTP_TEST_EXIT', '0')))
             with self.subTest(arguments=arguments):
                 self.refused(args=arguments)
         self.assertFalse(self.lock.exists())
+
+
+class TFTPFixedPolicyTests(unittest.TestCase):
+    def test_fixed_rule_file_denies_writes_and_traversal_but_allows_profile_reads(self):
+        policy = ROOT / "containers/tftp/managed.rules"
+        rules = [line.split() for line in policy.read_text().splitlines()
+                 if line and not line.startswith("#")]
+        self.assertEqual(rules, [["Pa", ".*"], ["a", r"(^|/)\.\.(/|$)"], ["a", "^/"]])
+
+        def denied(mode, name):
+            return any(("P" not in operation or mode == "WRQ") and re.search(pattern, name)
+                       for operation, pattern in rules)
+
+        for name in ("new-upload.xml", "SEP001122334455.cnf.xml", "Desktops/320x212x16/home.png"):
+            self.assertTrue(denied("WRQ", name), name)
+            self.assertFalse(denied("RRQ", name), name)
+        for name in ("../profile", "nested/../profile", "nested/..", "..", "/etc/passwd", "//profile"):
+            self.assertTrue(denied("RRQ", name), name)
+        self.assertFalse(denied("RRQ", "profile..xml"))
+
+    def test_managed_arguments_always_inject_image_policy_once(self):
+        for arguments in (ARGS, ["--ipv4", *ARGS]):
+            result, host, root = runtime.checked_arguments(arguments)
+            self.assertEqual(result[:2], ["--map-file", "/usr/local/etc/cisco-tftp.rules"])
+            self.assertEqual(result.count("--map-file"), 1)
+            self.assertEqual(result.count("--ipv4"), 1)
+            self.assertEqual((host, root), ("127.0.0.1", "/srv/tftp"))
 
 
 class TFTPReadinessTests(unittest.TestCase):
