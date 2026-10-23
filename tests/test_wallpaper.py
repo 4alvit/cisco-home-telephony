@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shlex
 import struct
+import stat
 import subprocess
 import sys
 import tempfile
@@ -189,9 +190,9 @@ class WallpaperTests(unittest.TestCase):
             self.assertEqual({p.name for p in destination.iterdir()}, set(files))
             for name, content in files.items():
                 self.assertEqual((destination / name).read_bytes(), content)
-                self.assertEqual((destination / name).stat().st_mode & 0o777, 0o444)
+                self.assertEqual(stat.S_IMODE((destination / name).stat().st_mode), 0o444)
             for directory in (root / "served/root", destination.parent, destination):
-                self.assertEqual(directory.stat().st_mode & 0o777, 0o555)
+                self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o555)
             self.assertEqual((root / "served/root/pilot.sbn").read_bytes(), b"synthetic firmware")
             (root / "firmware/nested").mkdir()
             result = subprocess.run(command[:2] + [script], capture_output=True, text=True)

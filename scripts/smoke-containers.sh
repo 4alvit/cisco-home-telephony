@@ -188,7 +188,15 @@ module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
 site={'namespace':'test','node_name':'test','node_ipv4':'127.0.0.1','tftp_image':'test'}
 manifest=module.render_tftp(site, {'dialplan.xml':'<DIALTEMPLATE/>'})
 script=manifest['items'][1]['spec']['template']['spec']['initContainers'][0]['command'][2]
-pathlib.Path(sys.argv[1]).write_text(script+'\n test -s /served/root/health.txt && test -s /served/root/dialplan.xml\n')
+checks = """
+ test -s /served/root/health.txt && test -s /served/root/dialplan.xml
+ python3 -I - <<'PYMODE'
+import pathlib, runpy, stat
+assert stat.S_IMODE(pathlib.Path('/served').stat().st_mode) == 0o2770, 'Volume root permissions changed'
+runpy.run_path('/usr/local/lib/cisco-tftp/runtime.py')['check_root']('/served/root')
+PYMODE
+"""
+pathlib.Path(sys.argv[1]).write_text(script + checks)
 PYINIT
 chmod 0644 "$test_root/tftp-init.sh"
 cat > "$test_root/Dockerfile.tftp" <<'DOCKERFILE'
