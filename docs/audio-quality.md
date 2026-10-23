@@ -241,13 +241,21 @@ reported RX loss 1 and TX loss 0. Cleanup left no active
 PBX channels, but this was **not a bounded Stop pass**. These transport
 observations do not establish decoded phone audio or subjective quality.
 
-**Operational rollout:** PBX codec policies are deployed. For the follow-up
-phone, profile-download status and renewed registration were observed;
-a complete TFTP packet transcript was not retained. Profiles for offline
-phones are only staged. The temporary TFTP service has been removed; those phones
-need a future bounded TFTP window and confirmation that the profiles were
-downloaded and applied. The Mac was offline and remains unqualified for
-wideband media. Profile application alone is not acoustic acceptance.
+**Follow-up pilot on 2026-10-22:** a phone using G.711u received its updated
+profile during an ordinary warm restart. The profile and dial-plan transfers
+completed and both lines registered freshly. Its subsequent controlled radio
+call used native G.722 with `slin16` read/write formats. The phone reported
+G.722 in both directions, 978 received packets, 1,186 transmitted packets and
+zero receive loss. The call was ended and no channel remained on the device.
+The user confirmed improved listening quality.
+
+**Operational rollout:** PBX codec policies are deployed and all ten retained
+phone profiles enable G.722. They are now available through the
+[permanent profile-only TFTP service](daily-phone-boot.md), including profiles
+for phones currently powered off. Those phones must still download and apply
+their profiles when powered on; this is not a claim of ten completed physical
+tests. The Mac remains unqualified for wideband media. Profile application
+alone is not acoustic acceptance.
 
 For read-only test containers, keep writable mounts narrow: the first
 attempt failed before any calls because a `/var/lib/asterisk` tmpfs hid

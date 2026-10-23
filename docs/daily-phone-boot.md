@@ -5,13 +5,28 @@ an independent, bounded firmware maintenance Job. Both use the same managed TFTP
 image and exclusive host lock. `--profiles-only` updates only profiles and their
 TFTP owner; it does not read, apply or restart the Asterisk configuration.
 
-**Acceptance status:** a physical 7945G completed an ordinary warm reboot on
-2026-10-22 with only its profile, dial plan and three wallpaper assets available.
-The profile transfer completed and both lines registered freshly. A subsequent phone-originated radio call negotiated G.722 with a 16 kHz
-internal audio path. No firmware request was observed; missing optional `be-sip.jar` and `g3-tones.xml` did not
-block that boot. This is one pilot, not fleet-wide or cold-boot qualification.
-The persistent Deployment, final managed image, node restart and cold phone boot
-still require the gates below before being described as installed and accepted.
+**Installed on 2026-10-22:** the dedicated service contains all ten inventoried
+phone profiles, the dial plan and three wallpaper assets. The 14 served files,
+their permissions, the immutable image and the single managed listener were
+verified on the actual node. The server mounts no firmware directory. Asterisk,
+the phone gateway and Home Assistant were not restarted for this installation.
+The early INPUT guard remained effective across kube-router rule updates.
+
+**Physical acceptance:** a 7945G completed an ordinary profile-only warm reboot
+on 2026-10-22. The profile and dial-plan transfers completed and both lines
+registered freshly. A subsequent phone-originated radio call negotiated G.722
+with a 16 kHz internal audio path; the user confirmed improved listening quality.
+Missing optional `be-sip.jar` and `g3-tones.xml` did not block that boot. This is
+not acoustic qualification of every phone.
+
+A second 7945G then passed a **cold boot through the permanent service**. One
+verified PoE port was disabled briefly and restored. Both old SIP contacts
+disappeared; the phone completed its profile and dial-plan transfers, including
+their final acknowledgements, and both lines registered on a new TCP
+connection. Its application and boot load stayed unchanged, and no firmware
+download was observed. This qualifies the tested cold-boot pilot, not every
+offline phone or a restart of the k3s node. Node-restart acceptance remains
+untested.
 
 ![Profile-only daily service and bounded firmware maintenance](diagrams/daily-phone-boot.svg)
 
@@ -52,8 +67,48 @@ then closed and its firewall baseline restored. Keep raw receipts private.
 
 ## Prepare the permanent profile service
 
-Use a newly built, tested TFTP image from this revision and pin its immutable
-`repository@sha256:...` reference as `tftp_image` in the private site file. Older
+### Obtain the managed image
+
+[Beta 20](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.20)
+provides a TFTP-only `linux/amd64` archive built from source commit
+`eba086718b8e1b3b58fbc1b928bf6941f99133a3`. Existing compatible Asterisk and
+voice gateway installations can keep their current images.
+Use the **Beta 20 release checkout** for the deployment scripts. The archive's
+`source.json` records its image build; the release also contains deployment-only
+fixes for k3s directory permissions and firewall ordering. Those fixes leave
+the TFTP container sources unchanged.
+
+```sh
+umask 077
+mkdir -p .local/tftp-beta20
+gh release download v0.1.0-beta.20 --repo 4alvit/cisco-home-telephony \
+  --dir .local/tftp-beta20
+cd .local/tftp-beta20
+shasum -a 256 -c SHA256SUMS
+python3 - <<'PY'
+import json
+from pathlib import Path
+source = json.loads(Path('source.json').read_text())
+assert source['source_commit'] == 'eba086718b8e1b3b58fbc1b928bf6941f99133a3'
+assert source['platform'] == 'linux/amd64'
+PY
+docker load --input tftp-amd64.tar.gz
+docker image inspect cisco-home-ci/tftp:bookworm
+cd ../..
+```
+
+Compare the loaded image's configuration ID and platform with `image.json`.
+Publish it to your reviewed registry and record its immutable manifest digest
+using the [image installation procedure](k3s-deployment.md#3-build-test-and-publish-images).
+The configuration ID in `image.json` is not that manifest digest. Keep the
+source, archive checksums and deployed digest together in private records.
+For a new build or another release, follow the
+[TFTP-only CI export instructions](ci-images.md#tftp-only-export).
+
+### Prepare private profiles and network policy
+
+Use the verified release image above, or a tested build from this revision, and
+pin its immutable `repository@sha256:...` reference as `tftp_image` in the private site file. Older
 images do not contain the managed lock supervisor or its readiness command.
 The existing Asterisk image need not be rebuilt or deployed for this change.
 
@@ -146,6 +201,10 @@ See the [Debian TFTP server reference](https://manpages.debian.org/bookworm/tftp
 for `--secure`, `--map-file` and the deny/write-only remap operations. Profile Pods mount no firmware directory. The init container copies
 only validated Secret keys into regular files, then sets files to `0444` and
 directories to `0555`; the server sees a read-only volume.
+The staging command uses explicit `chmod 00555` for directories: GNU chmod with
+only four digits preserves the setgid bit inherited from a Kubernetes
+`fsGroup` volume. The runtime deliberately rejects that unexpected bit instead
+of silently accepting different permissions.
 
 Readiness checks the held lock and the actual owned listener/socket, not merely
 an open port. The supervisor needs `KILL` to signal the daemon after it switches
@@ -186,7 +245,7 @@ remove only old unreferenced Secrets after reviewing references.
 `--with-tftp` retains the combined PBX-plus-maintenance behavior. Use the two
 TFTP-only modes above when no Asterisk change is intended.
 
-## Gates before permanent operation
+## Acceptance checks for an installation
 
 1. Run the unit suite and isolated managed-image smoke tests: exact file set,
    traversal/missing files, upload denial, competing owners and transfer drain.

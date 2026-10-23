@@ -36,6 +36,38 @@ or secrets. The `cisco-home-ci/*` tags are local: retag them for your registry
 before pushing, following the [deployment runbook](k3s-deployment.md). Use the
 resulting registry digests in k3s, not image IDs or mutable tags.
 
+## TFTP-only export
+
+For the permanent profile service, select `export_target=tftp`. The workflow
+still runs the complete validation suite, including real TFTP transfers and
+isolated firewall checks, but exports only the TFTP image:
+
+```sh
+gh workflow run validate.yml --repo 4alvit/cisco-home-telephony \
+  --ref main -f export_images=true -f export_target=tftp
+# Verify the successful run and exact source commit as described above.
+mkdir -p .local/ci-tftp
+gh run download RUN_ID --repo 4alvit/cisco-home-telephony \
+  --name verified-tftp-amd64-COMMIT_SHA --dir .local/ci-tftp
+cd .local/ci-tftp
+shasum -a 256 -c SHA256SUMS
+cat source.json
+docker load --input tftp-amd64.tar.gz
+docker image inspect cisco-home-ci/tftp:bookworm
+cd ../..
+```
+
+Compare the loaded configuration ID and `linux/amd64` platform with
+`image.json`. Publish to the reviewed registry and use its immutable manifest
+digest in the private site's `tftp_image`; a Docker configuration ID is not a
+deployment digest. The TFTP archive is limited to 150 MiB and retained for one
+day. It contains the server and fixed access policy, with no phone profiles,
+credentials, wallpapers or Cisco firmware.
+
+Follow the [daily profile service runbook](daily-phone-boot.md) to render the
+private inventory, migrate the firewall and apply `--profiles-only`. This mode
+does not deploy the Asterisk or voice images built during validation.
+
 ## Voice runtime export
 
 Select `export_target=voice` when dispatching a voice update. The default
