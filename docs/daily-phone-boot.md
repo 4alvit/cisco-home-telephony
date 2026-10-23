@@ -1,11 +1,19 @@
 # Daily phone boot and TFTP availability
 
-**Current operation:** reopen the reviewed, source-restricted TFTP window before
-an authorized phone reboot. **Proposed improvement:** a persistent service for
-profiles only, with firmware confined to a separate maintenance window. That
-service is not implemented or deployed by this document.
+The repository now implements a persistent **profile-only** TFTP Deployment and
+an independent, bounded firmware maintenance Job. Both use the same managed TFTP
+image and exclusive host lock. `--profiles-only` updates only profiles and their
+TFTP owner; it does not read, apply or restart the Asterisk configuration.
 
-![Current boot requirements and proposed separation of profiles from firmware](diagrams/daily-phone-boot.svg)
+**Acceptance status:** a physical 7945G completed an ordinary warm reboot on
+2026-10-22 with only its profile, dial plan and three wallpaper assets available.
+The profile transfer completed and both lines registered freshly. No firmware
+request was observed; missing optional `be-sip.jar` and `g3-tones.xml` did not
+block that boot. This is one pilot, not fleet-wide or cold-boot qualification.
+The persistent Deployment, final managed image, node restart and cold phone boot
+still require the gates below before being described as installed and accepted.
+
+![Profile-only daily service and bounded firmware maintenance](diagrams/daily-phone-boot.svg)
 
 ## What is stored, and what is requested
 
@@ -42,64 +50,154 @@ This supports a TFTP dependency but does not isolate its cause, prove a
 profile-only boot, or establish behavior across all ten phones. The window was
 then closed and its firewall baseline restored. Keep raw receipts private.
 
-## Before a reboot today
+## Prepare the permanent profile service
 
-1. Identify the exact phone and its DHCP reservation/TFTP destination. Reuse the
-   accepted profile, dial plan, manifest and firmware bundle from its last
-   successful deployment; compare their private hashes.
-2. Reopen that reviewed TFTP maintenance window for the intended source address,
-   including UDP 69 and the configured UDP 20000–20031 transfer range. Retain
-   default drops for other sources and IPv6. Verify the listener, exact served
-   files, bounded lifetime and cleanup ownership before rebooting.
-3. Restart only the authorized phone, after confirming no firmware write is in
-   progress. Do not rerun provisioning just to restore file availability.
-   `scripts/deploy.sh` also reapplies the core PBX configuration and can restart
-   Asterisk; it is not a TFTP-only reboot helper. Follow the existing
-   [deployment runbook](k3s-deployment.md).
-4. Verify boot completion, intended load and fresh registrations for both lines.
-   A web response, old contact, RRQ or running TFTP Pod alone is insufficient.
-   After transfers finish, close the exact window and verify removal of its
-   listener and temporary firewall exceptions. Retain the ordinary DROP rules.
+Use a newly built, tested TFTP image from this revision and pin its immutable
+`repository@sha256:...` reference as `tftp_image` in the private site file. Older
+images do not contain the managed lock supervisor or its readiness command.
+The existing Asterisk image need not be rebuilt or deployed for this change.
 
-Do not use a factory reset or repeated power cycles to diagnose a missing file.
-Firmware recovery remains a separate operation with the reviewed signed bundle;
-Cisco's [7945/7965 SIP firmware instructions](https://www.cisco.com/web/software/282074288/128566/cmterm-7945_7965-sip.9-4-2SR2-2-readme.html)
-describe signed-image authentication and manual TFTP installation.
+The site file's directory must contain:
 
-## Proposed profile-only service
+- `phones.json`: the verified physical inventory and exact accepted firmware
+  load for each phone;
+- `tftp/`: exactly `SEP<MAC>.cnf.xml` for every inventoried phone plus
+  `dialplan.xml`, with no firmware, extra files, directories or symlinks;
+- optional `wallpaper/`: exactly the reviewed `List.xml`, `home.png` and
+  `home-thumb.png` assets supported by the existing renderer.
 
-The implementation plan is a separate, single-replica k3s Deployment on the
-fixed TFTP node/address. It would serve an explicit, read-only allowlist of
-generated `SEP<MAC>.cnf.xml` profiles, `dialplan.xml`, and reviewed optional
-non-firmware assets. It must not mount the firmware directory or expose `.loads`,
-`.sbn`, arbitrary paths, uploads, or symlink targets. Private profiles contain
-credentials and must stay outside Git and public logs.
+Each profile must retain the inventory load ID, `dialTemplate=dialplan.xml` and
+`g722CodecSupport=2`. The mode does not regenerate profiles or change credentials.
+Local profile reads reject symlink ancestors, changing files, unsafe XML and
+oversized inputs. Use the real filesystem path rather than a symlink alias.
 
-Only one process may own the TFTP address/ports. Switching to bounded firmware
-maintenance must quiesce the daily listener, confirm its absence, then start
-the maintenance owner; restore the daily owner only after confirmed cleanup.
-Deployment strategy alone does not serialize an independent Job or host daemon.
+Supply each phone's fixed IPv4 in `phones[].ipv4`, or provide a separate private
+address map. The map has exactly this shape (values below are examples):
 
-Network restrictions must use explicit inventoried handset IPv4 `/32` sources,
-matched to the fixed TFTP destination, and retain default DROP rules. Do not
-inherit broad `phone_cidrs`, softphone or management-client ranges. An allowed
-source IP is not device authentication. With a shared
-TFTP root, an allowed phone can request another phone's profile; do not claim
-per-file authorization or confidentiality between allowed devices.
+```json
+{"version":1,"phones":[{"mac":"020000000001","ipv4":"192.168.50.101"}]}
+```
 
-The current [external SIP firewall](external-firewall.md) deliberately accepts
-only a baseline with TFTP closed. Persistent exceptions conflict with that
-contract. Do not remove the validation, edit captured evidence, bypass drift
-checks, or add broad accepts. A reviewed policy/version transition, writer
-ownership and rollback design are prerequisites to a daily service.
+Join the reviewed gateway/static DHCP inventory by canonical MAC, never by list
+position. The map must contain every inventoried phone exactly once and no other
+entry. Duplicate MACs/IPs, a conflicting existing IPv4, the node address, public
+addresses and known network/broadcast addresses are rejected. `phone_cidrs`,
+softphones and management clients never expand the profile TFTP grant.
+
+```bash
+# Entirely local validation/render; does not read firmware or Asterisk files.
+bash scripts/deploy.sh --site .local/site.json --profiles-only \
+  --phone-addresses .local/phone-addresses.json
+```
+
+This writes mode-0600 files under `.local/rendered/`:
+`tftp-profiles.yaml` and
+`profile-tftp-policy.json`. The first contains credentials in immutable Secrets;
+never publish or print it. The second is the exact, sorted IPv4 policy consumed
+by the [version-2 firewall migration](external-firewall.md). No MAC address is
+used as a network grant and the policy does not authenticate a device. An allowed
+phone can request any profile in this shared root.
+
+Before enabling the Deployment, migrate the existing closed firewall baseline
+offline using `external_firewall.py migrate`, review the new private config and
+install/apply it through the firewall runbook. Do not recapture a permissive live
+baseline, modify old evidence or run a legacy TFTP firewall writer alongside it.
+The version-2 guard permits only exact inventoried source IPv4 addresses to the
+fixed node IPv4, UDP 69 and 20000–20031; other sources/destinations and IPv6 remain
+closed for these ports.
+
+Verify both existing guard units are enabled, the legacy baseline is closed,
+and the external guard uses the version-2 config. Its `Before=k3s-agent.service
+k3s.service` ordering covers normal startup on either node role. **Ordering is
+not a startup-success dependency.** If the baseline guard itself fails without
+installing rules, this retains the existing hostNetwork trust assumption; it is
+not unconditional fail-closed boot. This change does not install a global K3s
+`Requires=` dependency or stop/restart the cluster when maintaining the guard.
+A node reboot and guard-failure exercise remain separate acceptance checks.
+
+```bash
+# Read-only cluster checks plus Kubernetes server dry-run.
+bash scripts/deploy.sh --site .local/site.json --profiles-only \
+  --phone-addresses .local/phone-addresses.json --server-dry-run
+# After the host firewall, sockets and new image have been reviewed:
+bash scripts/deploy.sh --site .local/site.json --profiles-only \
+  --phone-addresses .local/phone-addresses.json --apply --firewall-reviewed
+```
+
+The namespace must already exist. The command refuses an active, pending or
+malformed firmware Job and nonterminal maintenance Pods. It does not delete or
+interrupt a flash. A repeated profile apply is safe: unchanged immutable Secrets
+and Pod templates do not require a rollout. Changed profiles produce a new
+Secret and a `Recreate` rollout of `cisco-tftp-profiles` only.
+
+## Exclusive ownership and firmware maintenance
+
+The Deployment and Job mount `/var/lib/cisco-tftp-control` at `/run/cisco-tftp`
+and share `owner.lock`. The supervisor validates the private lock inode, acquires
+an exclusive lock before starting the daemon, and retains it until the listener
+and adopted transfer children have finished. It never unlinks the lock inode.
+The fixed IPv4 listener is read-only; neither new-file nor existing-file uploads
+are allowed. Profile Pods mount no firmware directory. The init container copies
+only validated Secret keys into regular files, then sets files to `0444` and
+directories to `0555`; the server sees a read-only volume.
+
+Readiness checks the held lock and the actual owned listener/socket, not merely
+an open port. The supervisor needs `KILL` to signal the daemon after it switches
+to the `tftp` user and `SYS_PTRACE` to inspect that child's socket descriptors.
+These apply inside the Pod's private PID namespace; no host PID namespace,
+shared process namespace or privileged mode is granted.
+The only host directory mounted is the dedicated ownership directory (plus the
+firmware directory for maintenance). An older unmanaged host daemon or Pod does
+not participate in this lock: identify and retire it explicitly after transfers
+finish before installing either managed owner.
+
+```bash
+# Retains firmware checksum/inventory validation, without applying the PBX.
+bash scripts/deploy.sh --site .local/site.json --tftp-only
+bash scripts/deploy.sh --site .local/site.json --tftp-only \
+  --apply --firewall-reviewed
+```
+
+The controller checks for active maintenance, scales the verified daily owner to
+zero, waits for its Pods to disappear, then creates the bounded firmware Job.
+It deletes only a verified terminal old Job with UID/resource-version
+preconditions. Once the firmware listener is Ready the daily Deployment stays at zero.
+After maintenance finishes and the firmware Pods are gone, explicitly rerun
+`--profiles-only --apply --firewall-reviewed` to resume it. Keep
+the same exact-source firewall policy throughout; do not open broad temporary
+CIDRs. The Job remains limited to one hour and no retry.
+
+An interrupted or ambiguous transition must be inspected, not blindly retried
+with forced deletion. The controller restores its own verified scale-down only when a fresh check
+proves maintenance is quiet and no firmware Pods remain. An unknown outcome or
+killed controller leaves the daily service suspended for inspection. If the
+daily Deployment remains at zero, wait for all firmware transfers and Job Pods
+to finish, then rerun `--profiles-only --apply --firewall-reviewed`. Do not scale
+or delete an active firmware owner to make that command pass. Preserve the
+current accepted profile/firmware set and rollback Secrets until acceptance;
+remove only old unreferenced Secrets after reviewing references.
+
+`--with-tftp` retains the combined PBX-plus-maintenance behavior. Use the two
+TFTP-only modes above when no Asterisk change is intended.
 
 ## Gates before permanent operation
 
-First test the renderer, strict file selection, path/symlink rejection and port
-ownership offline. Then use isolated network tests for allowed/denied sources,
-missing files, transfer ports, IPv6, firewall drift and interrupted owner changes.
-Finally, in an attended window, prove warm and cold boot with profiles available
-and **no firmware served**, fresh registrations, and recovery when TFTP is
-unavailable. Record whether firmware requests are harmless probes or a real
-dependency. If that gate fails, retain bounded maintenance; do not quietly add
-firmware to the daily root. Roll out further phones only after that evidence.
+1. Run the unit suite and isolated managed-image smoke tests: exact file set,
+   traversal/missing files, upload denial, competing owners and transfer drain.
+   Run the firewall network-namespace tests for allowed/denied sources, fixed
+   destination, transfer ports, IPv6, drift rejection and rollback.
+2. Verify the new immutable image, version-2 firewall, one listener and expected
+   served-file hashes on the actual node. Exercise maintenance handover and
+   return to daily service without an active firmware write.
+3. With the accepted firmware unchanged, warm- and cold-boot a pilot. Record
+   complete profile transfer, current running load and fresh registration of
+   both lines. A web response, an old contact or an RRQ alone is insufficient.
+4. Confirm G.722 negotiation on a real radio call, then check the remaining
+   inventoried phones as they are powered on. Never extrapolate one pilot's
+   warm boot to all loads, all phones or a cold boot.
+
+If profile-only boot fails, capture the actual requests and restore the accepted
+bounded maintenance path. Do not add firmware to the daily root, use a factory
+reset or repeatedly power-cycle a phone to hide the failure. Firmware recovery
+is a separate operation using the reviewed signed bundle described in Cisco's
+[7945/7965 SIP firmware instructions](https://www.cisco.com/web/software/282074288/128566/cmterm-7945_7965-sip.9-4-2SR2-2-readme.html).

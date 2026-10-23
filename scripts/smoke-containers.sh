@@ -214,6 +214,7 @@ docker run -d --name "$tftp_container" --network "$tftp_network" --read-only \
 sleep 1
 docker exec "$tftp_container" timeout 10 tftp 127.0.0.1 -m binary -c get health.txt /tmp/health.txt
 docker exec "$tftp_container" cat /tmp/health.txt | grep -x 'tftp-smoke-ok' > /dev/null
+python3 tests/tftp_managed_runtime.py "$prefix/tftp:bookworm"
 ASTERISK_TEST_IMAGE="$prefix/asterisk:22.11.0" ASTERISK_REQUIRE_UNBOUND=1 \
   python3 -m unittest discover -s tests -p test_external_sip.py -v
 echo 'Isolated smoke passed: Asterisk, AMI permissions/actions, G.711/Opus, Assist, radio AGI/AudioSocket, alarm/phone-service routes and AGI prompt, and TFTP RRQ.'
