@@ -356,7 +356,8 @@ def _render_tftp(site, configs, wallpaper=None, *, profiles_only=False):
         chmod 0644 /served/root/Desktops/320x212x16/List.xml /served/root/Desktops/320x212x16/home.png /served/root/Desktops/320x212x16/home-thumb.png
         """
     # The serving mount is read-only too: WRQ cannot create OR replace a file.
-    spec["initContainers"][0]["command"][2] += "\nfind /served/root -type f -exec chmod 0444 {} +\nfind /served/root -type d -exec chmod 0555 {} +\n"
+    # GNU chmod needs five digits to clear SGID inherited from the fsGroup volume.
+    spec["initContainers"][0]["command"][2] += "\nfind /served/root -type f -exec chmod 0444 {} +\nfind /served/root -type d -exec chmod 00555 {} +\n"
     if profiles_only:
         deployment = {"apiVersion": "apps/v1", "kind": "Deployment",
             "metadata": {"name": "cisco-tftp-profiles", "namespace": ns},

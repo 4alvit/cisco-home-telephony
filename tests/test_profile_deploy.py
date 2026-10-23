@@ -2,6 +2,10 @@
 import base64
 import json
 import os
+import runpy
+import shlex
+import shutil
+import stat
 from pathlib import Path
 import subprocess
 import sys
@@ -39,7 +43,7 @@ class ProfileDeploymentTests(unittest.TestCase):
         for name in files():
             self.assertIn(f'cp -L /config/{name} /served/root/{name}', stage)
         self.assertIn('chmod 0444', stage)
-        self.assertIn('chmod 0555', stage)
+        self.assertIn('chmod 00555', stage)
 
     def test_both_modes_share_lock_and_real_readiness_and_readonly_serve(self):
         for manifest in (render.render_profile_tftp(fixture(), files(), inventory()),
@@ -59,6 +63,54 @@ class ProfileDeploymentTests(unittest.TestCase):
                     dict(files(), **{'SEP02000000000A.cnf.xml': '<device/>'})):
             with self.assertRaises(ValueError):
                 render.render_profile_tftp(fixture(), bad, inventory())
+
+    def test_stage_clears_inherited_setgid_without_changing_volume_root(self):
+        chmod = shutil.which("gchmod") or shutil.which("chmod")
+        version = subprocess.run([chmod, "--version"], capture_output=True, text=True) if chmod else None
+        if version is None or "GNU coreutils" not in version.stdout:
+            self.skipTest("GNU chmod required to reproduce preserved directory SGID")
+        from test_wallpaper import wallpaper
+        check_root = runpy.run_path(str(ROOT / "containers/tftp/runtime.py"))["check_root"]
+        for profiles_only in (False, True):
+            with self.subTest(profiles_only=profiles_only), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                for name in ("firmware", "config", "wallpaper", "served", "bin"):
+                    (root / name).mkdir()
+                (root / "bin/chmod").symlink_to(chmod)
+                for name, content in files().items():
+                    (root / "config" / name).write_text(content)
+                for name, content in wallpaper().items():
+                    (root / "wallpaper" / name).write_bytes(content)
+                (root / "firmware/pilot.sbn").write_bytes(b"synthetic firmware")
+                served = root / "served/root"
+                served.mkdir()
+                directories = [root / "served", served, served / "Desktops", served / "Desktops/320x212x16"]
+                for directory in directories[:2]:
+                    # Seed the emptyDir and staging root with SGID even on hosts
+                    # that do not propagate the bit to new subdirectories.
+                    directory.chmod(0o2770)
+                    self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o2770)
+                manifest = (render.render_profile_tftp(fixture(), files(), inventory(), wallpaper())
+                            if profiles_only else render.render_tftp(fixture(), files(), wallpaper()))
+                command = manifest["items"][-1]["spec"]["template"]["spec"]["initContainers"][0]["command"]
+                script = command[2]
+                for name in ("firmware", "config", "wallpaper", "served"):
+                    script = script.replace("/" + name, shlex.quote(str(root / name)))
+                env = dict(os.environ, PATH=str(root / "bin") + os.pathsep + os.environ["PATH"])
+                try:
+                    result = subprocess.run(command[:2] + [script], env=env, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(stat.S_IMODE((root / "served").stat().st_mode), 0o2770)
+                    for directory in directories[1:]:
+                        self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o555)
+                    for path in served.rglob("*"):
+                        if path.is_file():
+                            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o444)
+                    check_root(str(served))
+                finally:
+                    for directory in directories:
+                        if directory.exists():
+                            directory.chmod(0o770)
 
     def make_inputs(self, root):
         (root / 'site.json').write_text(json.dumps(fixture()))
