@@ -6,6 +6,12 @@ External SIP trunks, PSTN/emergency calling, voicemail and public access are
 outside this setup. Two phones, echo `600`, tone `601` and ring group `620` let
 you verify the complete local call path.
 
+For daily profile availability without a PBX rollout, use the implemented
+[`--profiles-only` runbook](daily-phone-boot.md). It requires the new managed TFTP
+image and the version-2 exact-source firewall policy. `--tftp-only` opens bounded
+firmware maintenance without applying Asterisk; `--with-tftp` still includes the
+PBX. Physical cold-boot and node-restart acceptance remain separate gates.
+
 ## 1. Choose the home node
 
 Public examples use an illustrative network: node `voice-node`, IP

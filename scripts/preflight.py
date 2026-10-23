@@ -8,7 +8,8 @@ from pathlib import Path
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
-from render_k3s import load_site, read_files, read_wallpaper, render_core, render_tftp
+from render_k3s import (load_site, read_files, read_wallpaper, render_core, render_tftp,
+                        render_profile_tftp, profile_inputs, tftp_arguments)
 from verify_firmware import verify as verify_firmware
 from provision import ha_settings, phone_networks, local_networks, radio_settings, service_dialplan, gateway_settings, external_sip, alert_dialplan, intercom_dialplan, softphones, phone_services, phone_lines
 
@@ -178,19 +179,26 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--site", type=Path, default=Path(".local/site.json"))
     p.add_argument("--cluster", action="store_true")
-    p.add_argument("--with-tftp", action="store_true")
+    tftp_arguments(p)
     args = p.parse_args()
     try:
-        site = load_site(args.site, args.with_tftp)
+        site = load_site(args.site, args.with_tftp or args.tftp_only or args.profiles_only)
         root = args.site.resolve().parent
-        configs = read_files(root / "asterisk", ".conf")
-        check_phone_config(site, configs)
-        check_ha_config(site, configs)
-        inventory = (json.loads((root / "phones.json").read_text())
-                     if phone_services.enabled(site) or phone_services.group_settings(site) else None)
-        check_service_config(site, configs, inventory)
-        render_core(site, configs)
-        if args.with_tftp:
+        if args.phone_addresses and not args.profiles_only:
+            raise ValueError("--phone-addresses requires --profiles-only")
+        if args.profiles_only:
+            inventory, profiles = profile_inputs(root, site, args.phone_addresses)
+            render_profile_tftp(site, profiles, inventory, read_wallpaper(root / "wallpaper"))
+            print("Profile-only file allowlist, inventory and fixed IPv4 policy validated; no firmware or PBX inputs read.")
+        if not (args.profiles_only or args.tftp_only):
+            configs = read_files(root / "asterisk", ".conf")
+            check_phone_config(site, configs)
+            check_ha_config(site, configs)
+            inventory = (json.loads((root / "phones.json").read_text())
+                         if phone_services.enabled(site) or phone_services.group_settings(site) else None)
+            check_service_config(site, configs, inventory)
+            render_core(site, configs)
+        if args.with_tftp or args.tftp_only:
             xmls = read_files(root / "tftp", ".xml")
             render_tftp(site, xmls, read_wallpaper(root / "wallpaper"))
             _, load_id = verify_firmware(root / "firmware", root / "firmware-manifest.json")

@@ -15,6 +15,7 @@ on:
         options:
           - pbx
           - voice
+          - tftp
         required: false
         default: pbx
 permissions:
@@ -75,6 +76,15 @@ jobs:
           retention-days: 1
       - name: Build both PBX images and verify binary versions
         run: bash scripts/build-images.sh cisco-home-ci
+      - name: Verify firewall policies in disconnected network namespaces
+        run: |
+          docker build -t cisco-home-ci/firewall-test:bookworm - <<'DOCKERFILE'
+          FROM cisco-home-ci/tftp:bookworm
+          RUN apt-get update && apt-get install -y --no-install-recommends python3 iptables iproute2 \
+              && rm -rf /var/lib/apt/lists/*
+          DOCKERFILE
+          EXTERNAL_FIREWALL_TEST_IMAGE=cisco-home-ci/firewall-test:bookworm \
+            .venv/bin/python -m unittest discover -s tests -p test_external_firewall.py -v
       - name: Isolated smoke with synthetic generated configuration
         run: bash scripts/smoke-containers.sh cisco-home-ci
       - name: Verify isolated L16 media and native call expiry
@@ -86,7 +96,7 @@ jobs:
             --execute --output .local/l16/ci-1
           cat .local/l16/ci-1/report.json
       - name: Export verified amd64 images
-        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target != 'voice' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'pbx' && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
           mkdir -p .build/image-artifacts
@@ -103,11 +113,32 @@ jobs:
           printf 'Verified PBX image artifact size: %s bytes (limit: 400 MiB; only PBX exported)\n' "$total_bytes"
           test "$total_bytes" -lt $((400 * 1024 * 1024))
       - name: Upload verified amd64 images
-        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target != 'voice' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'pbx' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: verified-amd64-images-${{ github.sha }}
           path: .build/image-artifacts/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+      - name: Export verified TFTP image
+        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'tftp' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          mkdir -p .build/tftp-image-artifacts
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' cisco-home-ci/tftp:bookworm)" = linux/amd64
+          docker image save cisco-home-ci/tftp:bookworm | gzip -1 > .build/tftp-image-artifacts/tftp-amd64.tar.gz
+          docker image inspect cisco-home-ci/tftp:bookworm > .build/tftp-image-artifacts/image.json
+          printf '{"source_commit":"%s","run_id":"%s","platform":"linux/amd64"}\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" > .build/tftp-image-artifacts/source.json
+          cd .build/tftp-image-artifacts
+          sha256sum tftp-amd64.tar.gz image.json source.json > SHA256SUMS
+          test "$(du -sb . | cut -f1)" -lt $((150 * 1024 * 1024))
+      - name: Upload verified TFTP image
+        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'tftp' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verified-tftp-amd64-${{ github.sha }}
+          path: .build/tftp-image-artifacts/
           if-no-files-found: error
           compression-level: 0
           retention-days: 1

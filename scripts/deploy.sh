@@ -4,6 +4,9 @@ cd "$(dirname "$0")/.."
 site=.local/site.json
 mode=local
 with_tftp=0
+profiles_only=0
+tftp_only=0
+phone_addresses=
 firewall_reviewed=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -11,12 +14,24 @@ while [[ $# -gt 0 ]]; do
     --apply) mode=apply; shift ;;
     --server-dry-run) mode=server; shift ;;
     --with-tftp) with_tftp=1; shift ;;
+    --profiles-only) profiles_only=1; shift ;;
+    --tftp-only) tftp_only=1; shift ;;
+    --phone-addresses) phone_addresses=$2; shift 2 ;;
     --firewall-reviewed) firewall_reviewed=1; shift ;;
-    *) echo "Usage: $0 [--site FILE] [--server-dry-run | --apply --firewall-reviewed] [--with-tftp]" >&2; exit 2 ;;
+    *) echo "Usage: $0 [--site FILE] [--server-dry-run | --apply --firewall-reviewed] [--with-tftp | --tftp-only | --profiles-only [--phone-addresses FILE]]" >&2; exit 2 ;;
   esac
 done
+if (( with_tftp + profiles_only + tftp_only > 1 )); then
+  echo 'Choose only one TFTP mode.' >&2; exit 2
+fi
+if [[ -n "$phone_addresses" && "$profiles_only" != 1 ]]; then
+  echo '--phone-addresses requires --profiles-only.' >&2; exit 2
+fi
 args=(--site "$site")
 if [[ "$with_tftp" == 1 ]]; then args+=(--with-tftp); fi
+if [[ "$profiles_only" == 1 ]]; then args+=(--profiles-only); fi
+if [[ "$tftp_only" == 1 ]]; then args+=(--tftp-only); fi
+if [[ -n "$phone_addresses" ]]; then args+=(--phone-addresses "$phone_addresses"); fi
 python3 scripts/preflight.py "${args[@]}"
 python3 scripts/render_k3s.py "${args[@]}"
 if [[ "$mode" == local ]]; then
@@ -38,29 +53,20 @@ if [[ "$mode" == server ]]; then
     echo 'Server dry run needs an existing namespace. Local render passed. Review namespace labels, then create the namespace explicitly per docs.' >&2
     exit 2
   fi
-  "${kube[@]}" apply --server-side --field-manager=cisco-home-telephony --dry-run=server -f "$rendered/core.yaml"
-  if [[ "$with_tftp" == 1 ]]; then "${kube[@]}" apply --server-side --field-manager=cisco-home-telephony --dry-run=server -f "$rendered/tftp.yaml"; fi
+  if [[ "$profiles_only" == 0 && "$tftp_only" == 0 ]]; then
+    "${kube[@]}" apply --server-side --field-manager=cisco-home-telephony --dry-run=server -f "$rendered/core.yaml"
+  fi
+  if [[ "$with_tftp" == 1 || "$tftp_only" == 1 ]]; then "${kube[@]}" apply --server-side --field-manager=cisco-home-telephony --dry-run=server -f "$rendered/tftp.yaml"; fi
+  if [[ "$profiles_only" == 1 ]]; then "${kube[@]}" apply --server-side --field-manager=cisco-home-telephony --dry-run=server -f "$rendered/tftp-profiles.yaml"; fi
   exit 0
 fi
-"${kube[@]}" apply --server-side --field-manager=cisco-home-telephony -f "$rendered/core.yaml"
-"${kube[@]}" -n "$namespace" rollout status deployment/asterisk --timeout=180s
-if [[ "$with_tftp" == 1 ]]; then
-  # A completed/failed Job must be explicitly deleted before the next maintenance window.
-  "${kube[@]}" apply --server-side --field-manager=cisco-home-telephony -f "$rendered/tftp.yaml"
-  # The Job controller creates its Pod asynchronously. kubectl wait does not
-  # wait for an empty selector to acquire a matching resource.
-  pod_deadline=$((SECONDS + 30))
-  while :; do
-    request_seconds=$((pod_deadline - SECONDS))
-    if (( request_seconds <= 0 )); then
-      echo 'Timed out waiting for the TFTP Job controller to create a Pod.' >&2
-      exit 1
-    fi
-    if (( request_seconds > 5 )); then request_seconds=5; fi
-    tftp_pods=$("${kube[@]}" --request-timeout="${request_seconds}s" -n "$namespace" get pod -l app=cisco-tftp -o name)
-    if [[ -n "$tftp_pods" ]]; then break; fi
-    sleep 1
-  done
-  "${kube[@]}" -n "$namespace" wait --for=condition=Ready pod -l app=cisco-tftp --timeout=120s
-  echo 'TFTP active for at most one hour. Delete job/cisco-tftp after provisioning; do not interrupt an active firmware flash.'
+if [[ "$profiles_only" == 0 && "$tftp_only" == 0 ]]; then
+  "${kube[@]}" apply --server-side --field-manager=cisco-home-telephony -f "$rendered/core.yaml"
+  "${kube[@]}" -n "$namespace" rollout status deployment/asterisk --timeout=180s
+fi
+if [[ "$with_tftp" == 1 || "$tftp_only" == 1 ]]; then
+  python3 scripts/tftp_service.py apply --mode firmware --manifest "$rendered/tftp.yaml" --context "$context" --namespace "$namespace"
+fi
+if [[ "$profiles_only" == 1 ]]; then
+  python3 scripts/tftp_service.py apply --mode profiles --manifest "$rendered/tftp-profiles.yaml" --context "$context" --namespace "$namespace"
 fi

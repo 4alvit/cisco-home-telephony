@@ -1,4 +1,4 @@
-# Outbound SIP return-path firewall
+# Outbound SIP and profile TFTP firewall
 
 [`external_firewall.py`](../scripts/external_firewall.py) adds a narrow return
 path for an explicitly configured, outbound-only provider. It does not create
@@ -10,9 +10,12 @@ The existing host guard drops unfamiliar RTP sources in raw PREROUTING, before
 connection tracking. Simply adding a stateful INPUT rule cannot override that
 drop. This tool first installs and verifies both IPv4 and IPv6 INPUT guards, then
 inserts **one** IPv4 raw RETURN for UDP 10000–10199 addressed to the configured
-private PBX address. The original raw RTP DROP remains immediately after it. All
-other raw rules, including local SIP, AMI and TFTP, retain their exact contents
-and order. [Netfilter hook priorities](https://wiki.nftables.org/wiki-nftables/index.php/Netfilter_hooks)
+private PBX address. The original raw RTP DROP remains immediately after it. In
+the original configuration, all other raw rules, including local SIP, AMI and
+TFTP, retain their exact contents and order. Explicit version 2 can additionally
+enable the inventoried profile TFTP policy described below. It does not change
+the original closed capture or the external SIP/RTP policy.
+[Netfilter hook priorities](https://wiki.nftables.org/wiki-nftables/index.php/Netfilter_hooks)
 explain why the order matters.
 
 ## Traffic policy
@@ -118,7 +121,7 @@ sudo /usr/local/sbin/cisco-external-sip-guard apply \
 
 The [systemd unit](../deploy/cisco-external-sip-guard.service) runs after and
 requires the existing `cisco-telephony-guard.service`, and runs before
-`k3s-agent.service`. It also runs after `cisco-phone-gateway-guard.service` when
+`k3s-agent.service` and `k3s.service` (whichever node role is installed). It also runs after `cisco-phone-gateway-guard.service` when
 that optional service is started, without requiring or starting it. This
 serializes the two INPUT writers during boot and avoids their unrelated-rule
 hash checks racing. Install it only after the initial check/apply is reviewed:
@@ -159,7 +162,7 @@ an explicit update, apply the management guard first and the external guard
 second, then verify the exact owned bodies and their order. An unknown ACCEPT or
 other foreign rule ahead of the guards still requires investigation.
 
-Before a later TFTP window or phone-inventory change, disable the external
+For the original unversioned configuration, before a later TFTP window or phone-inventory change, disable the external
 provider transport and remove this guard using the current baseline and the
 listener-stopped procedure below. Then change the legacy policy, finish TFTP,
 restore its ordinary phone policy, and capture/review a **new** baseline before
@@ -167,11 +170,147 @@ reinstalling external protection. Remove the old filter **before** changing the
 legacy raw policy; otherwise its exact-baseline check will reject removal. The
 tool will not silently adopt a changed filter source list.
 
+## Version 2: persistent profile TFTP
+
+This is an explicit policy migration, not a more permissive capture. Existing
+unversioned configurations still close TFTP and keep their original behavior.
+`capture` always produces that original closed-baseline format and still rejects
+every TFTP source exception. Never recapture the running version 2 rules or edit
+the captured baseline to remove a drift error.
+
+The profile renderer produces private `profile-tftp-policy.json` from the same
+verified physical-phone inventory as the served profiles. Its exact format is:
+
+```json
+{
+  "version": 1,
+  "bind_ipv4": "192.168.50.10",
+  "phone_ipv4": ["192.168.50.21", "192.168.50.22"]
+}
+```
+
+These are synthetic addresses. The list must contain 1–128 unique canonical
+RFC1918 IPv4 hosts, sorted as strings, without the server address. It must include
+offline inventoried phones too. The bind address must equal the existing
+firewall configuration's fixed node address. Broad `phone_cidrs`, management
+clients and softphones do not grant profile access. Neither a source address nor
+a MAC-address filename authenticates a device; an allowed phone can request
+another allowed phone's profile. Keep profiles and this inventory private.
+
+`migrate` creates a new configuration with outer `"version": 2`, the unchanged
+three original fields, and the policy above under `"profile_tftp"`. It only reads
+private files and writes a new mode-0600 file; it does not inspect or change live
+firewall rules. It refuses existing output files, symlink inputs/outputs, invalid
+ownership or permissions, and already-versioned input. The original baseline
+must contain one exact UDP 69 DROP and one exact UDP 20000:20031 DROP in **both**
+address families, with no overlapping alternative UDP range. Existing captures
+without that protection cannot be migrated until the closed legacy guard is
+reviewed and a new legitimate baseline is captured.
+
+Version 2 `apply` first installs and verifies both INPUT guards, then adds an
+exact source `/32` plus destination `/32` RETURN for each inventoried phone before
+each of the two raw TFTP DROPs. INPUT permits the same exact tuples and drops all
+other TFTP sources/destinations; IPv6 receives no exception. Ports are fixed,
+not a user-configurable range. Existing later INPUT policy can still reject
+traffic. The server separately enforces the file allowlist, read-only access and
+one active TFTP owner; a firewall rule cannot enforce those properties.
+
+### Migrate an already installed guard
+
+Coordinate other writers and keep the original private capture as the recovery
+source. Install the updated script first. Copy the renderer's policy to a
+root-owned regular mode-0600 file on the PBX node. The following assumes the
+original capture has been safely preserved as
+`/etc/cisco-external-sip-guard.legacy.json`; it must match the currently installed
+guard. Do not overwrite an older recovery file.
+
+```bash
+sudo /usr/local/sbin/cisco-external-sip-guard migrate \
+  --config /etc/cisco-external-sip-guard.legacy.json \
+  --profile-tftp-policy /etc/cisco-profile-tftp-policy.json \
+  --output /etc/cisco-external-sip-guard.next.json
+sudo /usr/local/sbin/cisco-external-sip-guard check \
+  --config /etc/cisco-external-sip-guard.next.json
+sudo /usr/local/sbin/cisco-external-sip-guard status \
+  --config /etc/cisco-external-sip-guard.next.json
+```
+
+The new configuration recognizes only the exact original closed state, exact
+previous external-only state, and its own generated states. It does not accept
+arbitrary drift. Before applying, `status` may report `legacy_open` or
+`legacy_closed`, and `profile_tftp.effective` must be false. `check` validates the
+target through the kernel without enabling anything. Review the phone count and
+private inventory locally.
+
+**Applying version 2 explicitly enables both external return paths and profile
+TFTP**, including when the old external state was closed. It does not enable a
+provider account or transport. Use this step only when both network policies are
+intended. With the existing enabled systemd unit, atomically select the reviewed
+candidate on the same filesystem and reload it:
+
+```bash
+sudo mv /etc/cisco-external-sip-guard.next.json /etc/cisco-external-sip-guard.json
+sudo systemctl reload cisco-external-sip-guard.service
+sudo /usr/local/sbin/cisco-external-sip-guard status \
+  --config /etc/cisco-external-sip-guard.json
+```
+
+For a first installation, use `apply` and then the service installation/enable
+steps above instead. A failed reload must be investigated; it attempts to close
+both policies, not silently restore the old open state. Keep the version 2
+configuration selected while diagnosing its generated rules.
+
+Persistence uses the **same** enabled systemd unit and private configuration, not
+a second raw-rule writer or a timer. At node boot, the legacy guard establishes
+the closed baseline, then the external guard applies the reviewed version 2
+policy before k3s starts. After network/k3s startup, verify `policy_version: 2`,
+`profile_tftp.configured: true`, `profile_tftp.effective: true`, the expected
+phone count, and all four first hooks. `effective` means the expected firewall
+rules are present; it does **not** prove that a TFTP listener, transfer or phone
+boot succeeded. An exact legacy raw rewrite closes access and makes this field
+false until an explicit successful reapply. Unknown drift still fails.
+
+### Maintenance, inventory changes and rollback
+
+For ordinary firmware maintenance under version 2, retain the same narrow
+inventoried network grant while the documented TFTP handover stops the daily
+profile owner and runs the bounded firmware owner. Use their shared host lock;
+never run both listeners or an independent legacy raw-rule writer. Resume daily
+service only after the maintenance owner is absent. See
+[daily phone boot](daily-phone-boot.md) for file, process and physical boot gates.
+
+`rollback` closes **both** profile TFTP and external SIP/RTP return paths. It
+restores raw DROPs before closing INPUT exceptions and does not require a stopped
+listener. This intentionally interrupts external registrations/calls. Stopping
+the systemd unit runs this rollback; disable the unit as well if closure must
+survive a node reboot. No independent profile-only firewall pause is implied.
+
+To change the phone list, first roll back using the **currently selected**
+version 2 configuration. Generate a new private policy from the updated verified
+inventory, then migrate again from the saved original closed capture into a new
+candidate. Check, select and apply that candidate. This requires a coordinated
+external-traffic interruption. An old open version 2 list is not silently adopted
+by a new list. If the legacy SIP/RTP baseline itself changes, use the full removal
+and legitimate recapture procedure instead.
+
+To return to the original unversioned tool/configuration, first stop the profile
+listener, disable the external provider transport, and use version 2 `remove`
+with the current configuration and the listener-stopped checks below. Only then
+select the saved original configuration. A version 1 tool cannot recognize the
+extra version 2 INPUT rules; merely replacing its configuration is not a safe
+downgrade. Keep both private configurations for recovery.
+
+Source/unit tests are not boot acceptance. A deployment requires verified
+transfers from the allowed phones, rejection of other sources and uploads,
+fresh registrations after a profile-only warm boot and power cycle, plus a node
+reboot confirming unit ordering, policy and listener persistence. Until those
+physical checks pass, report the implementation separately from deployment.
+
 ## Rollback and removal
 
 `rollback` always restores and verifies the exact original IPv4 raw body **before**
 closing the INPUT exceptions. It leaves both owned INPUT chains installed and
-blocks external SIP replies too. This is safe while the UDP transport still
+blocks external SIP replies too (and profile TFTP in version 2). This is safe while the UDP transport still
 listens, although any external call or registration will stop working.
 
 ```bash
@@ -211,6 +350,11 @@ without host networking, mounted private files or provider connectivity. It
 checks real iptables serialization and UDP connection tracking, unsolicited and
 changed-tuple rejection, IPv6 rejection, retained local RTP sources, rollback,
 and removal with a real listening socket. Its synthetic addresses exist only
-inside that container. The test does not establish a provider's NAT behavior,
+inside that container. It also sends real UDP packets to profile ports 69,
+20000 and 20031: exact inventoried sources/destination pass; other phones,
+inherited RTP sources, another local destination and IPv6 are blocked. It tests
+the old-policy migration, explicit closure before inventory changes, rollback,
+removal and rejection of missing/overlapping TFTP protection without rule writes.
+The test does not establish a provider's NAT behavior,
 DNS availability or real audio quality. The normal suite skips this test unless
 an image is explicitly selected.

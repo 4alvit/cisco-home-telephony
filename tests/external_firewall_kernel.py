@@ -1,4 +1,5 @@
 """Invoked only inside the disposable network-none NET_ADMIN test container."""
+import copy
 import shlex
 import socket
 
@@ -78,3 +79,105 @@ def exercise(fw, config):
     if after['filter4']['exists'] or after['filter6']['exists']:
         raise RuntimeError('Owned chains remain after removal')
     print('PASS: kernel parser, UDP reply tuples, unsolicited/IPv6 drops, source preservation, safe rollback/removal')
+    exercise_profiles(fw, config, udp, must_block)
+
+
+def exercise_profiles(fw, legacy, udp, must_block):
+    """Real datagrams through both netfilter tables; all addresses stay local."""
+    phones = ['192.168.50.21', '192.168.50.22']
+    other_destination = '192.168.50.11'
+    outsiders = ['192.168.50.23', '192.168.60.22', '10.20.30.40', '198.51.100.20']
+    for address in phones + [other_destination] + outsiders[:2]:
+        fw.run(['ip', 'address', 'add', address + '/32', 'dev', 'lo'])
+    policy = {'version': 1, 'bind_ipv4': legacy['bind_ipv4'], 'phone_ipv4': phones}
+    cfg = fw.migrate(legacy, policy)
+    # Migration is exercised from the previously deployed external-only policy.
+    fw.apply(legacy, 'apply')
+    before = fw.state(cfg)
+    assert 'legacy_open' in before['raw4']['states']
+    assert not fw.apply(cfg, 'status')['profile_tftp']['effective']
+    fw.apply(cfg, 'check')
+    assert fw.state(cfg) == before, 'Check changed live namespace rules'
+    fw.apply(cfg, 'apply')
+    assert fw.apply(cfg, 'status')['profile_tftp']['effective']
+    fw.same_foreign(before, fw.state(cfg))
+    opened = fw.state(cfg)
+    fw.apply(cfg, 'apply')
+    assert fw.state(cfg) == opened, 'Repeated apply changed exact state'
+
+    def deliver(receiver, source, allowed):
+        with udp(source, 0) as sender:
+            sender.sendto(b'profile-policy-probe', receiver.getsockname())
+            if allowed:
+                assert receiver.recvfrom(4096)[0] == b'profile-policy-probe', 'Allowed profile packet lost'
+            else:
+                must_block(receiver)
+
+    for port in (69, 20000, 20031):
+        with udp(cfg['bind_ipv4'], port) as server:
+            for phone in phones:
+                deliver(server, phone, True)
+            # Same-LAN devices, an inherited RTP source and public sources do
+            # not gain TFTP permission from those other policies.
+            for outsider in outsiders:
+                deliver(server, outsider, False)
+        with udp(other_destination, port) as other_server:
+            deliver(other_server, phones[0], False)
+        with udp('::1', port, socket.AF_INET6) as v6_server, udp('::1', 0, socket.AF_INET6) as v6_phone:
+            v6_phone.sendto(b'no-ipv6-profile-access', v6_server.getsockname())
+            must_block(v6_server)
+
+    # Invalid port overlap and missing baseline protection are rejected before
+    # any write even when a valid version 2 policy is already active.
+    for family in (4, 6):
+        for overlap in ('68:70', '19999:20000', '20031:20032'):
+            invalid = copy.deepcopy(cfg)
+            raw = invalid['raw_baseline']
+            raw[f'ipv{family}_rules'].insert(0, fw.raw_rule(raw['chain'], raw['owner'], 'udp', overlap))
+            try:
+                fw.apply(invalid, 'apply')
+            except ValueError:
+                pass
+            else:
+                raise RuntimeError('Overlapping TFTP port policy accepted')
+            assert fw.state(cfg) == opened, 'Rejected overlap changed rules'
+        invalid = copy.deepcopy(cfg)
+        raw = invalid['raw_baseline']
+        raw[f'ipv{family}_rules'].remove(fw.raw_rule(raw['chain'], raw['owner'], 'udp', '69'))
+        try:
+            fw.apply(invalid, 'apply')
+        except ValueError:
+            pass
+        else:
+            raise RuntimeError('Missing TFTP DROP accepted')
+        assert fw.state(cfg) == opened, 'Rejected missing protection changed rules'
+
+    # Inventory changes require explicit closure. Neither the new list nor a
+    # legacy tool may silently adopt the currently open version 2 rules.
+    next_cfg = fw.migrate(legacy, {**policy, 'phone_ipv4': phones[:1]})
+    for incompatible in (next_cfg, legacy):
+        try:
+            fw.apply(incompatible, 'apply')
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError('Unreviewed inventory/downgrade transition accepted')
+        assert fw.state(cfg) == opened, 'Rejected migration changed rules'
+    fw.apply(cfg, 'rollback')
+    assert not fw.apply(cfg, 'status')['profile_tftp']['effective']
+    for port in (69, 20000, 20031):
+        with udp(cfg['bind_ipv4'], port) as server:
+            deliver(server, phones[0], False)
+    fw.apply(next_cfg, 'apply')
+    with udp(cfg['bind_ipv4'], 69) as server:
+        deliver(server, phones[0], True)
+        deliver(server, phones[1], False)
+    fw.apply(next_cfg, 'remove')
+    fw.same_foreign(before, fw.state(legacy))
+    assert not fw.state(legacy)['filter4']['exists']
+    # Reinstalling the old policy is supported only after version 2 removal.
+    fw.apply(legacy, 'apply')
+    with udp(cfg['bind_ipv4'], 69) as server:
+        deliver(server, phones[0], False)
+    fw.apply(legacy, 'remove')
+    print('PASS: version 2 kernel TFTP source/destination/IPv6 gates, migration, rollback and inventory change')

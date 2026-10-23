@@ -16,6 +16,11 @@ import tempfile
 import xml.etree.ElementTree as ET
 import zlib
 
+_profile_spec = importlib.util.spec_from_file_location(
+    "cisco_profile_tftp", Path(__file__).resolve().with_name("profile_tftp.py"))
+_profiles = importlib.util.module_from_spec(_profile_spec)
+_profile_spec.loader.exec_module(_profiles)
+
 _softphone_spec = importlib.util.spec_from_file_location(
     "cisco_softphones", Path(__file__).resolve().with_name("softphones.py"))
 _softphones = importlib.util.module_from_spec(_softphone_spec)
@@ -290,11 +295,11 @@ def render_core(site, configs):
     return {"apiVersion": "v1", "kind": "List", "items": [namespace, config, deployment]}
 
 
-def render_tftp(site, configs, wallpaper=None):
+def _render_tftp(site, configs, wallpaper=None, *, profiles_only=False):
     ns = site["namespace"]
-    name, config = secret(ns, "cisco-provision", configs)
+    name, config = secret(ns, "cisco-profiles" if profiles_only else "cisco-provision", configs)
     spec = pod_base(site)
-    spec["restartPolicy"] = "Never"
+    spec["restartPolicy"] = "Always" if profiles_only else "Never"
     spec["initContainers"] = [{"name": "stage", "image": site["tftp_image"], "command": ["/bin/sh", "-ec", """
         mkdir -p /served/root
         for f in /firmware/*; do
@@ -312,16 +317,29 @@ def render_tftp(site, configs, wallpaper=None):
                          {"name": "config", "mountPath": "/config", "readOnly": True}, {"name": "served", "mountPath": "/served"}]}]
     spec["securityContext"].update({"fsGroup": 10001})
     spec["containers"] = [{"name": "tftp", "image": site["tftp_image"],
-        "args": ["--foreground", "--user", "tftp", "--secure", "--address", f"{site['node_ipv4']}:69",
+        "args": ["--foreground", "--ipv4", "--user", "tftp", "--secure", "--address", f"{site['node_ipv4']}:69",
                  "--port-range", "20000:20031", "--blocksize", "1468", "--verbose", "/srv/tftp"],
         "securityContext": {"runAsUser": 0, "allowPrivilegeEscalation": False, "readOnlyRootFilesystem": True,
-           "capabilities": {"drop": ["ALL"], "add": ["NET_BIND_SERVICE", "SYS_CHROOT", "SETUID", "SETGID"]}},
+           "capabilities": {"drop": ["ALL"], "add": ["NET_BIND_SERVICE", "SYS_CHROOT", "SETUID", "SETGID", "KILL", "SYS_PTRACE"]}},
         "resources": {"requests": {"cpu": "20m", "memory": "32Mi"}, "limits": {"cpu": "500m", "memory": "128Mi"}},
         "ports": [{"name": "tftp", "containerPort": 69, "protocol": "UDP"}],
-        "volumeMounts": [{"name": "served", "mountPath": "/srv/tftp", "subPath": "root", "readOnly": True}]}]
+        "env": [{"name": "CISCO_TFTP_LOCK", "value": "/run/cisco-tftp/owner.lock"}],
+        "readinessProbe": {"exec": {"command": ["/usr/local/bin/cisco-tftp", "--check"]},
+                           "periodSeconds": 2, "timeoutSeconds": 3, "failureThreshold": 3},
+        "volumeMounts": [{"name": "served", "mountPath": "/srv/tftp", "subPath": "root", "readOnly": True},
+                         {"name": "ownership", "mountPath": "/run/cisco-tftp"}]}]
     spec["volumes"] = [{"name": "config", "secret": {"secretName": name, "defaultMode": 0o440}},
         {"name": "firmware", "hostPath": {"path": "/var/lib/cisco-tftp", "type": "Directory"}},
-        {"name": "served", "emptyDir": {"sizeLimit": "512Mi"}}]
+        {"name": "served", "emptyDir": {"sizeLimit": "16Mi" if profiles_only else "512Mi"}},
+        {"name": "ownership", "hostPath": {"path": "/var/lib/cisco-tftp-control", "type": "DirectoryOrCreate"}}]
+    if profiles_only:
+        # Only validated literal keys enter this shell fragment. Kubernetes Secret
+        # projections are symlinks; dereference exactly these keys into regular files.
+        stage = spec["initContainers"][0]
+        stage["command"][2] = "mkdir -p /served/root\n" + "\n".join(
+            f"cp -L /config/{filename} /served/root/{filename}" for filename in sorted(configs))
+        stage["volumeMounts"] = [item for item in stage["volumeMounts"] if item["name"] != "firmware"]
+        spec["volumes"] = [item for item in spec["volumes"] if item["name"] != "firmware"]
     items = [config]
     if wallpaper is not None:
         validate_wallpaper(wallpaper)
@@ -337,10 +355,47 @@ def render_tftp(site, configs, wallpaper=None):
         chmod 0755 /served/root/Desktops /served/root/Desktops/320x212x16
         chmod 0644 /served/root/Desktops/320x212x16/List.xml /served/root/Desktops/320x212x16/home.png /served/root/Desktops/320x212x16/home-thumb.png
         """
+    # The serving mount is read-only too: WRQ cannot create OR replace a file.
+    spec["initContainers"][0]["command"][2] += "\nfind /served/root -type f -exec chmod 0444 {} +\nfind /served/root -type d -exec chmod 0555 {} +\n"
+    if profiles_only:
+        deployment = {"apiVersion": "apps/v1", "kind": "Deployment",
+            "metadata": {"name": "cisco-tftp-profiles", "namespace": ns},
+            "spec": {"replicas": 1, "revisionHistoryLimit": 2, "strategy": {"type": "Recreate"},
+                "selector": {"matchLabels": {"app": "cisco-tftp-profiles"}},
+                "template": {"metadata": {"labels": {"app": "cisco-tftp-profiles",
+                    "app.kubernetes.io/part-of": "cisco-home-telephony"}}, "spec": spec}}}
+        return {"apiVersion": "v1", "kind": "List", "items": items + [deployment]}
     job = {"apiVersion": "batch/v1", "kind": "Job", "metadata": {"name": "cisco-tftp", "namespace": ns},
         "spec": {"backoffLimit": 0, "activeDeadlineSeconds": 3600, "ttlSecondsAfterFinished": 600,
             "template": {"metadata": {"labels": {"app": "cisco-tftp", "app.kubernetes.io/part-of": "cisco-home-telephony"}}, "spec": spec}}}
     return {"apiVersion": "v1", "kind": "List", "items": items + [job]}
+
+
+
+def render_tftp(site, configs, wallpaper=None):
+    """Render a bounded firmware maintenance owner using the managed TFTP image."""
+    return _render_tftp(site, configs, wallpaper)
+
+
+def render_profile_tftp(site, configs, inventory, wallpaper=None):
+    """Render a firmware-free daily owner; reject extra files before staging."""
+    configs = _profiles.validate_profiles(configs, site, inventory)
+    return _render_tftp(site, configs, wallpaper, profiles_only=True)
+
+
+def profile_inputs(root, site, phone_addresses=None):
+    inventory = json.loads((root / "phones.json").read_text())
+    if phone_addresses is not None:
+        inventory = _profiles.merge_addresses(inventory, json.loads(Path(phone_addresses).read_text()))
+    return inventory, _profiles.read_profiles(root / "tftp", site, inventory)
+
+
+def tftp_arguments(parser):
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--with-tftp", action="store_true", help="Core PBX plus bounded firmware maintenance")
+    modes.add_argument("--tftp-only", action="store_true", help="Bounded firmware maintenance without PBX changes")
+    modes.add_argument("--profiles-only", action="store_true", help="Permanent profiles without firmware or PBX changes")
+    parser.add_argument("--phone-addresses", type=Path, help="Private exact MAC/IPv4 mapping for profiles-only")
 
 
 def private_write(path, content):
@@ -364,14 +419,21 @@ def private_write(path, content):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--site", type=Path, default=Path(".local/site.json"))
-    parser.add_argument("--with-tftp", action="store_true")
+    tftp_arguments(parser)
     args = parser.parse_args()
     try:
-        site = load_site(args.site, args.with_tftp)
+        site = load_site(args.site, args.with_tftp or args.tftp_only or args.profiles_only)
         root = args.site.resolve().parent
-        core = render_core(site, read_files(root / "asterisk", ".conf"))
-        outputs = {"core.yaml": core}
-        if args.with_tftp:
+        if args.phone_addresses and not args.profiles_only:
+            raise ValueError("--phone-addresses requires --profiles-only")
+        outputs = {}
+        if not (args.profiles_only or args.tftp_only):
+            outputs["core.yaml"] = render_core(site, read_files(root / "asterisk", ".conf"))
+        if args.profiles_only:
+            inventory, profiles = profile_inputs(root, site, args.phone_addresses)
+            outputs["tftp-profiles.yaml"] = render_profile_tftp(site, profiles, inventory, read_wallpaper(root / "wallpaper"))
+            outputs["profile-tftp-policy.json"] = _profiles.policy(site, inventory)
+        if args.with_tftp or args.tftp_only:
             outputs["tftp.yaml"] = render_tftp(site, read_files(root / "tftp", ".xml"), read_wallpaper(root / "wallpaper"))
         for filename, manifest in outputs.items():
             private_write(root / "rendered" / filename, json.dumps(manifest, indent=2) + "\n")
