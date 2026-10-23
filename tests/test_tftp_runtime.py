@@ -33,6 +33,7 @@ class TFTPManagedOwnershipTests(unittest.TestCase):
         self.lock = self.control / "owner.lock"
         self.served = self.root / "served"
         self.served.mkdir(mode=0o555)
+        self.served.chmod(0o555)  # Match staged permissions regardless of process umask.
         self.addCleanup(self.make_writable)
         daemon = self.root / "fake-tftpd"
         daemon.write_text("""#!/usr/bin/env python3
