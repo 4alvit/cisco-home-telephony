@@ -8,13 +8,18 @@ The provider endpoint must already follow the fixed-destination restrictions in
 
 The existing host guard drops unfamiliar RTP sources in raw PREROUTING, before
 connection tracking. Simply adding a stateful INPUT rule cannot override that
-drop. This tool first installs and verifies both IPv4 and IPv6 INPUT guards, then
+drop. This tool first installs and verifies IPv4 and IPv6 guards in both
+`mangle/INPUT` and `filter/INPUT`, then
 inserts **one** IPv4 raw RETURN for UDP 10000–10199 addressed to the configured
 private PBX address. The original raw RTP DROP remains immediately after it. In
 the original configuration, all other raw rules, including local SIP, AMI and
 TFTP, retain their exact contents and order. Explicit version 2 can additionally
 enable the inventoried profile TFTP policy described below. It does not change
-the original closed capture or the external SIP/RTP policy.
+the original closed capture or the external SIP/RTP policy. The same exact
+policy is used in both INPUT tables. `mangle/INPUT` runs after connection
+tracking and before `filter/INPUT`, so a later filter ACCEPT cannot bypass
+its DROP. The first mangle hook is required; the filter hook is retained
+without competing with kube-router for the first filter position.
 [Netfilter hook priorities](https://wiki.nftables.org/wiki-nftables/index.php/Netfilter_hooks)
 explain why the order matters.
 
@@ -107,12 +112,13 @@ Apply performs these stages in order:
 
 1. Recognize exact current raw rules and absent, open or closed owned filter
    chains. Kernel-validate the complete target before changing it.
-2. Install IPv6 and then IPv4 INPUT protection as the first rules in INPUT.
-   Independently read and verify both before relaxing any raw RTP protection.
+2. Install IPv6 and then IPv4 protection as the first rules in `mangle/INPUT`,
+   then install or retain the identical `filter/INPUT` guards. Independently
+   read and verify all four guards before relaxing any raw RTP protection.
 3. Insert the destination-limited IPv4 raw RETURN, retaining all other raw rules.
 4. Read back every owned chain and compare hashes of unrelated chains/rules.
    A failed transition attempts to restore raw protection first, then retain a
-   closed INPUT guard. A failed recovery is reported explicitly.
+   closed guards in both INPUT tables. A failed recovery is reported explicitly.
 
 ```bash
 sudo /usr/local/sbin/cisco-external-sip-guard apply \
@@ -143,24 +149,38 @@ an operator-reviewed `Requires=cisco-external-sip-guard.service` and matching
 `After=` drop-in to k3s rather than assuming `Before=` expresses that dependency.
 
 Recheck `status` after k3s/network startup and after any other firewall operation.
-Both external-guard filters (IPv4 and IPv6) must report `first: true`, IPv4 raw
-must include `open`, and IPv6 raw must remain recognized. This is not a continuous rule reconciler. Another writer
+Both `raw` and `mangle` families must report `first: true`; both `filter`
+families must report `attached: true`. All six states must include `open`
+(IPv6 raw is unchanged and can match both open and closed). A filter hook
+reporting `first: false` is expected when kube-router precedes it; it does
+not make the profile policy ineffective while the earlier exact mangle
+guard remains first. This is not a continuous rule reconciler. Another writer
 can move the hook or rewrite raw rules. If the legacy guard restores its exact
 closed baseline, outside RTP stops; a fresh explicit `apply` can safely re-enable
 it. Other drift is rejected. Some older guard implementations instead reject the
 new raw RETURN; restore this tool's baseline before asking them to change policy.
 Never run both writers concurrently.
 
-The external and phone-management guards each request the first INPUT position.
-With this startup order, the external guard is first and the management guard
-follows it. The management status can therefore report `first: false` while its
-rules remain effective: their protected ports are disjoint, and the external
-chain returns unrelated traffic to the next INPUT rule. This is an understood
-ordering limitation, not a reason to make both services repeatedly reapply.
-Do not run periodic or concurrent reconciliation of these guards. When both need
-an explicit update, apply the management guard first and the external guard
-second, then verify the exact owned bodies and their order. An unknown ACCEPT or
-other foreign rule ahead of the guards still requires investigation.
+Kube-router can restore its first `filter/INPUT` position during normal network
+policy reconciliation. This tool leaves an attached filter hook in place and
+does not repeatedly move it ahead of kube-router. It never modifies Kubernetes
+chains or disables the network-policy controller. Its required first mangle
+hook enforces the external SIP, RTP and profile TFTP policy before any filter
+rule; later host and Kubernetes rules can still reject permitted traffic.
+Do not run periodic or concurrent reconciliation of these guards. An unknown
+rule before the raw or mangle hook still makes the policy ineffective and
+requires investigation. The separate phone-management guard protects other
+ports and retains its own ordering requirements; this change does not certify
+its policy against arbitrary preceding filter rules.
+
+When upgrading from a filter-only installation, retain the existing private
+configuration and raw capture. Run `check`, then an explicit `apply` with this
+script: it creates the missing mangle guards before opening or retaining the
+raw exceptions. Version 2 reports `effective: false` until those guards are
+installed. Rollback closes raw first, then both INPUT layers. Removal deletes
+both owned INPUT chains only after closure and the existing external-listener
+check. Do not downgrade the installed script while its mangle chains remain;
+use this version's remove procedure first.
 
 For the original unversioned configuration, before a later TFTP window or phone-inventory change, disable the external
 provider transport and remove this guard using the current baseline and the
@@ -207,7 +227,7 @@ address families, with no overlapping alternative UDP range. Existing captures
 without that protection cannot be migrated until the closed legacy guard is
 reviewed and a new legitimate baseline is captured.
 
-Version 2 `apply` first installs and verifies both INPUT guards, then adds an
+Version 2 `apply` first installs and verifies both INPUT layers and families, then adds an
 exact source `/32` plus destination `/32` RETURN for each inventoried phone before
 each of the two raw TFTP DROPs. INPUT permits the same exact tuples and drops all
 other TFTP sources/destinations; IPv6 receives no exception. Ports are fixed,

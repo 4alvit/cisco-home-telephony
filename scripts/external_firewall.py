@@ -23,6 +23,7 @@ CHAIN = 'CISCO_EXTERNAL_SIP'
 OWNER = 'cisco-external-sip'
 RTP = '10000:10199'
 TFTP = ('69', '20000:20031')
+TABLES = ('raw', 'mangle', 'filter')
 LEGACY_KEYS = {'bind_ipv4', 'signaling_port', 'raw_baseline'}
 PRIVATE = tuple(ipaddress.ip_network(n) for n in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
 
@@ -271,7 +272,14 @@ def inspect(config, family, table):
 
 
 def state(config):
-    return {f'{table}{family}': inspect(config, family, table) for table in ('raw', 'filter') for family in (4, 6)}
+    return {f'{table}{family}': inspect(config, family, table) for table in TABLES for family in (4, 6)}
+
+
+def hook_in_place(table, snapshot):
+    # mangle/INPUT runs after conntrack and before filter/INPUT. Its exact first
+    # hook enforces the policy even when kube-router prepends a filter ACCEPT.
+    # Retain the filter guard without competing for kube-router's first slot.
+    return snapshot['attached'] if table == 'filter' else snapshot['first']
 
 
 def same_foreign(before, after):
@@ -297,7 +305,7 @@ def payload(config, family, table, before, opened=False, remove=False):
             lines.append('-F ' + CHAIN)
         if not before['exists'] or ('open' if opened else 'closed') not in before['states']:
             lines += [shlex.join(r) for r in filter_body(config, family, opened)]
-        if not before['first']:
+        if not hook_in_place(table, before):
             if before['attached']:
                 lines.append(shlex.join(['-D'] + hook()[1:]))
             lines.append(shlex.join(['-I', 'INPUT', '1'] + hook()[2:]))
@@ -319,7 +327,7 @@ def transition(config, family, table, opened=False, remove=False):
     if remove:
         if after['exists']:
             raise RuntimeError('Owned filter chain was not removed')
-    elif ('open' if opened else 'closed') not in after['states'] or not after['first']:
+    elif ('open' if opened else 'closed') not in after['states'] or not hook_in_place(table, after):
         raise RuntimeError('Firewall transition did not converge')
 
 
@@ -327,8 +335,9 @@ def close(config):
     # RTP and profile TFTP must stop bypassing raw DROPs before INPUT changes.
     transition(config, 4, 'raw', opened=False)
     inspect(config, 6, 'raw')  # Never change IPv6 raw rules.
-    for family in (6, 4):
-        transition(config, family, 'filter', opened=False)
+    for table in ('mangle', 'filter'):
+        for family in (6, 4):
+            transition(config, family, table, opened=False)
 
 
 def listener_stopped(config):
@@ -341,26 +350,31 @@ def apply(config, mode):
     before = state(config)
     if mode == 'status':
         configured = 'profile_tftp' in config
-        effective = configured and all(before[key]['first'] and 'open' in before[key]['states']
-                                       for key in ('raw4', 'raw6', 'filter4', 'filter6'))
+        effective = configured and all(hook_in_place(table, before[f'{table}{family}'])
+                                       and 'open' in before[f'{table}{family}']['states']
+                                       for table in TABLES for family in (4, 6))
         return {'changes_applied': False, 'state': before, 'policy_version': config.get('version', 1),
                 'profile_tftp': {'configured': configured, 'effective': effective,
                                 'phone_count': len(config['profile_tftp']['phone_ipv4']) if configured else 0}}
     require(mode in ('check', 'apply', 'rollback', 'remove'), 'Unknown operation')
-    # Kernel-validate both target filter families and the raw change before writes.
-    for family in (6, 4):
-        restore(family, payload(config, family, 'filter', before[f'filter{family}'],
-                                opened=mode in ('check', 'apply')), test=True)
+    # Kernel-validate both INPUT layers and families before any raw relaxation.
+    for table in ('mangle', 'filter'):
+        for family in (6, 4):
+            restore(family, payload(config, family, table, before[f'{table}{family}'],
+                                    opened=mode in ('check', 'apply')), test=True)
     restore(4, payload(config, 4, 'raw', before['raw4'], opened=mode in ('check', 'apply')), test=True)
     if mode == 'check':
         return {'changes_applied': False, 'kernel_validation': True, 'inherited_rtp_source_count': len(inherited_sources(config))}
     try:
         if mode == 'apply':
-            for family in (6, 4):
-                transition(config, family, 'filter', opened=True)
+            for table in ('mangle', 'filter'):
+                for family in (6, 4):
+                    transition(config, family, table, opened=True)
             guarded = state(config)
             same_foreign(before, guarded)
-            if any(not guarded[f'filter{f}']['first'] or 'open' not in guarded[f'filter{f}']['states'] for f in (4, 6)):
+            if any(not hook_in_place(table, guarded[f'{table}{family}'])
+                   or 'open' not in guarded[f'{table}{family}']['states']
+                   for table in ('mangle', 'filter') for family in (4, 6)):
                 raise RuntimeError('Both INPUT guards must be verified before raw relaxation')
             transition(config, 4, 'raw', opened=True)
         else:
@@ -368,9 +382,10 @@ def apply(config, mode):
             if mode == 'remove':
                 listener_stopped(config)
                 # Recheck immediately before deletion; operator must keep it stopped.
-                for family in (4, 6):
-                    listener_stopped(config)
-                    transition(config, family, 'filter', remove=True)
+                for table in ('filter', 'mangle'):
+                    for family in (4, 6):
+                        listener_stopped(config)
+                        transition(config, family, table, remove=True)
         after = state(config)
         same_foreign(before, after)
     except Exception as error:
