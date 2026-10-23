@@ -1,10 +1,14 @@
 import copy
+import contextlib
 import importlib.util
 import ipaddress
+import io
+import json
 import os
 import subprocess
 from pathlib import Path
 import shlex
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -257,6 +261,262 @@ class ExternalFirewallTests(unittest.TestCase):
         self.assertEqual(after[after.index(inserted[0]) + 1][-1], 'DROP')
 
 
+def profile_policy():
+    return {'version': 1, 'bind_ipv4': '192.168.50.10',
+            'phone_ipv4': ['10.20.30.41', '172.16.2.21', '192.168.60.21']}
+
+
+def profile_config():
+    # Construct independently of migrate(), so a migration bug cannot also
+    # silently redefine the expected policy used by every runtime test.
+    return {**config(), 'version': 2, 'profile_tftp': profile_policy()}
+
+
+class ProfileTftpFirewallTests(unittest.TestCase):
+    def test_exact_phone_and_destination_rules_with_default_drops(self):
+        cfg = profile_config()
+        self.assertEqual(fw.validate(cfg), cfg)
+        raw = fw.raw_body(cfg, 4, True)
+        filtered = fw.filter_body(cfg, 4, True)
+        old_raw = fw.raw_body(config(), 4, True)
+        inserted = []
+        for port in ('69', '20000:20031'):
+            expected = []
+            for source in cfg['profile_tftp']['phone_ipv4']:
+                expected.append(['-A', cfg['raw_baseline']['chain'], '-s', source + '/32',
+                                 '-d', cfg['bind_ipv4'] + '/32', '-p', 'udp', '-m', 'udp',
+                                 '--dport', port, '-m', 'comment', '--comment',
+                                 cfg['raw_baseline']['owner'], '-j', 'RETURN'])
+            drop = fw.raw_rule(cfg['raw_baseline']['chain'], cfg['raw_baseline']['owner'], 'udp', port)
+            index = raw.index(drop)
+            self.assertEqual(raw[index - len(expected):index], expected)
+            inserted.extend(expected)
+            filter_rules = [r for r in filtered if '--dport' in r and r[r.index('--dport') + 1] == port]
+            expected_filter = [
+                ['-A', fw.CHAIN, '-s', source + '/32', '-d', cfg['bind_ipv4'] + '/32',
+                 '-p', 'udp', '-m', 'udp', '--dport', port, '-m', 'comment',
+                 '--comment', fw.OWNER, '-j', 'RETURN']
+                for source in cfg['profile_tftp']['phone_ipv4']]
+            expected_filter.append(['-A', fw.CHAIN, '-p', 'udp', '-m', 'udp', '--dport', port,
+                                    '-m', 'comment', '--comment', fw.OWNER, '-j', 'DROP'])
+            self.assertEqual(filter_rules, expected_filter)
+        self.assertEqual([r for r in raw if r not in inserted], old_raw)
+        for body in (raw, filtered):
+            for port in (69, 20000, 20031):
+                for source in cfg['profile_tftp']['phone_ipv4']:
+                    with self.subTest(port=port, source=source, layer=body is filtered):
+                        self.assertEqual(packet_decision(body, src=source, port=port), 'RETURN')
+                        self.assertEqual(packet_decision(body, src=source, dst='192.168.50.11', port=port), 'DROP')
+                for source in ('192.168.50.13', '10.20.30.40', '192.168.60.22', '198.51.100.20'):
+                    self.assertEqual(packet_decision(body, src=source, port=port), 'DROP')
+            self.assertFalse(any('ACCEPT' in r or 'RELATED' in r for r in body))
+        for port in (68, 70, 19999, 20032):
+            self.assertEqual(packet_decision(raw, port=port), packet_decision(old_raw, port=port))
+
+    def test_ipv6_and_external_rtp_behavior_remain_unchanged(self):
+        cfg = profile_config()
+        for opened in (False, True):
+            self.assertEqual(fw.raw_body(cfg, 6, opened), config()['raw_baseline']['ipv6_rules'])
+            for family in (4, 6):
+                body = fw.filter_body(cfg, family, opened)
+                without_tftp = [r for r in body if '--dport' not in r
+                                or r[r.index('--dport') + 1] not in ('69', '20000:20031')]
+                self.assertEqual(without_tftp, fw.filter_body(config(), family, opened))
+                for port in (69, 20000, 20031):
+                    if family == 6:
+                        self.assertEqual(packet_decision(body, src='fd00::21', dst='fd00::10', port=port,
+                                                        state='ESTABLISHED', direction='REPLY'), 'DROP')
+                    elif not opened:
+                        self.assertEqual(packet_decision(body, src='192.168.60.21', port=port), 'DROP')
+
+    def test_policy_schema_host_and_count_boundaries(self):
+        valid = profile_config()
+        valid['profile_tftp']['phone_ipv4'] = [f'10.20.30.{last}' for last in range(100, 228)]
+        self.assertEqual(fw.validate(valid), valid)
+        policies = [
+            {}, {**profile_policy(), 'extra': True}, {**profile_policy(), 'version': True},
+            {**profile_policy(), 'version': 2}, {**profile_policy(), 'bind_ipv4': '192.168.50.11'},
+            *[{**profile_policy(), 'phone_ipv4': value} for value in (
+                [], '192.168.60.21', [True], ['192.168.50.10'], ['192.168.60.21/32'],
+                ['192.168.60.0/24'], ['198.51.100.20'], ['fd00::21'], ['192.168.060.21'],
+                ['192.168.60.21', '192.168.60.21'], list(reversed(profile_policy()['phone_ipv4'])),
+                [f'10.20.30.{last}' for last in range(100, 229)]
+            )]
+        ]
+        for policy in policies:
+            cfg = profile_config(); cfg['profile_tftp'] = policy
+            with self.subTest(policy=policy), self.assertRaises(ValueError):
+                fw.validate(cfg)
+        for version in (True, 1, 3):
+            cfg = profile_config(); cfg['version'] = version
+            with self.subTest(version=version), self.assertRaises(ValueError):
+                fw.validate(cfg)
+        cfg = profile_config(); cfg['extra'] = True
+        with self.assertRaises(ValueError): fw.validate(cfg)
+        cfg = profile_config(); del cfg['version']
+        with self.assertRaises(ValueError): fw.validate(cfg)
+
+    def test_v2_requires_closed_exact_tftp_baselines_in_both_families(self):
+        for family in (4, 6):
+            for port in ('69', '20000:20031'):
+                cfg = profile_config(); raw = cfg['raw_baseline']
+                raw[f'ipv{family}_rules'].remove(fw.raw_rule(raw['chain'], raw['owner'], 'udp', port))
+                # This is intentionally still a valid legacy capture schema.
+                legacy = {k: copy.deepcopy(cfg[k]) for k in ('bind_ipv4', 'signaling_port', 'raw_baseline')}
+                fw.validate(legacy)
+                with self.subTest(family=family, missing=port), self.assertRaises(ValueError):
+                    fw.validate(cfg)
+            for overlap in ('68:70', '19999:20000', '20031:20032'):
+                cfg = profile_config(); raw = cfg['raw_baseline']
+                raw[f'ipv{family}_rules'].insert(0, fw.raw_rule(raw['chain'], raw['owner'], 'udp', overlap))
+                with self.subTest(family=family, overlap=overlap), self.assertRaises(ValueError):
+                    fw.validate(cfg)
+        cfg = profile_config(); raw = cfg['raw_baseline']
+        raw['ipv4_rules'].insert(0, fw.raw_rule(raw['chain'], raw['owner'], 'udp', '69',
+                                               source='192.168.60.21/32', verdict='RETURN'))
+        with self.assertRaises(ValueError): fw.validate(cfg)
+
+    def test_migrate_is_pure_preserves_capture_and_rejects_v2_input(self):
+        legacy, policy = config(), profile_policy()
+        original, original_policy = copy.deepcopy(legacy), copy.deepcopy(policy)
+        with patch.object(fw, 'run', side_effect=AssertionError('Migration must not access the firewall')):
+            migrated = fw.migrate(legacy, policy)
+            self.assertEqual(migrated, profile_config())
+            self.assertEqual(legacy, original)
+            self.assertEqual(policy, original_policy)
+            with self.assertRaises(ValueError): fw.migrate(migrated, policy)
+            migrated['raw_baseline']['ipv4_rules'].clear()
+            migrated['profile_tftp']['phone_ipv4'].clear()
+        self.assertEqual(legacy, original)
+        self.assertEqual(policy, original_policy)
+
+    def test_applied_v1_migrates_without_recapture_and_preserves_foreign_rules(self):
+        for old_mode, name in (('apply', 'legacy_open'), ('rollback', 'legacy_closed')):
+            kernel = Kernel(); cfg = profile_config()
+            with self.subTest(old_mode=old_mode), patch.object(fw, 'run', side_effect=kernel.run):
+                fw.apply(config(), old_mode)
+                before = fw.state(cfg)
+                self.assertIn(name, before['filter4']['states'])
+                if old_mode == 'apply': self.assertIn('legacy_open', before['raw4']['states'])
+                kernel.writes.clear()
+                status = fw.apply(cfg, 'status')
+                self.assertEqual(status['policy_version'], 2)
+                self.assertEqual(status['profile_tftp'], {'configured': True, 'effective': False, 'phone_count': 3})
+                self.assertEqual(kernel.writes, [])
+                fw.apply(cfg, 'check')
+                self.assertEqual(kernel.writes, [])
+                fw.apply(cfg, 'apply')
+                self.assertEqual([(f, t) for f, t, _ in kernel.writes], [(6, 'filter'), (4, 'filter'), (4, 'raw')])
+                self.assertTrue(fw.apply(cfg, 'status')['profile_tftp']['effective'])
+                fw.same_foreign(before, fw.state(cfg))
+                tables = copy.deepcopy(kernel.tables)
+                fw.apply(cfg, 'apply')
+                self.assertEqual(kernel.tables, tables)
+                with self.assertRaises(ValueError):
+                    fw.capture(cfg['bind_ipv4'], cfg['signaling_port'], cfg['raw_baseline']['chain'], cfg['raw_baseline']['owner'])
+
+    def test_effective_status_requires_all_guards_and_recovers_closed_boot_baseline(self):
+        cfg = profile_config(); kernel = Kernel()
+        with patch.object(fw, 'run', side_effect=kernel.run):
+            status = fw.apply(config(), 'status')
+            self.assertEqual(status['policy_version'], 1)
+            self.assertEqual(status['profile_tftp'], {'configured': False, 'effective': False, 'phone_count': 0})
+            fw.apply(cfg, 'apply')
+            for family in (4, 6):
+                chains, rules = kernel.tables[family, 'filter']
+                rules.remove(fw.hook()); rules.append(fw.hook())
+                self.assertFalse(fw.apply(cfg, 'status')['profile_tftp']['effective'])
+                fw.apply(cfg, 'apply')
+            fw.transition(cfg, 4, 'filter', opened=False)
+            self.assertFalse(fw.apply(cfg, 'status')['profile_tftp']['effective'])
+            fw.apply(cfg, 'apply')
+            rawchain = cfg['raw_baseline']['chain']
+            chains, rules = kernel.tables[4, 'raw']
+            kernel.tables[4, 'raw'] = (chains, [r for r in rules if r[1] != rawchain]
+                                      + copy.deepcopy(cfg['raw_baseline']['ipv4_rules']))
+            self.assertFalse(fw.apply(cfg, 'status')['profile_tftp']['effective'])
+            fw.apply(cfg, 'apply')
+            self.assertTrue(fw.apply(cfg, 'status')['profile_tftp']['effective'])
+
+    def test_unknown_profile_drift_refuses_without_writes(self):
+        cfg = profile_config(); kernel = Kernel()
+        with patch.object(fw, 'run', side_effect=kernel.run):
+            fw.apply(cfg, 'apply')
+            rule = next(r for r in kernel.tables[4, 'raw'][1] if '--dport' in r
+                        and r[r.index('--dport') + 1] == '69' and '-s' in r)
+            rule[rule.index('-s') + 1] = '192.168.60.0/24'
+            kernel.writes.clear()
+            with self.assertRaises(RuntimeError): fw.apply(cfg, 'apply')
+            self.assertEqual(kernel.writes, [])
+
+    def test_rollback_and_failed_open_restore_original_raw_before_closed_filters(self):
+        for fail_open in (False, True):
+            cfg = profile_config(); kernel = Kernel()
+            with self.subTest(fail_open=fail_open), patch.object(fw, 'run', side_effect=kernel.run):
+                before = fw.state(cfg)
+                if fail_open:
+                    kernel.fail = lambda event: event[1] == 'raw'
+                    with self.assertRaisesRegex(RuntimeError, 'closed INPUT guard retained'):
+                        fw.apply(cfg, 'apply')
+                else:
+                    fw.apply(cfg, 'apply'); kernel.writes.clear()
+                    fw.apply(cfg, 'rollback')
+                state = fw.state(cfg)
+                self.assertEqual([(f, t) for f, t, _ in kernel.writes][-3:], [(4, 'raw'), (6, 'filter'), (4, 'filter')])
+                self.assertIn('closed', state['raw4']['states'])
+                self.assertIn('closed', state['filter4']['states'])
+                raw = [r for r in kernel.tables[4, 'raw'][1] if r[1] == cfg['raw_baseline']['chain']]
+                self.assertEqual(raw, cfg['raw_baseline']['ipv4_rules'])
+                for port in (69, 20000, 20031):
+                    self.assertEqual(packet_decision(fw.filter_body(cfg, 4, False), src='192.168.60.21', port=port), 'DROP')
+                self.assertFalse(fw.apply(cfg, 'status')['profile_tftp']['effective'])
+                fw.same_foreign(before, state)
+
+    def test_failed_closure_is_reported_not_claimed_closed(self):
+        cfg = profile_config(); kernel = Kernel()
+        with patch.object(fw, 'run', side_effect=kernel.run): fw.apply(cfg, 'apply')
+        def refuse_raw_write(argv, data=None):
+            if argv[0].endswith('-restore') and '--test' not in argv and data.startswith('*raw\n'):
+                raise RuntimeError('Synthetic raw writer failure')
+            return kernel.run(argv, data)
+        with patch.object(fw, 'run', side_effect=refuse_raw_write):
+            with self.assertRaisesRegex(RuntimeError, 'automatic closure could not be verified'):
+                fw.apply(cfg, 'rollback')
+
+    def test_private_config_exclusive_write_and_read_permissions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'new-policy.json'
+            cfg = profile_config()
+            fw.write_private(path, cfg)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(fw.read_private_json(path), cfg)
+            saved = path.read_bytes()
+            with self.assertRaises(OSError): fw.write_private(path, config())
+            self.assertEqual(path.read_bytes(), saved)
+            link = Path(directory) / 'linked-policy.json'; link.symlink_to(path)
+            with self.assertRaises(OSError): fw.write_private(link, config())
+            self.assertEqual(path.read_bytes(), saved)
+            path.chmod(0o644)
+            with self.assertRaises(ValueError): fw.read_private_json(path)
+
+    def test_cli_migration_writes_new_policy_without_firewall_access(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old, policy, target = root / 'old.json', root / 'phones.json', root / 'v2.json'
+            fw.write_private(old, config()); fw.write_private(policy, profile_policy())
+            old_bytes, policy_bytes = old.read_bytes(), policy.read_bytes()
+            argv = ['external_firewall.py', 'migrate', '--config', str(old),
+                    '--profile-tftp-policy', str(policy), '--output', str(target)]
+            with patch('sys.argv', argv), patch.object(fw, 'run', side_effect=AssertionError('No firewall access')) as run, \
+                    contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()) as error:
+                self.assertEqual(fw.main(), 0)
+            run.assert_not_called()
+            self.assertEqual(fw.read_private_json(target), profile_config())
+            self.assertEqual((old.read_bytes(), policy.read_bytes()), (old_bytes, policy_bytes))
+            self.assertEqual(error.getvalue(), '')
+            self.assertFalse(json.loads(output.getvalue())['changes_applied'])
+
+
 class KernelRuntimeTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get('EXTERNAL_FIREWALL_TEST_IMAGE'), 'Set EXTERNAL_FIREWALL_TEST_IMAGE for isolated kernel checks')
     def test_disconnected_kernel_namespace(self):
@@ -275,6 +535,7 @@ class KernelRuntimeTests(unittest.TestCase):
         result = subprocess.run(cmd, input=code, text=True, capture_output=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('PASS: kernel parser', result.stdout)
+        self.assertIn('PASS: version 2 kernel TFTP', result.stdout)
 
 
 if __name__ == '__main__': unittest.main()

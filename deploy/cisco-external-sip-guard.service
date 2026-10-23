@@ -2,7 +2,7 @@
 Description=Stateful return-path guard for outbound external SIP
 Requires=cisco-telephony-guard.service
 After=cisco-telephony-guard.service cisco-phone-gateway-guard.service
-Before=k3s-agent.service
+Before=k3s-agent.service k3s.service
 
 [Service]
 Type=oneshot

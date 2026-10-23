@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Add stateful outbound-SIP return paths around an exact, captured raw guard.
 
-Capture/check/status do not change firewall rules. Apply is opt-in. Rollback
-closes external traffic; remove also requires the external UDP listener stopped.
+Capture/migrate/check/status do not change firewall rules. Apply is opt-in.
+Rollback closes external traffic and optional profile TFTP; remove also requires
+the external UDP listener stopped.
 Never installs router forwarding, a public source allowlist or an OUTPUT rule.
 """
 import argparse
@@ -21,6 +22,8 @@ import sys
 CHAIN = 'CISCO_EXTERNAL_SIP'
 OWNER = 'cisco-external-sip'
 RTP = '10000:10199'
+TFTP = ('69', '20000:20031')
+LEGACY_KEYS = {'bind_ipv4', 'signaling_port', 'raw_baseline'}
 PRIVATE = tuple(ipaddress.ip_network(n) for n in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
 
 
@@ -53,9 +56,33 @@ def raw_hook(config):
             '-m', 'comment', '--comment', raw['owner'], '-j', raw['chain']]
 
 
+def validate_profile_policy(policy):
+    require(isinstance(policy, dict) and set(policy) == {'version', 'bind_ipv4', 'phone_ipv4'}
+            and type(policy['version']) is int and policy['version'] == 1,
+            'Profile TFTP policy requires version 1, bind_ipv4 and phone_ipv4')
+    address = ipaddress.IPv4Address(policy['bind_ipv4'])
+    require(str(address) == policy['bind_ipv4'] and any(address in n for n in PRIVATE),
+            'Profile TFTP bind address must be a canonical RFC1918 host')
+    phones = policy['phone_ipv4']
+    require(isinstance(phones, list) and 1 <= len(phones) <= 128
+            and all(isinstance(value, str) for value in phones),
+            'Profile TFTP requires 1..128 inventoried IPv4 hosts')
+    for value in phones:
+        phone = ipaddress.IPv4Address(value)
+        require(str(phone) == value and any(phone in n for n in PRIVATE) and phone != address,
+                'Profile TFTP sources must be canonical RFC1918 hosts distinct from the server')
+    require(phones == sorted(set(phones)), 'Profile TFTP sources must be unique and sorted')
+    return policy
+
+
 def validate(config):
-    require(isinstance(config, dict) and set(config) == {'bind_ipv4', 'signaling_port', 'raw_baseline'},
-            'Configuration requires exactly bind_ipv4, signaling_port, raw_baseline')
+    require(isinstance(config, dict) and set(config) in (LEGACY_KEYS, LEGACY_KEYS | {'version', 'profile_tftp'}),
+            'Configuration requires the legacy fields or explicit version 2 profile TFTP policy')
+    if 'version' in config:
+        require(type(config['version']) is int and config['version'] == 2, 'Unsupported configuration version')
+        validate_profile_policy(config['profile_tftp'])
+        require(config['profile_tftp']['bind_ipv4'] == config['bind_ipv4'],
+                'Profile TFTP and external SIP must use the same fixed node address')
     address = ipaddress.IPv4Address(config['bind_ipv4'])
     require(str(address) == config['bind_ipv4'] and any(address in n for n in PRIVATE),
             'Bind address must be an explicit RFC1918 IPv4 host')
@@ -87,6 +114,10 @@ def validate(config):
                     'Invalid raw protocol or port')
             ports = list(map(int, port.split(':')))
             require(all(1 <= n <= 65535 for n in ports) and ports == sorted(ports), 'Invalid raw port range')
+            if 'profile_tftp' in config and proto == 'udp':
+                overlaps_tftp = ports[0] <= 69 <= ports[-1] or ports[0] <= 20031 and ports[-1] >= 20000
+                require(not overlaps_tftp or port in TFTP,
+                        'Profile TFTP needs exact, non-overlapping baseline TFTP port ranges')
             require(not (proto == 'udp' and ports[0] <= config['signaling_port'] <= ports[-1]),
                     'Raw baseline already controls the selected external SIP port')
             require(rule == raw_rule(raw['chain'], raw['owner'], proto, port, source, verdict=verdict),
@@ -108,7 +139,25 @@ def validate(config):
                     rtp_drops += 1
         require(rtp_drops == 1 and (family == 6 or bool(rtp_sources)), 'Baseline must close RTP with exact IPv4 source exceptions')
         require(len(rtp_sources) == len(set(rtp_sources)), 'Duplicate RTP source exception')
+        if 'profile_tftp' in config:
+            require(all(('udp', port) in seen_drop for port in TFTP),
+                    'Profile TFTP requires exact closed TFTP drops in both baseline families')
     return config
+
+
+def migrate(config, policy):
+    """Build a v2 policy offline; never learn permissions from live open rules."""
+    validate(config)
+    require(set(config) == LEGACY_KEYS, 'Migration requires the original legacy closed-baseline configuration')
+    validate_profile_policy(policy)
+    # Isolate the new document from later mutations of either input.
+    result = json.loads(json.dumps(config))
+    result.update(version=2, profile_tftp=json.loads(json.dumps(policy)))
+    return validate(result)
+
+
+def legacy_config(config):
+    return {key: config[key] for key in LEGACY_KEYS}
 
 
 def inherited_sources(config):
@@ -124,6 +173,13 @@ def raw_body(config, family, opened=False):
         drop = raw_rule(raw['chain'], raw['owner'], 'udp', RTP)
         body.insert(body.index(drop), raw_rule(raw['chain'], raw['owner'], 'udp', RTP,
                     destination=config['bind_ipv4'] + '/32', verdict='RETURN'))
+        if 'profile_tftp' in config:
+            for port in TFTP:
+                drop = raw_rule(raw['chain'], raw['owner'], 'udp', port)
+                index = body.index(drop)
+                body[index:index] = [raw_rule(raw['chain'], raw['owner'], 'udp', port,
+                    source=phone + '/32', destination=config['bind_ipv4'] + '/32', verdict='RETURN')
+                    for phone in config['profile_tftp']['phone_ipv4']]
     return body
 
 
@@ -145,6 +201,14 @@ def filter_body(config, family, opened):
                 result.append(['-A', CHAIN, *dst, *protocol, '-m', 'conntrack', '--ctstate', 'ESTABLISHED',
                                '--ctdir', 'REPLY', *tail, 'RETURN'])
         result.append(['-A', CHAIN, *dst, *protocol, *tail, 'DROP'])
+    if 'profile_tftp' in config:
+        for port in TFTP:
+            if family == 4 and opened:
+                for phone in config['profile_tftp']['phone_ipv4']:
+                    result.append(raw_rule(CHAIN, OWNER, 'udp', port, source=phone + '/32',
+                                           destination=config['bind_ipv4'] + '/32', verdict='RETURN'))
+            # Also protect other local destinations if another raw writer moves.
+            result.append(raw_rule(CHAIN, OWNER, 'udp', port))
     return result + [['-A', CHAIN, '-m', 'comment', '--comment', OWNER, '-j', 'RETURN']]
 
 
@@ -187,6 +251,11 @@ def inspect(config, family, table):
         raise RuntimeError('Owned chain is not a user chain')
     candidates = ({'closed': raw_body(config, family), 'open': raw_body(config, family, True)} if is_raw
                   else {'closed': filter_body(config, family, False), 'open': filter_body(config, family, True)})
+    if 'profile_tftp' in config:
+        legacy = legacy_config(config)
+        candidates.update({'legacy_closed': raw_body(legacy, family), 'legacy_open': raw_body(legacy, family, True)}
+                          if is_raw else {'legacy_closed': filter_body(legacy, family, False),
+                                          'legacy_open': filter_body(legacy, family, True)})
     states = [key for key, value in candidates.items() if body == value] if chain in chains else ['absent']
     if not states:
         raise RuntimeError('Owned chain drift: expected exact captured or generated rules')
@@ -255,7 +324,7 @@ def transition(config, family, table, opened=False, remove=False):
 
 
 def close(config):
-    # RTP must stop bypassing the raw DROP before any INPUT protection changes.
+    # RTP and profile TFTP must stop bypassing raw DROPs before INPUT changes.
     transition(config, 4, 'raw', opened=False)
     inspect(config, 6, 'raw')  # Never change IPv6 raw rules.
     for family in (6, 4):
@@ -271,7 +340,12 @@ def apply(config, mode):
     validate(config)
     before = state(config)
     if mode == 'status':
-        return {'changes_applied': False, 'state': before}
+        configured = 'profile_tftp' in config
+        effective = configured and all(before[key]['first'] and 'open' in before[key]['states']
+                                       for key in ('raw4', 'raw6', 'filter4', 'filter6'))
+        return {'changes_applied': False, 'state': before, 'policy_version': config.get('version', 1),
+                'profile_tftp': {'configured': configured, 'effective': effective,
+                                'phone_count': len(config['profile_tftp']['phone_ipv4']) if configured else 0}}
     require(mode in ('check', 'apply', 'rollback', 'remove'), 'Unknown operation')
     # Kernel-validate both target filter families and the raw change before writes.
     for family in (6, 4):
@@ -322,14 +396,28 @@ def capture(bind_ipv4, signaling_port, chain, owner):
     return config
 
 
-def read_private(path):
+def read_private_json(path):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd) as stream:
         info = os.fstat(stream.fileno())
         require(stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o600
                 and info.st_uid == os.getuid() and info.st_size <= 262144,
                 'Configuration must be owned by this user, regular, mode 0600 and at most 256 KiB')
-        return validate(json.load(stream))
+        return json.load(stream)
+
+
+def read_private(path):
+    return validate(read_private_json(path))
+
+
+def write_private(path, value):
+    # Serialize before creating a new file; never replace existing evidence.
+    data = json.dumps(value, indent=2) + '\n'
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w') as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
 
 
 @contextlib.contextmanager
@@ -343,22 +431,28 @@ def locked():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=('capture', 'check', 'status', 'apply', 'rollback', 'remove'))
+    parser.add_argument('mode', choices=('capture', 'migrate', 'check', 'status', 'apply', 'rollback', 'remove'))
     parser.add_argument('--config', required=True, help='Private JSON; capture exclusively creates this file')
     parser.add_argument('--bind-ipv4')
     parser.add_argument('--signaling-port', type=int, default=5070)
     parser.add_argument('--raw-chain')
     parser.add_argument('--raw-owner')
+    parser.add_argument('--profile-tftp-policy', help='Private inventory-generated profile TFTP policy for migration')
+    parser.add_argument('--output', help='New private version 2 configuration; never overwritten')
     args = parser.parse_args()
     try:
         if args.mode == 'capture':
             require(all((args.bind_ipv4, args.raw_chain, args.raw_owner)), 'Capture needs bind address, raw chain and owner')
             config = capture(args.bind_ipv4, args.signaling_port, args.raw_chain, args.raw_owner)
-            fd = os.open(args.config, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-            with os.fdopen(fd, 'w') as stream:
-                json.dump(config, stream, indent=2); stream.write('\n')
+            write_private(args.config, config)
             result = {'changes_applied': False, 'private_baseline_written': True,
                       'inherited_rtp_source_count': len(inherited_sources(config))}
+        elif args.mode == 'migrate':
+            require(args.profile_tftp_policy and args.output, 'Migration needs a private profile policy and new output path')
+            config = migrate(read_private(args.config), read_private_json(args.profile_tftp_policy))
+            write_private(args.output, config)
+            result = {'changes_applied': False, 'private_policy_written': True, 'policy_version': 2,
+                      'profile_phone_count': len(config['profile_tftp']['phone_ipv4'])}
         else:
             config = read_private(args.config)
             with locked():
