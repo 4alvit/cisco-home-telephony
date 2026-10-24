@@ -15,6 +15,7 @@ import time
 from uuid import UUID
 
 from phone_voice_sip import BoundaryError, Channel, Grant, Snapshot, focus
+from phone_voice_control import project_setup_rejection
 
 
 class LeaseWitness:
@@ -81,6 +82,7 @@ class AmiPort:
         self.speaker_attempted = self.used = False
         self.start_attempted = False
         self.startup_stage = 'not_started'
+        self.rejected_setup = None
         self.absence_confirmed = False
         self._lifecycle_lock = threading.RLock()
         self._start_active = self._sealed = False
@@ -180,6 +182,13 @@ class AmiPort:
                 self.startup_stage = 'setup_snapshot'
                 _, channels, own = self._snapshot(ami)
                 if len(own) > 1 or any(item not in self._related(channels) for item in own):
+                    # Preserve the first rejected snapshot; never perform extra AMI I/O
+                    # or let diagnostic failures change admission or cleanup.
+                    try:
+                        if self.rejected_setup is None:
+                            self.rejected_setup = project_setup_rejection(self.root, channels, own)
+                    except Exception:
+                        pass
                     raise BoundaryError('call_changed')
                 if own:
                     item = own[0]

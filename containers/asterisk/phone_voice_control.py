@@ -106,12 +106,135 @@ _DIAGNOSTIC_CLEANUP_ERRORS = frozenset((
 _DIAGNOSTIC_RESULT_REASONS = SIP_COMPLETION_REASONS | frozenset(('unknown', 'disconnected'))
 
 
+SETUP_DIAGNOSTIC_MAX_ROWS = 2
+SETUP_DIAGNOSTIC_MAX_COUNT = 65535
+SETUP_DIAGNOSTIC_MAX_ID = 256
+SETUP_DIAGNOSTIC_MAX_BYTES = 1024
+_SETUP_STATES = frozenset(('Down', 'Rsrvd', 'OffHook', 'Dialing', 'Ring', 'Ringing',
+                    'Up', 'Busy', 'Dialing Offhook', 'Pre-ring', 'Unknown'))
+_SETUP_RELATIONS = frozenset(('root', 'root_b', 'unrelated', 'missing', 'invalid'))
+_SETUP_FIELDS = {'version', 'predicate', 'channel_count', 'channel_count_capped',
+          'own_count', 'own_count_capped', 'rows_truncated', 'rows'}
+_SETUP_ROW_FIELDS = {'channel_sha256', 'uniqueid_sha256', 'linkedid_sha256',
+              'uniqueid_root', 'linkedid_root', 'state'}
+
+
+def _setup_text(value):
+    return (type(value) is str and 0 < len(value) <= SETUP_DIAGNOSTIC_MAX_ID
+            and value.isascii() and all(32 <= ord(c) < 127 for c in value))
+
+
+def _setup_digest(value):
+    return hashlib.sha256(value.encode('ascii')).hexdigest() if _setup_text(value) else None
+
+
+def _setup_relation(value, root):
+    if value is None or type(value) is str and not value:
+        return 'missing'
+    if not _setup_text(value):
+        return 'invalid'
+    return 'root' if value == root else 'root_b' if value == root + '-b' else 'unrelated'
+
+
+def project_setup_rejection(root, channels, own):
+    """Call only inside the existing rejected branch, on those same lists.
+
+    Predicate names express the first true branch in Python's existing OR.
+    Only two already-selected phone rows are visited; no extra snapshot or scan.
+    """
+    if not re.fullmatch(r'cisco-voice-[0-9a-f]{32}', root):
+        raise ValueError('invalid_root')
+    if type(channels) is not list or type(own) is not list or not own:
+        raise ValueError('invalid_snapshot')
+    rows = []
+    for item in own[:SETUP_DIAGNOSTIC_MAX_ROWS]:
+        if type(item) is not dict:
+            raise ValueError('invalid_row')
+        state = item.get('ChannelStateDesc')
+        rows.append({
+            'channel_sha256': _setup_digest(item.get('Channel')),
+            'uniqueid_sha256': _setup_digest(item.get('Uniqueid')),
+            'linkedid_sha256': _setup_digest(item.get('Linkedid')),
+            'uniqueid_root': _setup_relation(item.get('Uniqueid'), root),
+            'linkedid_root': _setup_relation(item.get('Linkedid'), root),
+            'state': state if type(state) is str and state in _SETUP_STATES else 'Unknown',
+        })
+    result = {
+        'version': 1,
+        'predicate': 'multiple_phone_channels' if len(own) > 1 else 'unrelated_phone_channel',
+        'channel_count': min(len(channels), SETUP_DIAGNOSTIC_MAX_COUNT),
+        'channel_count_capped': len(channels) > SETUP_DIAGNOSTIC_MAX_COUNT,
+        'own_count': min(len(own), SETUP_DIAGNOSTIC_MAX_COUNT),
+        'own_count_capped': len(own) > SETUP_DIAGNOSTIC_MAX_COUNT,
+        'rows_truncated': len(own) > SETUP_DIAGNOSTIC_MAX_ROWS,
+        'rows': rows,
+    }
+    if not valid_setup_rejection(result):
+        raise ValueError('invalid_setup_rejection')
+    return result
+
+
+def valid_setup_rejection(value):
+    """Validate bounded private metadata without granting cleanup authority."""
+    if type(value) is not dict or set(value) != _SETUP_FIELDS:
+        return False
+    if type(value['version']) is not int or value['version'] != 1:
+        return False
+    if type(value['predicate']) is not str or value['predicate'] not in (
+            'multiple_phone_channels', 'unrelated_phone_channel'):
+        return False
+    for key in ('channel_count', 'own_count'):
+        if type(value[key]) is not int or not 1 <= value[key] <= SETUP_DIAGNOSTIC_MAX_COUNT:
+            return False
+        if type(value[key + '_capped']) is not bool:
+            return False
+        if value[key + '_capped'] and value[key] != SETUP_DIAGNOSTIC_MAX_COUNT:
+            return False
+    if value['own_count_capped'] and not value['channel_count_capped']:
+        return False
+    if type(value['rows_truncated']) is not bool:
+        return False
+    count = value['own_count']
+    if value['channel_count'] < count or value['rows_truncated'] != (count > SETUP_DIAGNOSTIC_MAX_ROWS):
+        return False
+    if (value['predicate'] == 'multiple_phone_channels') != (count > 1):
+        return False
+    rows = value['rows']
+    if type(rows) is not list or len(rows) != min(count, SETUP_DIAGNOSTIC_MAX_ROWS):
+        return False
+    for row in rows:
+        if type(row) is not dict or set(row) != _SETUP_ROW_FIELDS:
+            return False
+        for key in ('channel_sha256', 'uniqueid_sha256', 'linkedid_sha256'):
+            if row[key] is not None and (type(row[key]) is not str
+                    or not re.fullmatch('[0-9a-f]{64}', row[key])):
+                return False
+        for key in ('uniqueid_root', 'linkedid_root'):
+            if type(row[key]) is not str or row[key] not in _SETUP_RELATIONS:
+                return False
+        if type(row['state']) is not str or row['state'] not in _SETUP_STATES:
+            return False
+    return len(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()) <= SETUP_DIAGNOSTIC_MAX_BYTES
+
+
 def valid_startup_diagnostic(value):
-    """Accept only the fixed, non-secret startup diagnostic schema."""
-    return (type(value) is dict and set(value) == {'version', *_STARTUP_DIAGNOSTIC_FIELDS}
-            and type(value['version']) is int and value['version'] == 1
-            and all(type(value[key]) is str and value[key] in allowed
-                    for key, allowed in _STARTUP_DIAGNOSTIC_FIELDS.items()))
+    """Accept fixed categories and a bounded, context-specific private projection."""
+    if type(value) is not dict or type(value.get("version")) is not int:
+        return False
+    fields = {"version", *_STARTUP_DIAGNOSTIC_FIELDS}
+    if value["version"] == 2:
+        fields.add("rejected_setup")
+    elif value["version"] != 1:
+        return False
+    if set(value) != fields or not all(
+            type(value[key]) is str and value[key] in allowed
+            for key, allowed in _STARTUP_DIAGNOSTIC_FIELDS.items()):
+        return False
+    return value["version"] == 1 or (
+        value["reason"] == "call_changed" and value["error_type"] == "BoundaryError"
+        and value["stage"] == "sip_start"
+        and value["ami_stage"] == "setup_snapshot"
+        and valid_setup_rejection(value["rejected_setup"]))
 
 
 def _safe_playback(value):
@@ -930,7 +1053,9 @@ class VoiceControl:
     def _no_sip_proof(self, s, report, raw):
         _require(s.profile.media_transport == 'sip_audiosocket')
         if 'startup_diagnostic' in report:
-            _require(valid_startup_diagnostic(report['startup_diagnostic']))
+            _require(valid_startup_diagnostic(report['startup_diagnostic'])
+                     # A captured setup rejection follows an Originate attempt.
+                     and report['startup_diagnostic']['version'] == 1)
         proof = report['cleanup_proof']
         _require(type(proof) is dict and set(proof) == {
             'version', 'kind', 'transport', 'session_id', 'challenge',

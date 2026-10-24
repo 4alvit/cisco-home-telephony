@@ -163,6 +163,32 @@ class DiagnosticRuntime(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('cleanup_proof', report)
         self.assertNotIn(SECRET, json.dumps(report))
 
+    async def test_setup_projection_is_copied_before_cleanup(self):
+        class FailedPort(sip_tests.Port):
+            async def start(self):
+                self.originate_attempted = True
+                self.startup_stage = 'setup_snapshot'
+                root = 'cisco-voice-' + sip_tests.TOKEN.hex
+                rows = [{'Channel': 'PJSIP/201-a', 'Uniqueid': '12.1',
+                         'Linkedid': root, 'ChannelStateDesc': 'Ringing'}] * 2
+                self.rejected_setup = runner.control.project_setup_rejection(root, rows, rows)
+                raise runner.BoundaryError('call_changed')
+
+            async def hangup_and_confirm(self, grant=None):
+                self.startup_stage = 'complete'
+                self.rejected_setup['rows'].clear()
+                return False
+
+        report = await self.failure_report(
+            env=self.identity(), build_failure=False, port_type=FailedPort)
+        detail = report['startup_diagnostic']
+        self.assertTrue(runner.control.valid_startup_diagnostic(detail))
+        self.assertEqual(detail['version'], 2)
+        self.assertEqual(len(detail['rejected_setup']['rows']), 2)
+        self.assertFalse(report['pbx_call_absent'])
+        self.assertFalse(report['safe_no_media_started'])
+        self.assertNotIn('cleanup_proof', report)
+
     async def test_real_ami_admission_failure_stage_survives_scoped_hangup(self):
         for option, reason, stage in (
                 ('wrong_token', 'call_admission_mismatch', 'verify_session'),

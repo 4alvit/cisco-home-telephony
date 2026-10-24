@@ -79,6 +79,60 @@ class StartupReceiptTests(ControlFixture):
         self.assertNotIn(str(self.workspace), data.decode())
         return json.loads(data)
 
+    def test_rejected_setup_projection_survives_real_private_receipt_boundary(self):
+        manager, session, child = self.prepared()
+        root = 'cisco-voice-' + session.session_id
+        rows = [{'Channel': 'PJSIP/201-deadbeef', 'Uniqueid': '123.1',
+                 'Linkedid': root, 'ChannelStateDesc': 'Ringing'}] * 2
+        projection = control.project_setup_rejection(root, rows, rows)
+        detail = dict(diagnostic(), version=2, reason='call_changed', error_type='BoundaryError',
+                      ami_stage='setup_snapshot', rejected_setup=projection)
+        report = no_originate(session)
+        report.pop('cleanup_proof')
+        report.update(originate_attempted=True, safe_no_media_started=False,
+                      pbx_call_absent=False, startup_diagnostic=detail)
+        child.finish(report, code=1)
+        manager.tick()
+        receipt = self.receipt(manager, session)
+        self.assertEqual(receipt['child_claims']['startup_diagnostic'], detail)
+        self.assertEqual(session.state, 'recovery_required')
+        self.assertTrue(manager._journal(session.profile)['reserved'])
+        self.assertFalse(session.cleanup_verified)
+        self.assertFalse(self.status(manager)['stop_confirmed'])
+        self.assertNotIn('rejected_setup', json.dumps(self.status(manager)))
+        self.assertNotIn('PJSIP/201-deadbeef', json.dumps(receipt))
+
+    def test_valid_setup_rejection_cannot_claim_no_originate_cleanup(self):
+        manager, session, child = self.prepared()
+        root = 'cisco-voice-' + session.session_id
+        rows = [{'Channel': 'PJSIP/201-deadbeef', 'Uniqueid': '123.1',
+                 'Linkedid': root, 'ChannelStateDesc': 'Ringing'}] * 2
+        report = no_originate(session)
+        report['startup_diagnostic'] = dict(
+            diagnostic(), version=2, reason='call_changed', error_type='BoundaryError',
+            ami_stage='setup_snapshot', rejected_setup=control.project_setup_rejection(root, rows, rows))
+        child.finish(report, code=1)
+        manager.tick()
+        receipt = self.receipt(manager, session)
+        self.assertEqual(receipt['child_claims']['startup_diagnostic_status'], 'valid')
+        self.assertEqual(session.state, 'recovery_required')
+        self.assertTrue(manager._journal(session.profile)['reserved'])
+        self.assertFalse(session.cleanup_verified)
+
+    def test_malformed_setup_projection_is_not_a_cleanup_authority(self):
+        manager, session, child = self.prepared()
+        report = no_originate(session)
+        report['startup_diagnostic'] = dict(
+            diagnostic(), version=2, reason='call_changed', ami_stage='setup_snapshot',
+            rejected_setup={'CallerID': PRIVATE_MARKER})
+        child.finish(report, code=1)
+        manager.tick()
+        receipt = self.receipt(manager, session)
+        self.assertEqual(receipt['child_claims']['startup_diagnostic_status'], 'invalid')
+        self.assertNotIn('startup_diagnostic', receipt['child_claims'])
+        self.assertEqual(session.state, 'recovery_required')
+        self.assertTrue(manager._journal(session.profile)['reserved'])
+
     def test_early_failure_retains_safe_report_after_handle_is_discarded(self):
         manager, session, child = self.prepared()
         report = no_originate(session)

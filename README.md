@@ -250,6 +250,9 @@ captures or raw emails. Real network settings and personal data stay local.
 [Verified technical sources](docs/cisco-research.md) explain Cisco limitations
 and the scope of Asterisk compatibility.
 
+See the [release and acceptance contract](RELEASING.md) for component scope,
+verified beta assets and requirements for RC/stable promotion.
+
 ## Free CI
 
 [GitHub Actions](https://github.com/4alvit/cisco-home-telephony/actions) checks
