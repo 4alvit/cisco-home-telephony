@@ -9,6 +9,7 @@ import fcntl
 import hashlib
 import importlib
 import importlib.metadata
+import importlib.util
 import io
 import json
 import os
@@ -33,6 +34,16 @@ def reject_network(event, _arguments):
 def check_imports():
     require(sys.version_info[:2] in ((3, 11), (3, 12)), 'unsupported_python')
     require(os.geteuid() == 10001, 'smoke_requires_nonroot_uid_10001')
+    require(importlib.util.find_spec('pip') is None, 'runtime_pip_must_be_absent')
+    require(importlib.util.find_spec('ensurepip') is None, 'runtime_ensurepip_must_be_absent')
+    try:
+        importlib.metadata.version('pip')
+    except importlib.metadata.PackageNotFoundError:
+        pass
+    else:
+        raise RuntimeError('runtime_pip_metadata_must_be_absent')
+    require(not any(Path('/tmp').glob('voice-installer-*')), 'installer_wheel_must_be_removed')
+    require(not Path('/tmp/install_locked.py').exists(), 'build_helper_must_be_removed')
     locked = {}
     for line in Path('/opt/voice/requirements.lock').read_text().splitlines():
         match = re.fullmatch(r'([A-Za-z0-9_-]+)==([^\s]+)\s*\\?', line)

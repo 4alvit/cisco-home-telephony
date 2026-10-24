@@ -7,12 +7,14 @@ FROM ${PYTHON_IMAGE}
 # an explicit dependency update; the base digest is recorded by the helper.
 RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
     && printf '%s\n' \
-       'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20261019T000000Z bookworm main' \
-       'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20261019T000000Z bookworm-updates main' \
-       'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20261019T000000Z bookworm-security main' \
+       'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20261024T000000Z bookworm main' \
+       'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20261024T000000Z bookworm-updates main' \
+       'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20261024T000000Z bookworm-security main' \
        > /etc/apt/sources.list \
     && apt-get -o Acquire::Retries=3 update \
     && apt-get install -y --no-install-recommends ffmpeg \
+       libbrotli1=1.0.9-2+deb12u1 libexpat1=2.5.0-1+deb12u5 \
+       libssh-gcrypt-4=0.10.6-0+deb12u3 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 cisco-voice \
     && useradd --uid 10001 --gid 10001 --no-create-home \
@@ -22,9 +24,9 @@ RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
     && chmod 0700 /run/voice /run/voice/.local /run/voice/.local/config /run/voice/.local/state
 
 COPY containers/voice/requirements.lock /opt/voice/requirements.lock
-RUN python3 -m pip --isolated install --no-cache-dir --disable-pip-version-check \
-    --only-binary=:all: --require-hashes -r /opt/voice/requirements.lock \
-    && python3 -m pip check
+COPY containers/voice/install_locked.py /tmp/install_locked.py
+RUN python3 -I /tmp/install_locked.py /opt/voice/requirements.lock \
+    && rm /tmp/install_locked.py
 
 COPY scripts/voice_session.py scripts/voice_session_sip.py /workspace/scripts/
 COPY containers/asterisk/phone_voice_transport.py containers/asterisk/phone_voice_controller.py containers/asterisk/phone_voice_control.py containers/asterisk/phone_voice_hands_free.py containers/asterisk/phone_voice_display.py containers/asterisk/phone_camera_preview.py containers/asterisk/phone_gateway.py containers/asterisk/phone_apps.py containers/asterisk/phone_apps_ha.py /workspace/containers/asterisk/

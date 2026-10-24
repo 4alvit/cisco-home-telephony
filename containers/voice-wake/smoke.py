@@ -2,6 +2,7 @@
 """Check the optional inference layer without models, microphones or networking."""
 import hashlib
 import importlib.metadata
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -42,6 +43,21 @@ def check_dependencies(lock_path=Path("/opt/voice-wake/requirements.lock")):
     require({"numpy", "onnxruntime", "protobuf"} <= versions.keys(),
             "incomplete_wake_lock")
     return versions
+
+
+def check_installer_absence(temporary_directory=Path("/tmp")):
+    require(all(importlib.util.find_spec(name) is None for name in ("pip", "ensurepip")),
+            "runtime_installers_must_be_absent")
+    try:
+        importlib.metadata.version("pip")
+    except importlib.metadata.PackageNotFoundError:
+        pass
+    else:
+        raise RuntimeError("runtime_pip_metadata_must_be_absent")
+    require(not any(temporary_directory.glob("voice-installer-*")),
+            "installer_wheel_must_be_removed")
+    require(not (temporary_directory / "install_locked.py").exists(),
+            "build_helper_must_be_removed")
 
 
 def identity_model():
@@ -89,6 +105,7 @@ def check_onnx():
 def main():
     sys.addaudithook(reject_network)
     require(os.geteuid() == 10001, "smoke_requires_nonroot_uid_10001")
+    check_installer_absence()
     source = check_base()
     dependencies = check_dependencies()
     check_onnx()

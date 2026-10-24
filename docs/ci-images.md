@@ -117,3 +117,88 @@ Artifact storage has a separate shared quota: free runner minutes do not imply
 unlimited storage. After downloading and verifying, delete only your run's
 artifact in GitHub Actions. The first home deployment artifact was deleted after
 both images had been transferred and verified.
+
+
+## Voice image security qualification
+
+Both the manual voice build and its optional wake child scan the **finished
+image**, including all OS and language packages, with pinned Trivy 0.74.0.
+`scripts/verify_voice_security.py` rejects every HIGH/CRITICAL language finding,
+every HIGH/CRITICAL OS finding with a distributor fix, incomplete inventories,
+and a remaining runtime `pip` installation. It also requires the exact reviewed
+Debian security updates below. Full JSON and CycloneDX SBOMs accompany exported
+voice images and remain available as CI artifacts even when the gate fails.
+Passing this gate does **not** mean an image has no reported vulnerabilities.
+
+The 2026-10-24 review of `v0.1.0-beta.21` examined wake image configuration
+`sha256:e7509a4e8a039f13a1010658c0dd918c154215922cb5bd9582315e3a50b1f87c`
+from source `2f64ffbb2b74d89a0256b7742a5df3c39438aea5`. Its complete scan
+reported seven fixable HIGH OS package findings. The next build uses the
+2026-10-24 Debian snapshot and explicitly installs:
+
+- `libbrotli1=1.0.9-2+deb12u1`: CVE-2026-111497.
+- `libexpat1=2.5.0-1+deb12u5`: CVE-2025-59375 and CVE-2026-77214.
+- `libssh-gcrypt-4=0.10.6-0+deb12u3`: CVE-2026-0966, CVE-2026-3731,
+  CVE-2026-59847 and CVE-2026-59850.
+
+The old image also contained pip 25.0.1 with outdated vendored packages that
+its scan did not enumerate separately. Image inspection found certifi
+2024.8.30, msgpack 1.1.0 and setuptools 70.3.0. Updating application locks alone
+would leave these copies behind. The build now downloads the official pip
+26.2.2 wheel using a fixed URL and SHA-256, removes any existing global pip
+**before** loading that wheel, installs hash-locked binary dependencies, runs
+`pip check`, and removes the temporary wheel and `ensurepip`. The helper uses an
+isolated Python interpreter and does not inherit `PYTHONPATH` or `PYTHONHOME`.
+It supports both the original Python base with pip and the pip-free manual
+image inherited by the wake child. No installer is required to run the shipped
+application; rebuilding the image is the supported dependency-update path.
+The existing network-disabled, non-root image smokes verify dependency versions,
+application imports, media decoding and removal of all build-only installers.
+
+### Remaining critical OS findings in the reviewed beta.21 image
+
+These eight findings are retained in the full report. The following disposition
+is specific to the examined image and current voice call paths; it is neither a
+scanner suppression nor a claim that arbitrary use of its bundled tools is safe.
+Recheck the new image and distributor advisories before each release:
+
+- [CVE-2023-6879](https://security-tracker.debian.org/tracker/CVE-2023-6879),
+  `libaom3`: multithreaded AV1 encoding with a resolution change. The voice
+  pipeline decodes audio and does not encode AV1. Debian lists the Bookworm
+  update as a minor issue without a DSA.
+- [CVE-2026-58016](https://security-tracker.debian.org/tracker/CVE-2026-58016),
+  `libglib2.0-0`: malformed GDBus introspection XML. The voice application does
+  not use GDBus; Debian postpones the Bookworm update as a minor issue.
+- [CVE-2025-47917](https://security-tracker.debian.org/tracker/CVE-2025-47917),
+  `libmbedcrypto7`: certificate-writing name conversion. The application uses
+  Python OpenSSL for TLS and does not call the Mbed TLS certificate writer.
+  Debian marks this source package end-of-life in Bookworm: its continued
+  presence is a maintenance risk that the security gate cannot fix by upgrading
+  to an unavailable distributor package. The supported replacement is tracked
+  separately in [issue #48](https://github.com/4alvit/cisco-home-telephony/issues/48).
+- [CVE-2026-34873](https://security-tracker.debian.org/tracker/CVE-2026-34873)
+  and [CVE-2026-34875](https://security-tracker.debian.org/tracker/CVE-2026-34875),
+  `libmbedcrypto7`: upstream describes affected newer Mbed TLS series for
+  [TLS 1.3 resumption](https://mbed-tls.readthedocs.io/en/latest/security-advisories/mbedtls-security-advisory-2026-03-client-impersonation-while-resuming-tls13-session/)
+  and [FFDH export](https://mbed-tls.readthedocs.io/en/latest/security-advisories/mbedtls-security-advisory-2026-03-ffdh-buffer-overflow/).
+  The examined Debian package is 2.28.3, outside those stated version ranges;
+  retain the distro findings and this version discrepancy rather than
+  silently overriding the scanner. Neither operation is an application path.
+- [CVE-2025-7458](https://security-tracker.debian.org/tracker/CVE-2025-7458),
+  `libsqlite3-0`: crafted SQL with an overflowing ORDER BY clause. The voice
+  application neither executes SQL nor exposes an SQL input. Debian lists the
+  Bookworm issue as minor without a DSA.
+- [CVE-2026-6653](https://security-tracker.debian.org/tracker/CVE-2026-6653),
+  `libxml2`: internal DTD/entity processing. Voice playback explicitly selects
+  MP3, Ogg or FLAC demuxing, permits only the FFmpeg `pipe` protocol and does
+  not auto-detect XML playlists. Debian postpones the Bookworm update.
+- [CVE-2023-45853](https://security-tracker.debian.org/tracker/CVE-2023-45853),
+  `zlib1g`: Debian states that the affected MiniZip contribution is not built
+  from its zlib source package. The raw package finding remains visible.
+
+The reviewed image also has unfixed HIGH OS findings, retained without severity
+filtering. A future reachable vulnerability, newly available security update or
+expanded application use of these libraries requires another review; this dated
+list is not a permanent exception. These software checks do not replace the
+separate phone, audio, restart and rollback acceptance in
+[release hold #46](https://github.com/4alvit/cisco-home-telephony/issues/46).

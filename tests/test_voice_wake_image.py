@@ -198,7 +198,7 @@ class WakeImageBuildTests(unittest.TestCase):
 
 
 class BaseCompatibilityTests(unittest.TestCase):
-    def test_base_manifest_covers_every_file_copied_into_manual_image(self):
+    def test_base_manifest_covers_every_runtime_file_copied_into_manual_image(self):
         copied = {}
         for line in (ROOT / "containers/voice/Dockerfile").read_text().splitlines():
             if not line.startswith("COPY "):
@@ -210,6 +210,11 @@ class BaseCompatibilityTests(unittest.TestCase):
                              if destination.endswith("/") else destination)
                 self.assertNotIn(source, copied)
                 copied[source] = installed
+        # The installer is a build input, never a file inherited by the child.
+        self.assertEqual(copied.pop("containers/voice/install_locked.py"),
+                         "/tmp/install_locked.py")
+        self.assertIn("&& rm /tmp/install_locked.py",
+                      (ROOT / "containers/voice/Dockerfile").read_text())
         self.assertEqual(builder.BASE_FILES, copied)
 
     def test_manifest_reads_explicit_commit_not_current_dirty_tree(self):
@@ -249,6 +254,32 @@ class BaseCompatibilityTests(unittest.TestCase):
                          "Optional ONNX Runtime and NumPy are unavailable")
     def test_real_cpu_inference_on_weightless_synthetic_model(self):
         self.assertTrue(smoke.check_onnx())
+
+
+class InstallerAbsenceTests(unittest.TestCase):
+    def test_final_wake_smoke_rejects_modules_metadata_and_temporary_installers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            absent = smoke.importlib.metadata.PackageNotFoundError('pip')
+            with patch.object(smoke.importlib.util, 'find_spec', return_value=None), \
+                    patch.object(smoke.importlib.metadata, 'version', side_effect=absent):
+                smoke.check_installer_absence(root)
+                for name in ('voice-installer-leftover', 'install_locked.py'):
+                    with self.subTest(temporary=name):
+                        path = root / name; path.write_text('leftover')
+                        with self.assertRaises(RuntimeError):
+                            smoke.check_installer_absence(root)
+                        path.unlink()
+            for module in ('pip', 'ensurepip'):
+                with self.subTest(module=module), \
+                        patch.object(smoke.importlib.util, 'find_spec',
+                                     side_effect=lambda name: object() if name == module else None):
+                    with self.assertRaises(RuntimeError):
+                        smoke.check_installer_absence(root)
+            with patch.object(smoke.importlib.util, 'find_spec', return_value=None), \
+                    patch.object(smoke.importlib.metadata, 'version', return_value='25.0.1'):
+                with self.assertRaises(RuntimeError):
+                    smoke.check_installer_absence(root)
 
 
 if __name__ == "__main__":
