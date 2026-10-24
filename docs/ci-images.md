@@ -204,6 +204,21 @@ separate phone, audio, restart and rollback acceptance in
 [release hold #46](https://github.com/4alvit/cisco-home-telephony/issues/46).
 
 
+### Speech decoder boundary
+
+Compressed speech decoding admits only MP3, Vorbis, Opus and FLAC decoders and
+explicitly selects the first audio stream. Video, subtitles and data are not
+mapped to output. The input codec allowlist also rejects opening an attached
+PNG video decoder; an actual synthetic MP3 with valid ID3 artwork tests both the
+unrestricted positive control and restricted refusal while preserving speech
+samples. Real MP3/Vorbis/Opus/FLAC fixtures run on the host and inside the final
+voice image with networking disabled, a read-only root and no capabilities.
+
+This narrows decoder use; it does not remove the multimedia libraries or prevent
+all container-header parsing. The complete vulnerability inventory and the
+supported-library replacement follow-up in #48 remain necessary. Expanding the
+accepted codec set requires new fixtures and a fresh security review.
+
 ## Required pull-request checks
 
 The required contexts are `validate` and `Wake gate`, both emitted by GitHub

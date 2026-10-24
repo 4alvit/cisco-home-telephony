@@ -49,7 +49,8 @@ def decode_wave(data: bytes, *, max_seconds: float = 60) -> PCMOutput:
 class FFmpegDecoder:
     """Optional local decoder for compressed HA speech; installs nothing.
 
-    Only pipe input is allowed, network protocols and input playlists are disabled.
+    Only pipe input and reviewed speech codecs are allowed; video, subtitle and
+    data output are disabled. Demuxers still parse container headers.
     Output and execution time are bounded; cancellation kills the child process.
     """
 
@@ -66,7 +67,10 @@ class FFmpegDecoder:
             raise ValueError("unsupported compressed speech format")
         process = await asyncio.create_subprocess_exec(
             self.executable, "-hide_banner", "-loglevel", "error", "-nostdin",
-            "-protocol_whitelist", "pipe", "-f", fmt, "-i", "pipe:0",
+            "-protocol_whitelist", "pipe",
+            "-codec_whitelist", "mp3,mp3float,vorbis,opus,libopus,flac",
+            "-f", fmt, "-i", "pipe:0",
+            "-map", "0:a:0", "-vn", "-sn", "-dn",
             "-t", str(self.max_seconds + 1), "-f", "s16le", "-ac", "1", "-ar", "16000", "pipe:1",
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL)
