@@ -65,10 +65,30 @@ def alarm_settings(site):
     return {"enabled": True, "duration_seconds": duration}
 
 
+def player_dialplan():
+    """Single-use media reservation; remote URLs never enter the dialplan."""
+    return '''exten => 699,1,Answer()
+ same => n(cisco-player-v1),Set(PLAYER_CHANNEL=${CHANNEL(name)})
+ same => n,Set(PLAYER_LINE=${CUT(PLAYER_CHANNEL,/,2)})
+ same => n,Set(PLAYER_LINE=${CUT(PLAYER_LINE,-,1)})
+ same => n,Set(PLAYER_TARGET=${DB_DELETE(cisco-media/${PLAYER_LINE})})
+ same => n,GotoIf($[${REGEX("^[0-9]{1,5}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" ${PLAYER_TARGET})} = 1]?ready:done)
+ same => n(ready),Set(PLAYER_PORT=${CUT(PLAYER_TARGET,:,1)})
+ same => n,Set(PLAYER_TOKEN=${CUT(PLAYER_TARGET,:,2)})
+ same => n,Set(CISCO_PLAYER=1:${PLAYER_TOKEN}:${UNIQUEID})
+ same => n,Set(TIMEOUT(absolute)=86430)
+ same => n,Dial(AudioSocket/127.0.0.1:${PLAYER_PORT}/${PLAYER_TOKEN}/c(slin16),5,g)
+ same => n,Set(CISCO_PLAYER=)
+ same => n(done),Hangup()
+'''
+
+
 def service_dialplan(site):
     """Return optional service routes without introducing outbound dialing."""
     radio, alarm = radio_settings(site), alarm_settings(site)
     routes, numbers = [], []
+    if gateway_settings(site):
+        routes.append(player_dialplan())
     if alarm:
         numbers.append("640")
         routes.append(f'''exten => 640,1,Answer()

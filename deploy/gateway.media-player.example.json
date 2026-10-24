@@ -1,0 +1,12 @@
+{
+  "media_player": {
+    "enabled": true,
+    "allowed_origins": [
+      "http://homeassistant.example.lan:8123",
+      "http://music-assistant.example.lan:8097"
+    ],
+    "max_calls": 4,
+    "max_seconds": 7200,
+    "max_bytes": 67108864
+  }
+}

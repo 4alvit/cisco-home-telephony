@@ -14,6 +14,10 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE_FILES = (
+    "containers/asterisk/phone_player.py",
+    "containers/asterisk/media_runtime.py",
+    "containers/asterisk/radio.py",
+    "containers/asterisk/radio-catalog.json",
     "containers/voice/Dockerfile",
     "containers/voice/requirements.lock",
     "containers/voice/install_locked.py",

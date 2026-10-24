@@ -14,6 +14,8 @@ RELEVANT_PATHS = (
     '.github/workflows/voice-wake.yml',
     'containers/voice-wake/**', 'containers/voice/**',
     'containers/asterisk/phone_*.py', 'voice_assistant/**',
+    'containers/asterisk/media_runtime.py', 'containers/asterisk/radio.py',
+    'containers/asterisk/radio-catalog.json',
     'scripts/build-voice-wake-image.sh', 'scripts/build-voice-image.sh',
     'scripts/verify_voice_security.py', 'scripts/voice_wake_scope.py',
     'tests/test_voice_installer.py', 'tests/test_voice_image_security.py',
