@@ -1,10 +1,13 @@
 """The richer player must control only its own exact, freshly observed call."""
 import copy
+import io
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from test_phone_gateway import config, gateway, FakeAMI
+
+REAL_AMI = gateway.AMI
 
 
 class PlayerAMI(FakeAMI):
@@ -14,10 +17,17 @@ class PlayerAMI(FakeAMI):
 
     def action(self, name, **values):
         self.calls.append((name, values))
+        if name == 'DBGet':
+            assert values['complete'] == 'DBGetComplete' and values['Family'] == 'cisco-media'
+            assert values['Key'] in ('201', '202')
+            return [{'Response': 'Success', 'EventList': 'start'},
+                    {'Event': 'DBGetResponse', 'Family': values['Family'], 'Key': values['Key'],
+                     'Val': self.reservation},
+                    {'Event': 'DBGetComplete', 'EventList': 'Complete', 'ListItems': '1'}]
         if name == 'Getvar':
             variable = values['Variable']
-            value = (('1' if self.supported else '0') if variable.startswith('DIALPLAN_EXISTS') else
-                     self.reservation if variable.startswith('DB(') else self.marker)
+            assert not variable.startswith('DB('), 'Do not bypass hardened PBX function policy'
+            value = ('1' if self.supported else '0') if variable.startswith('DIALPLAN_EXISTS') else self.marker
             return [{'Response': 'Success', 'Variable': variable, 'Value': value}]
         return [{'Response': 'Success'}]
 
@@ -180,6 +190,69 @@ class PlayerTests(unittest.TestCase):
             PlayerAMI.reservation = '23456:00000000-0000-0000-0000-000000000000'
             self.server.player.release_reservation(record, ami)
             self.assertFalse(any(n == 'DBDel' for n, _ in PlayerAMI.calls))
+
+    def cleanup_wire(self, record, frames):
+        """Exercise the real AMI parser, including the asynchronous DBGet list."""
+        ami = REAL_AMI({})
+        ami.sock = Mock()
+        ami.file = io.BytesIO(''.join(''.join(f'{key}: {value}\r\n' for key, value in frame.items())
+                                    + '\r\n' for frame in frames).encode())
+        with patch.object(gateway.secrets, 'token_hex', side_effect=['read', 'delete']):
+            self.server.player.release_reservation(record, ami)
+        return [call.args[0].decode() for call in ami.sock.sendall.call_args_list]
+
+    def test_cleanup_waits_for_dbget_complete_and_ignores_other_action(self):
+        token = self.start()
+        record = self.server.player.sessions['201']
+        frames = [
+            {'Response': 'Success', 'ActionID': 'read', 'EventList': 'start'},
+            {'Event': 'DBGetResponse', 'ActionID': 'other', 'Family': 'cisco-media',
+             'Key': '201', 'Val': 'foreign-reservation'},
+            {'Event': 'DBGetComplete', 'ActionID': 'other', 'EventList': 'Complete', 'ListItems': '1'},
+            {'Event': 'DBGetResponse', 'ActionID': 'read', 'Family': 'cisco-media',
+             'Key': '201', 'Val': '23456:' + token},
+            {'Event': 'DBGetComplete', 'ActionID': 'read', 'EventList': 'Complete', 'ListItems': '1'},
+            {'Response': 'Success', 'ActionID': 'delete'},
+        ]
+        sent = self.cleanup_wire(record, frames)
+        self.assertEqual(sent, ['Action: DBGet\r\nActionID: read\r\nFamily: cisco-media\r\nKey: 201\r\n\r\n',
+                                'Action: DBDel\r\nActionID: delete\r\nFamily: cisco-media\r\nKey: 201\r\n\r\n'])
+
+    def test_cleanup_requires_one_exact_family_key_and_value(self):
+        token = self.start()
+        record = self.server.player.sessions['201']
+        exact = {'Event': 'DBGetResponse', 'ActionID': 'read', 'Family': 'cisco-media',
+                 'Key': '201', 'Val': '23456:' + token}
+        for entries in ([], [dict(exact, Family='cisco-dnd')], [dict(exact, Key='202')],
+                        [dict(exact, Val='23456:replacement')], [exact, exact]):
+            with self.subTest(entries=entries):
+                sent = self.cleanup_wire(record, [
+                    {'Response': 'Success', 'ActionID': 'read', 'EventList': 'start'}, *entries,
+                    {'Event': 'DBGetComplete', 'ActionID': 'read', 'EventList': 'Complete',
+                     'ListItems': str(len(entries))}])
+                self.assertEqual(len(sent), 1)
+                self.assertTrue(sent[0].startswith('Action: DBGet\r\n'))
+
+    def test_cleanup_missing_entry_is_done_but_permission_failure_is_not_hidden(self):
+        self.start()
+        record = self.server.player.sessions['201']
+        sent = self.cleanup_wire(record, [
+            {'Response': 'Error', 'ActionID': 'read', 'Message': 'Database entry not found'}])
+        self.assertEqual(len(sent), 1)
+        for message in ('Permission denied', 'Unexpected failure'):
+            with self.subTest(message=message), self.assertRaises(gateway.Refused):
+                self.cleanup_wire(record, [{'Response': 'Error', 'ActionID': 'read', 'Message': message}])
+
+    def test_cleanup_rejects_incomplete_list_and_skips_consumed_reservation(self):
+        token = self.start()
+        record = self.server.player.sessions['201']
+        with self.assertRaises(gateway.Refused):
+            self.cleanup_wire(record, [
+                {'Response': 'Success', 'ActionID': 'read', 'EventList': 'start'},
+                {'Event': 'DBGetResponse', 'ActionID': 'read', 'Family': 'cisco-media',
+                 'Key': '201', 'Val': '23456:' + token}])
+        record['uid'] = '123.4'
+        self.assertEqual(self.cleanup_wire(record, []), [])
 
     def test_status_redacts_signed_url_and_retains_physical_identity(self):
         token = self.start('202')

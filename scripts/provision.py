@@ -89,6 +89,7 @@ def service_dialplan(site):
     routes, numbers = [], []
     if gateway_settings(site):
         routes.append(player_dialplan())
+        numbers.append("699")
     if alarm:
         numbers.append("640")
         routes.append(f'''exten => 640,1,Answer()
