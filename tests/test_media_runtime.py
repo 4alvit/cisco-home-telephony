@@ -204,13 +204,61 @@ class QueueControls(unittest.TestCase):
         self.assertEqual(self.session.snapshot()['state'], 'idle')
         fetch.assert_not_called()
 
+    def test_replaced_decoder_eof_or_error_cannot_end_new_track(self):
+        for action in ('next', 'replace'):
+            for outcome in ('eof', 'error'):
+                with self.subTest(action=action, outcome=outcome):
+                    session = media.MediaSession(uuid.uuid4(), SOURCE, max_seconds=3)
+                    next_source = {**SOURCE, 'url': 'https://audio.example/next.mp3'}
+                    session.control('enqueue', source=next_source, mode='add')
+                    decoders = []
+
+                    class RacingDecoder:
+                        finite, duration = False, None
+
+                        def __init__(self, *_args, **_kwargs):
+                            self.closed = False
+                            self.index = len(decoders)
+                            decoders.append(self)
+
+                        def read_frame(self):
+                            if self.index == 0:
+                                # Exactly between read_frame and its result,
+                                # the user requests a different queue item.
+                                if action == 'next':
+                                    session.control('next')
+                                else:
+                                    session.control('enqueue', source=next_source, mode='replace')
+                                if outcome == 'error':
+                                    raise media.MediaError('decoder_failed')
+                                return b''
+                            return b'\x01\x00' * 320
+
+                        def close(self, **_kwargs):
+                            self.closed = True
+
+                    with patch.object(media, 'Decoder', RacingDecoder):
+                        try:
+                            session.start()
+                            with socket.create_connection(('127.0.0.1', session.port), timeout=2) as peer:
+                                peer.sendall(b'\x01\x00\x10' + session.token.bytes)
+                                kind, pcm = media.radio.receive_frame(peer)
+                                self.assertEqual(kind, 0x12)
+                                self.assertEqual(len(pcm), 640)
+                                self.assertEqual(session.snapshot()['source_id'], next_source['url'])
+                                self.assertEqual(session.snapshot()['state'], 'playing')
+                                self.assertEqual(len(decoders), 2)
+                                self.assertTrue(decoders[0].closed)
+                        finally:
+                            session.close()
+
 
 @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'), 'FFmpeg and ffprobe required')
 class AudioRuntime(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.mp3 = subprocess.check_output(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
-            'aevalsrc=0.2*sin(2*PI*1000*t)+0.2*sin(2*PI*5000*t):s=48000:d=3',
+            'aevalsrc=0.2*sin(2*PI*1000*t)+0.2*sin(2*PI*5000*t):s=48000:d=10',
             '-metadata', 'title=Embedded title', '-metadata', 'artist=Embedded artist',
             '-f', 'mp3', 'pipe:1'], stderr=subprocess.DEVNULL, timeout=10)
 
@@ -243,8 +291,18 @@ class AudioRuntime(unittest.TestCase):
                 return frame
         self.fail('no decoded audio')
 
+    def silence(self, peer):
+        # Controls cannot retract PCM already queued in the receiving TCP
+        # socket. Observe the wire transition instead of guessing five frames.
+        consecutive = 0
+        for _ in range(500):
+            consecutive = consecutive + 1 if self.frame(peer) == bytes(640) else 0
+            if consecutive == 5:
+                return
+        self.fail('no sustained silence')
+
     def test_finite_mp3_wideband_pause_seek_volume_and_hangup_cleanup(self):
-        session, peer = self.connect()
+        session, peer = self.connect(max_seconds=2 * media.START_TIMEOUT)
         samples = list(struct.unpack('<320h', self.sounding(session, peer)))
         for _ in range(15):
             samples.extend(struct.unpack('<320h', self.frame(peer)))
@@ -256,32 +314,29 @@ class AudioRuntime(unittest.TestCase):
         self.assertGreater(amplitude(5000), 500)
         status = session.snapshot()
         self.assertTrue(status['seekable'])
-        self.assertGreater(status['duration'], 2.9)
+        self.assertGreater(status['duration'], 9.9)
         self.assertEqual(status['title'], 'Embedded title')
         self.assertEqual(status['artist'], 'Embedded artist')
         session.control('pause')
-        for _ in range(5):
-            self.frame(peer)
+        self.silence(peer)
         position = session.snapshot()['position']
         for _ in range(5):
             self.assertEqual(self.frame(peer), bytes(640))
         self.assertEqual(session.snapshot()['position'], position)
         self.assertEqual(session.snapshot()['state'], 'paused')
         session.control('seek', position=1.5)
-        for _ in range(10):
+        for _ in range(500):
             self.frame(peer)
+            if session.snapshot()['position'] == 1.5:
+                break
         self.assertEqual(session.snapshot()['position'], 1.5)
         session.control('resume')
         self.assertTrue(any(self.sounding(session, peer)))
         session.control('mute', muted=True)
-        for _ in range(5):
-            self.frame(peer)
-        self.assertEqual(self.frame(peer), bytes(640))
+        self.silence(peer)
         session.control('mute', muted=False)
         session.control('volume', level=0)
-        for _ in range(5):
-            self.frame(peer)
-        self.assertEqual(self.frame(peer), bytes(640))
+        self.silence(peer)
         session.control('volume', level=1)
         self.assertTrue(any(self.sounding(session, peer)))
         peer.sendall(b'\x00\x00\x00')
@@ -300,8 +355,7 @@ class AudioRuntime(unittest.TestCase):
             session.control('seek', position=1)
         session.control('pause')
         process = session.decoder.process
-        for _ in range(5):
-            self.frame(peer)
+        self.silence(peer)
         position = session.snapshot()['position']
         self.assertEqual(self.frame(peer), bytes(640))
         self.assertEqual(session.snapshot()['position'], position)
@@ -316,7 +370,10 @@ class AudioRuntime(unittest.TestCase):
         self.assertIsNotNone(session.decoder.process.poll())
 
     def test_queue_next_previous_replace_preserve_socket_and_reap_old_decoder(self):
-        session, peer = self.connect()
+        # Four decoder startups exercise queue continuity, not the independent
+        # whole-call lifetime. Allow each startup its production budget; each
+        # sounding() observation remains independently bounded to 500 frames.
+        session, peer = self.connect(max_seconds=4 * media.START_TIMEOUT)
         self.sounding(session, peer)
         old = session.decoder.process
         session.control('enqueue', source={**SOURCE, 'url': 'https://audio.example/second.mp3'}, mode='add')
@@ -331,6 +388,23 @@ class AudioRuntime(unittest.TestCase):
         self.sounding(session, peer)
         self.assertEqual(session.snapshot()['queue_length'], 1)
         self.assertEqual(session.snapshot()['session_id'], str(session.token))
+
+    def test_whole_session_deadline_still_ends_audio_and_reaps_decoder(self):
+        started = time.monotonic()
+        session, peer = self.connect(max_seconds=1)
+        while True:
+            kind, data = media.radio.receive_frame(peer)
+            if kind == 0:
+                self.assertEqual(data, b'')
+                break
+            self.assertEqual(kind, 0x12)
+        session.thread.join(3)
+        self.assertFalse(session.thread.is_alive())
+        self.assertEqual(session.snapshot()['state'], 'idle')
+        self.assertGreaterEqual(time.monotonic() - started, .8)
+        self.assertLess(time.monotonic() - started, 3)
+        if session.decoder.process:
+            self.assertIsNotNone(session.decoder.process.poll())
 
     def test_truncated_finite_download_never_decodes_and_cleans_cache(self):
         session, peer = self.connect(body=self.mp3[:100], headers={'content-length': str(len(self.mp3))})

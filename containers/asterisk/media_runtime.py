@@ -605,6 +605,12 @@ class MediaSession:
                             if cached and cached[0]:
                                 cached[0].close()
                             break
+                        if current_generation != self.generation:
+                            # A newer queue command arrived while the previous
+                            # decoder was being reaped. Do not fetch old media.
+                            if cached and cached[0]:
+                                cached[0].close()
+                            continue
                         self.decoder = Decoder(source, self.origins, self.max_bytes,
                             lambda info, gen=current_generation: self._metadata(gen, info),
                             position=seeking or 0, cached=cached)
@@ -619,13 +625,26 @@ class MediaSession:
                 # Preserve position for both finite tracks and Music Assistant
                 # flows. Bounded decoder/TCP backpressure replaces buffering or
                 # silently dropping live bytes; never reopen a paused URL.
-                frame = None if paused else self.decoder.read_frame()
-                if frame == b'':
-                    with self.lock:
+                failure = None
+                try:
+                    frame = None if paused else self.decoder.read_frame()
+                except (OSError, ValueError, EOFError) as error:
+                    frame, failure = None, error
+                with self.lock:
+                    # EOF and errors belong to the decoder that produced them,
+                    # not a queue item selected concurrently by Next/Replace.
+                    if generation != self.generation:
+                        continue
+                    if failure is not None:
+                        self.state, self.error = 'error', 'playback_failed'
+                        self.stop_event.set()
+                        break
+                    if frame == b'':
                         if self.index + 1 < len(self.queue):
                             self._change(self.index + 1)
                             continue
-                    break
+                        self.stop_event.set()
+                        break
                 now = time.monotonic()
                 if frame is not None:
                     last_audio = now
