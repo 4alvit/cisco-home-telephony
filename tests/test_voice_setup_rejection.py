@@ -76,6 +76,10 @@ class ProjectionTests(unittest.TestCase):
                        {'reason': 'explicit_stop'}, {'version': 1}, {'version': True},
                        {'rejected_setup': None}, {'extra': 'private'}):
             self.assertFalse(control.valid_startup_diagnostic(dict(good, **change)))
+        fallback = runner.startup_diagnostic(
+            RuntimeError('private detail'), 'sip_start', port, reason='call_changed')
+        self.assertEqual(fallback['version'], 1)
+        self.assertTrue(control.valid_startup_diagnostic(fallback))
         port.rejected_setup['rows'].clear()
         self.assertTrue(control.valid_startup_diagnostic(good))
         self.assertEqual(runner.startup_diagnostic(

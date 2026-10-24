@@ -190,6 +190,8 @@ def valid_setup_rejection(value):
             return False
         if value[key + '_capped'] and value[key] != SETUP_DIAGNOSTIC_MAX_COUNT:
             return False
+    if value['own_count_capped'] and not value['channel_count_capped']:
+        return False
     if type(value['rows_truncated']) is not bool:
         return False
     count = value['own_count']

@@ -75,7 +75,8 @@ def startup_diagnostic(error, stage, port=None, *, reason=None):
     }
 
     projection = getattr(port, 'rejected_setup', None)
-    if (result['reason'] == 'call_changed' and result['stage'] == 'sip_start'
+    if (result['reason'] == 'call_changed' and result['error_type'] == 'BoundaryError'
+            and result['stage'] == 'sip_start'
             and result['ami_stage'] == 'setup_snapshot'
             and control.valid_setup_rejection(projection)):
         result['version'] = 2
