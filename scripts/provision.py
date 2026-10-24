@@ -76,7 +76,7 @@ def player_dialplan():
  same => n(ready),Set(PLAYER_PORT=${CUT(PLAYER_TARGET,:,1)})
  same => n,Set(PLAYER_TOKEN=${CUT(PLAYER_TARGET,:,2)})
  same => n,Set(CISCO_PLAYER=1:${PLAYER_TOKEN}:${UNIQUEID})
- same => n,Set(TIMEOUT(absolute)=86430)
+ same => n,Set(TIMEOUT(absolute)=7230)
  same => n,Dial(AudioSocket/127.0.0.1:${PLAYER_PORT}/${PLAYER_TOKEN}/c(slin16),5,g)
  same => n,Set(CISCO_PLAYER=)
  same => n(done),Hangup()

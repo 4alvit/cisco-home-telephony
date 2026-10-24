@@ -10,12 +10,14 @@ from test_phone_gateway import config, gateway, FakeAMI
 class PlayerAMI(FakeAMI):
     marker = ''
     supported = True
+    reservation = ''
 
     def action(self, name, **values):
         self.calls.append((name, values))
         if name == 'Getvar':
             variable = values['Variable']
-            value = ('1' if self.supported else '0') if variable.startswith('DIALPLAN_EXISTS') else self.marker
+            value = (('1' if self.supported else '0') if variable.startswith('DIALPLAN_EXISTS') else
+                     self.reservation if variable.startswith('DB(') else self.marker)
             return [{'Response': 'Success', 'Variable': variable, 'Value': value}]
         return [{'Response': 'Success'}]
 
@@ -48,6 +50,7 @@ class PlayerTests(unittest.TestCase):
         PlayerAMI.calls, PlayerAMI.channels = [], []
         PlayerAMI.endpoints = {'201': 'Not in use', '202': 'Not in use'}
         PlayerAMI.marker, PlayerAMI.supported = '', True
+        PlayerAMI.reservation = ''
         self.ami = patch.object(gateway, 'AMI', PlayerAMI)
         self.ami.start(); self.addCleanup(self.ami.stop)
         self.execute = patch.object(gateway, 'execute')
@@ -165,6 +168,18 @@ class PlayerTests(unittest.TestCase):
             with self.subTest(action=action, body=body), self.assertRaises(gateway.Refused):
                 self.request(action, **body)
         self.send.assert_not_called()
+
+    def test_cleanup_only_removes_the_same_unconsumed_reservation(self):
+        token = self.start()
+        record = self.server.player.sessions['201']
+        PlayerAMI.reservation = '23456:' + token
+        with PlayerAMI({}) as ami:
+            self.server.player.release_reservation(record, ami)
+            self.assertIn(('DBDel', {'Family': 'cisco-media', 'Key': '201'}), PlayerAMI.calls)
+            PlayerAMI.calls.clear()
+            PlayerAMI.reservation = '23456:00000000-0000-0000-0000-000000000000'
+            self.server.player.release_reservation(record, ami)
+            self.assertFalse(any(n == 'DBDel' for n, _ in PlayerAMI.calls))
 
     def test_status_redacts_signed_url_and_retains_physical_identity(self):
         token = self.start('202')

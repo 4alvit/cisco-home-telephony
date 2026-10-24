@@ -118,6 +118,18 @@ class PhonePlayer:
         return [x.get('Value') for x in response if x.get('Response') == 'Success'
                 and x.get('Variable') == variable] == ['1']
 
+    def release_reservation(self, record, ami):
+        """Remove only this session's unconsumed AstDB value, never a successor."""
+        if record['uid'] is not None:
+            return  # The observed dialplan already consumed the reservation.
+        session, line = record['session'], record['line']
+        variable = f'DB(cisco-media/{line})'
+        rows = ami.action('Getvar', Variable=variable)
+        values = [x.get('Value') for x in rows if x.get('Response') == 'Success'
+                  and x.get('Variable') == variable]
+        if values == [f'{session.port}:{session.token}']:
+            ami.action('DBDel', Family='cisco-media', Key=line)
+
     def observe(self, phone, ami, channels):
         """Bind once to the marker, then require the same UID on every read."""
         record = self.sessions.get(phone['id'])
@@ -145,9 +157,10 @@ class PhonePlayer:
                     if any(x.get('Channel') == candidate['Channel'] and x.get('Uniqueid') == uid for x in fresh):
                         record['uid'] = uid
                         bound = candidate
-        if bound is None and (record['uid'] is not None or time.monotonic() - record['created'] > 20):
+        if bound is None and (record['uid'] is not None or time.monotonic() - record['created'] > 45):
             session.close()
             self.sessions.pop(phone['id'], None)
+            self.release_reservation(record, ami)
             return None
         return record
 
@@ -218,6 +231,7 @@ class PhonePlayer:
                             raise
                     finally:
                         self.sessions.pop(phone['id'], None)
+                        self.release_reservation(record, ami)
                 else:
                     session.control(action.removeprefix('player_'))
             except ValueError:
@@ -253,7 +267,12 @@ class PhonePlayer:
                     self.api.execute(phone, 'Dial:699')
                 except Exception:
                     session.close()
-                    self.sessions.pop(phone['id'], None)
+                    record = self.sessions.pop(phone['id'], None)
+                    if record:
+                        try:
+                            self.release_reservation(record, ami)
+                        except Exception:
+                            pass  # Retain the original ambiguous dispatch failure.
                     raise
                 return {'session_id': str(session.token), 'line': line}
 
