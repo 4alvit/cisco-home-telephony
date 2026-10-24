@@ -1,0 +1,4 @@
+v=0
+c=IN IP4 127.0.0.1
+m=audio 25000 RTP/AVP 102
+a=rtpmap:102 L16/16000/1
