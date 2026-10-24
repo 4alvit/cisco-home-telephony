@@ -14,6 +14,7 @@ class AMIDiagnostics(unittest.TestCase):
                  ('PJSIPShowEndpoints', 'Invalid/unknown command: PJSIPShowEndpoints', 'unknown_action'),
                  ('CoreShowChannels', 'Permission denied', 'permission_denied'),
                  ('Hangup', 'No such channel', 'no_such_channel'),
+                 ('DBGet', 'Database entry not found', 'database_entry_not_found'),
                  ('Originate', 'do not expose: synthetic-private-value', 'other')]
         for action, message, expected in cases:
             with self.subTest(action=action, classification=expected):

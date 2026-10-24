@@ -280,6 +280,7 @@ class AMI:
                     'login already in use': 'login_in_use',
                     'permission denied': 'permission_denied',
                     'no such channel': 'no_such_channel',
+                    'database entry not found': 'database_entry_not_found',
                     'no endpoints found': 'no_endpoints',
                     'could not get endpoints': 'endpoints_unavailable',
                 }.get(message, 'unknown_action' if message.startswith('invalid/unknown command:') else 'other')

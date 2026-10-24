@@ -123,11 +123,19 @@ class PhonePlayer:
         if record['uid'] is not None:
             return  # The observed dialplan already consumed the reservation.
         session, line = record['session'], record['line']
-        variable = f'DB(cisco-media/{line})'
-        rows = ami.action('Getvar', Variable=variable)
-        values = [x.get('Value') for x in rows if x.get('Response') == 'Success'
-                  and x.get('Variable') == variable]
-        if values == [f'{session.port}:{session.token}']:
+        # DB() through Getvar is an escalating function on the hardened PBX.
+        # DBGet uses the existing AMI permissions and returns a completed list.
+        try:
+            rows = ami.action('DBGet', complete='DBGetComplete', Family='cisco-media', Key=line)
+        except self.api.Refused as error:
+            if (getattr(error, 'ami_action', None) == 'DBGet'
+                    and getattr(error, 'ami_error', None) == 'database_entry_not_found'):
+                return  # The dialplan or a previous cleanup consumed it.
+            raise
+        entries = [x for x in rows if x.get('Event') == 'DBGetResponse']
+        if (len(entries) == 1 and entries[0].get('Family') == 'cisco-media'
+                and entries[0].get('Key') == line
+                and entries[0].get('Val') == f'{session.port}:{session.token}'):
             ami.action('DBDel', Family='cisco-media', Key=line)
 
     def observe(self, phone, ami, channels):
