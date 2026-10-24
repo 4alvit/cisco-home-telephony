@@ -1,0 +1,70 @@
+{
+  "schema": 1,
+  "language": "python",
+  "setup": [
+    [
+      "python3",
+      "-m",
+      "venv",
+      ".fuzz-venv"
+    ],
+    [
+      ".fuzz-venv/bin/python",
+      "-m",
+      "pip",
+      "install",
+      "--require-hashes",
+      "--only-binary=:all:",
+      "-r",
+      ".github/requirements-fuzz.txt"
+    ]
+  ],
+  "targets": [
+    {
+      "name": "protocol",
+      "engine": "atheris",
+      "command": [
+        ".fuzz-venv/bin/python",
+        "fuzz/fuzz_protocol.py",
+        "-max_len=16384"
+      ],
+      "seconds": 60,
+      "corpus": "fuzz/corpus/protocol",
+      "instrumentation": [
+        {
+          "module": "tools.l16_lab.protocol",
+          "functions": [
+            "parse_audio_sdp",
+            "parse_audiosocket_frame",
+            "parse_rtp"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "signaling",
+      "engine": "atheris",
+      "command": [
+        ".fuzz-venv/bin/python",
+        "fuzz/fuzz_signaling.py",
+        "-max_len=16384"
+      ],
+      "seconds": 60,
+      "corpus": "fuzz/corpus/signaling",
+      "instrumentation": [
+        {
+          "module": "tools.sip_video.signaling",
+          "functions": [
+            "parse_request",
+            "parse_offer"
+          ]
+        }
+      ]
+    }
+  ],
+  "preflight-paths": [
+    "fuzz",
+    "tools/l16_lab/protocol.py",
+    "tools/sip_video/signaling.py"
+  ]
+}
