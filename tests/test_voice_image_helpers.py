@@ -26,6 +26,7 @@ IMAGE_FILES = (
 )
 CONTROL_SOURCE = "containers/asterisk/phone_voice_control.py"
 HANDS_FREE_SOURCE = "containers/asterisk/phone_voice_hands_free.py"
+RECOVERY_SOURCES = ("containers/asterisk/phone_voice_recovery.py", "containers/asterisk/phone_voice_quiescence.py")
 SIP_SOURCES = ("scripts/voice_session_sip.py", "containers/asterisk/phone_voice_sip.py",
                "containers/asterisk/phone_voice_sip_ami.py")
 BASE_DIGEST = "sha256:" + "a" * 64
@@ -95,7 +96,7 @@ class VoiceImageHelperTests(unittest.TestCase):
         for path in (self.repo, self.bin, self.records, self.tmp):
             path.mkdir()
         self.sources = renderer_sources()
-        for relative in (*self.sources, CONTROL_SOURCE, HANDS_FREE_SOURCE, *SIP_SOURCES):
+        for relative in (*self.sources, CONTROL_SOURCE, HANDS_FREE_SOURCE, *SIP_SOURCES, *RECOVERY_SOURCES):
             self.write(relative, "# Synthetic source: " + relative + "\n")
         for relative in (*IMAGE_FILES, "scripts/build-voice-image.sh", "scripts/smoke-voice-image.sh"):
             target = self.repo / relative
@@ -154,7 +155,8 @@ class VoiceImageHelperTests(unittest.TestCase):
         snapshot = json.loads((self.records / "context.json").read_text())
         self.assertNotIn(CONTROL_SOURCE, self.sources,
                          "One-shot Job snapshots must not include the gateway control adapter")
-        expected = set(self.sources) | {CONTROL_SOURCE, HANDS_FREE_SOURCE} | set(SIP_SOURCES) | set(IMAGE_FILES)
+        expected = (set(self.sources) | {CONTROL_SOURCE, HANDS_FREE_SOURCE} | set(SIP_SOURCES)
+                    | set(RECOVERY_SOURCES) | set(IMAGE_FILES))
         self.assertEqual(set(snapshot["files"]), expected)
         dockerfile = (self.repo / "containers/voice/Dockerfile").read_text().replace("\\\n", " ")
         copied = {}

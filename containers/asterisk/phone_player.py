@@ -61,7 +61,15 @@ class PhonePlayer:
                            '(phone TEXT PRIMARY KEY, volume REAL, muted INTEGER)')
         for phone in gateway.phones:
             gateway.db.execute('INSERT OR IGNORE INTO player_preferences VALUES (?, .5, 0)', (phone,))
+        # Persist the exact owner before writing AstDB. A process restart must
+        # not turn a failed cleanup into an unowned reservation.
+        gateway.db.execute('CREATE TABLE IF NOT EXISTS player_reservations '
+                           '(phone TEXT PRIMARY KEY, line TEXT NOT NULL, value TEXT NOT NULL)')
         gateway.db.commit()
+        self.pending_cleanup = {
+            phone: dict(line=line, value=value, next_retry=0., retry_delay=2.)
+            for phone, line, value in gateway.db.execute('SELECT phone,line,value FROM player_reservations')
+            if phone in gateway.phones}
 
     def runtime(self):
         return self.api.app_module('media_runtime')
@@ -121,8 +129,11 @@ class PhonePlayer:
     def release_reservation(self, record, ami):
         """Remove only this session's unconsumed AstDB value, never a successor."""
         if record['uid'] is not None:
-            return  # The observed dialplan already consumed the reservation.
+            return True  # The observed dialplan already consumed the reservation.
         session, line = record['session'], record['line']
+        return self._release_value(line, f'{session.port}:{session.token}', ami)
+
+    def _release_value(self, line, value, ami):
         # DB() through Getvar is an escalating function on the hardened PBX.
         # DBGet uses the existing AMI permissions and returns a completed list.
         try:
@@ -130,16 +141,81 @@ class PhonePlayer:
         except self.api.Refused as error:
             if (getattr(error, 'ami_action', None) == 'DBGet'
                     and getattr(error, 'ami_error', None) == 'database_entry_not_found'):
-                return  # The dialplan or a previous cleanup consumed it.
+                return True  # The dialplan or a previous cleanup consumed it.
             raise
         entries = [x for x in rows if x.get('Event') == 'DBGetResponse']
         if (len(entries) == 1 and entries[0].get('Family') == 'cisco-media'
-                and entries[0].get('Key') == line
-                and entries[0].get('Val') == f'{session.port}:{session.token}'):
-            ami.action('DBDel', Family='cisco-media', Key=line)
+                and entries[0].get('Key') == line and isinstance(entries[0].get('Val'), str)):
+            if entries[0]['Val'] == value:
+                ami.action('DBDel', Family='cisco-media', Key=line)
+            return True  # A different value is a successor: preserve it.
+        return False  # An incomplete or mismatched result is not cleanup proof.
+
+    def _reservation(self, record):
+        session = record['session']
+        return dict(line=record['line'], value=f'{session.port}:{session.token}')
+
+    def _remember_reservation(self, phone, record):
+        owner = self._reservation(record)
+        self.gateway.db.execute('INSERT INTO player_reservations VALUES (?,?,?)',
+                                (phone['id'], owner['line'], owner['value']))
+        self.gateway.db.commit()
+
+    def _forget_reservation(self, phone, owner):
+        self.gateway.db.execute('DELETE FROM player_reservations WHERE phone=? AND line=? AND value=?',
+                                (phone['id'], owner['line'], owner['value']))
+        self.gateway.db.commit()
+        pending = self.pending_cleanup.get(phone['id'])
+        if pending and all(pending[key] == owner[key] for key in ('line', 'value')):
+            self.pending_cleanup.pop(phone['id'])
+
+    def _retry_cleanup(self, phone, ami):
+        owner = self.pending_cleanup.get(phone['id'])
+        now = time.monotonic()
+        if not owner or now < owner['next_retry'] or getattr(ami, '_player_cleanup_attempted', False):
+            return
+        due = [phone_id for phone_id, pending in self.pending_cleanup.items()
+               if now >= pending['next_retry']]
+        if due[0] != phone['id']:
+            return
+        # Rotate attempted owners so a few slow/failing phones cannot starve
+        # a later phone when a sweep allows only one cleanup transaction.
+        self.pending_cleanup.pop(phone['id'])
+        self.pending_cleanup[phone['id']] = owner
+        owner['next_retry'] = now + owner['retry_delay']
+        owner['retry_delay'] = min(60., owner['retry_delay'] * 2)
+        # A changed inventory or damaged local record must not authorize an
+        # arbitrary AstDB key. Keep it pending for explicit operator recovery.
+        if (not isinstance(owner['line'], str) or owner['line'] not in phone['lines']
+                or not isinstance(owner['value'], str) or not re.fullmatch(
+                    r'[1-9][0-9]{0,4}:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', owner['value'])
+                or int(owner['value'].split(':', 1)[0]) > 65535):
+            return
+        # One cleanup transaction per AMI connection bounds a background sweep
+        # even if many phones have pending owners and the PBX is slow to reply.
+        ami._player_cleanup_attempted = True
+        try:
+            if self._release_value(owner['line'], owner['value'], ami):
+                self._forget_reservation(phone, owner)
+        except Exception:
+            # Keep one small durable owner per phone; a transient AMI/SQLite
+            # failure must not interrupt cleanup or controls for other phones.
+            pass
+
+    def _retire_session(self, phone, record, ami, *, close=True):
+        if close:
+            record['session'].close()
+        self.sessions.pop(phone['id'], None)
+        if record['uid'] is None:
+            self.pending_cleanup.setdefault(phone['id'], dict(
+                **self._reservation(record), next_retry=0., retry_delay=2.))
+            self._retry_cleanup(phone, ami)
+        else:
+            self._forget_reservation(phone, self._reservation(record))
 
     def observe(self, phone, ami, channels):
         """Bind once to the marker, then require the same UID on every read."""
+        self._retry_cleanup(phone, ami)
         record = self.sessions.get(phone['id'])
         if not record:
             return None
@@ -163,12 +239,12 @@ class PhonePlayer:
                 if values == [f'1:{session.token}:{uid}'] and record['uid'] in (None, uid):
                     _, fresh = ami.snapshot()
                     if any(x.get('Channel') == candidate['Channel'] and x.get('Uniqueid') == uid for x in fresh):
+                        if record['uid'] is None:
+                            self._forget_reservation(phone, self._reservation(record))
                         record['uid'] = uid
                         bound = candidate
         if bound is None and (record['uid'] is not None or time.monotonic() - record['created'] > 45):
-            session.close()
-            self.sessions.pop(phone['id'], None)
-            self.release_reservation(record, ami)
+            self._retire_session(phone, record, ami)
             return None
         return record
 
@@ -186,6 +262,8 @@ class PhonePlayer:
                          source_id=public_source(state.get('source_id')), reason=state.get('error'))
             if not record['uid'] and value['state'] in ('playing', 'paused'):
                 value['state'] = 'buffering'
+        elif phone['id'] in self.pending_cleanup:
+            value.update(state='blocked', reason='cleanup_pending')
         elif not all(endpoints.get(line) == 'Not in use' for line in phone['lines']):
             owned = self.api.own_channels(phone, channels)
             voice = len(owned) == 1 and re.fullmatch(r'cisco-voice-[0-9a-f]{32}', owned[0].get('Linkedid', ''))
@@ -218,6 +296,7 @@ class PhonePlayer:
                 gateway.db.commit()
                 return self.preferences(phone['id'])
             if action == 'player_play' and record is None:
+                require(phone['id'] not in self.pending_cleanup, 'player_cleanup_pending')
                 require(self.supported(ami), 'player_dialplan_unavailable')
                 require(len(self.sessions) < self.options['max_calls'], 'player_call_limit')
                 return self.start(phone, body)
@@ -238,8 +317,7 @@ class PhonePlayer:
                         if getattr(error, 'ami_error', None) != 'no_such_channel':
                             raise
                     finally:
-                        self.sessions.pop(phone['id'], None)
-                        self.release_reservation(record, ami)
+                        self._retire_session(phone, record, ami, close=False)
                 else:
                     session.control(action.removeprefix('player_'))
             except ValueError:
@@ -248,6 +326,7 @@ class PhonePlayer:
 
     def start(self, phone, body):
         gateway, require, line = self.gateway, self.api.require, body['line']
+        require(phone['id'] not in self.pending_cleanup, 'player_cleanup_pending')
         with gateway.suspend_hands_free(phone, wait_for_call=True):
             with gateway.reserve_phone_controls(phone), self.api.AMI(gateway.config['ami']) as ami:
                 endpoints, channels = ami.snapshot()
@@ -267,24 +346,30 @@ class PhonePlayer:
                 session.control('mute', muted=pref['is_volume_muted'])
                 self.sessions[phone['id']] = {'session': session, 'line': line, 'uid': None,
                                               'created': time.monotonic()}
+                record = self.sessions[phone['id']]
+                remembered = False
                 try:
+                    self._remember_reservation(phone, record)
+                    remembered = True
                     session.start()
                     ami.action('DBPut', Family='cisco-media', Key=line, Val=f'{session.port}:{session.token}')
                     gateway._mark_hands_free_call(phone)
                     self.api.execute(phone, 'Key:Line' + str(phone['lines'].index(line) + 1))
                     self.api.execute(phone, 'Dial:699')
                 except Exception:
-                    session.close()
-                    record = self.sessions.pop(phone['id'], None)
-                    if record:
-                        try:
-                            self.release_reservation(record, ami)
-                        except Exception:
-                            pass  # Retain the original ambiguous dispatch failure.
+                    try:
+                        if remembered:
+                            self._retire_session(phone, record, ami)
+                        else:
+                            session.close()
+                            self.sessions.pop(phone['id'], None)
+                    except Exception:
+                        pass  # Retain the original ambiguous dispatch failure.
                     raise
                 return {'session_id': str(session.token), 'line': line}
 
     def close(self):
+        # Unconsumed owners remain in SQLite for cleanup by the next process.
         for record in list(self.sessions.values()):
             record['session'].close()
         self.sessions.clear()

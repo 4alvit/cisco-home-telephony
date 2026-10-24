@@ -308,6 +308,14 @@ Exit status is zero for a successful read, help, dry run or accepted action, one
 
 HTTP socket timeout defaults to 20 seconds and is configurable from 1 to 60. Kubernetes subprocesses have an additional 10-second bound. HTTP responses are capped at 256 KiB. The CLI prints fixed error codes, not raw HTTP responses, subprocess stderr, tokens, request bodies or exception details. JSON status intentionally contains channel/alert IDs needed for precise control, so treat captured operational output as private.
 
+For an ownerless SIP voice session, `cisco LINE voice recovery-status` reads
+the exact journal identity without phone I/O. The explicit `voice recover
+--session-id ID --journal-sha256 SHA` command uses at least a 45-second timeout
+and performs a bounded server-side quiescence check before releasing that
+reservation. It keeps automatic listening disabled and preserves the failed
+historical Stop. Follow the [administrative recovery procedure](voice-orphan-recovery.md);
+this command has no mutating dry run and does not terminate active calls.
+
 No failed action is retried automatically. An action may have executed even when its HTTP response times out. Preserve the returned `action_id`, inspect status, and do not blindly issue a new command. An explicit `--idempotency-key` is for the same logical operation with the same exact request; the gateway refuses conflicting reuse and unknown partial outcomes. Re-running Hangup/Answer may capture a different channel identity and therefore is not a transparent retry. Never build an unbounded retry loop around a dialing or alert command.
 
 The same option becomes a durable HA `request_id` for schedule mutations, limited to 8–80 safe characters. Reusing the same ID and payload cannot restart a countdown. For a new intentional operation use a new ID. After an uncertain cancellation, inspect both the pending slot and active alert; a local schedule cancellation and stopping an already ringing phone are distinct outcomes.

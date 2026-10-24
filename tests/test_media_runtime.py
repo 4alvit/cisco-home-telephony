@@ -252,6 +252,69 @@ class QueueControls(unittest.TestCase):
                         finally:
                             session.close()
 
+    def test_controls_during_pacing_apply_before_next_wire_frame(self):
+        for action in ('pause', 'mute', 'volume', 'replace', 'seek', 'stop'):
+            with self.subTest(action=action):
+                session = media.MediaSession(uuid.uuid4(), SOURCE, max_seconds=3)
+                session.listener.close()
+                session.listener = Mock()
+                session.listener.accept.return_value = (Mock(), ('127.0.0.1', 12345))
+                sent, decoders, waits = [], [], []
+
+                class Decoder:
+                    finite, duration = True, 10
+
+                    def __init__(self, *_args, **_kwargs):
+                        self.index, self.reads = len(decoders), 0
+                        decoders.append(self)
+
+                    def read_frame(self):
+                        self.reads += 1
+                        return struct.pack('<320h', *([1000 + self.index * 1000] * 320))
+
+                    def close(self, **_kwargs):
+                        return None
+
+                def pacing(_seconds):
+                    waits.append(True)
+                    if len(waits) == 1:
+                        if action == 'replace':
+                            session.control('enqueue', source={'station': 'echo'}, mode='replace')
+                        elif action == 'seek':
+                            session.control('seek', position=4)
+                        elif action == 'volume':
+                            session.control('volume', level=.2)
+                        elif action == 'mute':
+                            session.control('mute', muted=True)
+                        else:
+                            session.control(action)
+                    elif action == 'pause':
+                        session.control('resume')
+                    return session.stop_event.is_set()
+
+                def send(_peer, frame):
+                    sent.append(frame)
+                    if action != 'pause' or len(sent) == 2:
+                        session.stop_event.set()
+
+                try:
+                    with patch.object(media, 'Decoder', Decoder), \
+                            patch.object(media.threading, 'Thread'), \
+                            patch.object(media.radio, 'receive_frame', return_value=(1, session.token.bytes)), \
+                            patch.object(media.radio, 'send_audio', side_effect=send), \
+                            patch.object(session.stop_event, 'wait', side_effect=pacing):
+                        session._serve()
+                    samples = [struct.unpack('<320h', frame)[0] for frame in sent]
+                    expected = {'pause': [0, 500], 'mute': [0], 'volume': [200],
+                                'replace': [1000], 'seek': [1000], 'stop': []}
+                    self.assertEqual(samples, expected[action])
+                    if action == 'pause':
+                        self.assertEqual(decoders[0].reads, 1, 'Resume must retain the paused frame')
+                    if action == 'seek':
+                        self.assertAlmostEqual(session.position, 4 + media.FRAME_SECONDS)
+                finally:
+                    session.close()
+
 
 @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'), 'FFmpeg and ffprobe required')
 class AudioRuntime(unittest.TestCase):

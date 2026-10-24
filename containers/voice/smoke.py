@@ -54,7 +54,7 @@ def check_imports():
     require({'aiohttp', 'Pillow', 'websockets'} <= locked.keys(), 'incomplete_runtime_lock')
     for module in ('aiohttp', 'websockets.asyncio.client', 'PIL.Image',
                    'phone_voice_transport', 'phone_voice_controller', 'phone_voice_control',
-                   'phone_voice_hands_free',
+                   'phone_voice_hands_free', 'phone_voice_recovery', 'phone_voice_quiescence',
                    'phone_voice_display', 'phone_camera_preview', 'stage_private',
                    'phone_gateway', 'phone_apps', 'phone_apps_ha', 'voice_assistant',
                    'voice_assistant.config', 'voice_assistant.audio', 'voice_assistant.service',

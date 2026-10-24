@@ -309,6 +309,7 @@ class HandsFreeSupervisor:
         p = self.manager._profile(target, context, 'hands_free_enable')
         with self.manager._lock:
             self._require(not self._closed and not self.manager._closed, 'voice_control_closed', 503)
+            self._require(p.phone_id not in self.manager._recovering, 'voice_phone_busy')
             entry = self._entries[p.phone_id]
             self._eligible(entry)
             self._require(enable_microphone is True and exclusive_media is True,
@@ -346,6 +347,7 @@ class HandsFreeSupervisor:
     def disable(self, target, request_id, *, context):
         p = self.manager._profile(target, context, 'hands_free_disable')
         with self.manager._lock:
+            self._require(p.phone_id not in self.manager._recovering, 'voice_phone_busy')
             entry = self._entries[p.phone_id]
             self._own(entry)
             digest = self._request(entry, request_id, 'disable')
@@ -356,6 +358,7 @@ class HandsFreeSupervisor:
             return self._view(entry, target)
 
     def _disable(self, entry):
+        self._require(entry.profile.phone_id not in self.manager._recovering, 'voice_phone_busy')
         prior_enabled = entry.enabled
         entry.enabled, entry.generation = False, secrets.token_hex(16)
         entry.retry_pending = False
@@ -414,6 +417,7 @@ class HandsFreeSupervisor:
         with self.manager._lock:
             self._require(not self._closed and not self.manager._closed,
                           'voice_control_closed', 503)
+            self._require(phone_id not in self.manager._recovering, 'voice_phone_busy')
             entry = self._entries.get(phone_id)
             if entry is not None:
                 self._notification_idle(entry)
@@ -449,6 +453,7 @@ class HandsFreeSupervisor:
 
     def admit(self, phone_id, generation):
         with self.manager._lock:
+            self._require(phone_id not in self.manager._recovering, 'voice_phone_busy')
             entry = self._entries[phone_id]
             if generation is None:
                 self._own(entry)
@@ -481,6 +486,8 @@ class HandsFreeSupervisor:
             self._persist(entry)
 
     def _settle(self, entry):
+        if entry.profile.phone_id in self.manager._recovering:
+            return
         session = entry.session
         if session is None:
             return
@@ -526,6 +533,8 @@ class HandsFreeSupervisor:
         try:
             for entry in self._entries.values():
                 with self.manager._lock:
+                    if entry.profile.phone_id in self.manager._recovering:
+                        continue
                     if entry.session is not None:
                         self._settle(entry)
                     if self._closed or not entry.enabled and entry.control_pending is None:
@@ -552,7 +561,8 @@ class HandsFreeSupervisor:
                 except Exception:
                     observation = 'unknown'
                 with self.manager._lock:
-                    if (self._closed or entry.suspended or entry.generation != generation
+                    if (entry.profile.phone_id in self.manager._recovering
+                            or self._closed or entry.suspended or entry.generation != generation
                             or (not entry.enabled or entry.blocked) and entry.control_pending is None):
                         continue
                     ticket = entry.control_pending
@@ -641,6 +651,7 @@ class HandsFreeSupervisor:
         with self.manager._lock:
             selected = []
             for phone_id in dict.fromkeys(phone_ids):
+                self._require(phone_id not in self.manager._recovering, 'voice_phone_busy')
                 entry = self._entries.get(phone_id)
                 if entry is None or not self._supports_hands_free(entry):
                     continue
@@ -671,6 +682,7 @@ class HandsFreeSupervisor:
         context = {'id': None, 'generation': None, 'wait_for_call': wait_for_call,
                    'owner': threading.get_ident()}
         with self.manager._lock:
+            self._require(phone_id not in self.manager._recovering, 'voice_phone_busy')
             entry = self._entries.get(phone_id)
             if entry is not None:
                 self._own(entry)

@@ -24,7 +24,8 @@ COMMANDS = {
     'alert': 'alert timer|alarm', 'alert_stop': 'stop-alert [--alert-id ID]',
 }
 VOICE_COMMANDS = ['voice status', 'voice start --idempotency-key KEY --attended --exclusive-media --enable-microphone',
-                  'voice stop [--session-id ID]', 'voice enable', 'voice disable']
+                  'voice stop [--session-id ID]', 'voice enable', 'voice disable',
+                  'voice recovery-status', 'voice recover --session-id ID --journal-sha256 SHA']
 HANDS_FREE_STATES = frozenset(('disabled', 'waiting_idle', 'starting', 'running',
                              'stopping', 'backoff', 'faulted'))
 HANDS_FREE_ERRORS = frozenset(('hands_free_state_unavailable', 'hands_free_owner_unavailable',
@@ -642,10 +643,69 @@ def hands_free_command(args, client, path, *, on_dispatch=None):
             'hands_free': hands_free_status(value), 'selected_line': args.extension}
 
 
-def voice_command(args, config, *, on_dispatch=None):
-    client = Gateway(config, args.timeout)
+def voice_recovery_command(args, client, path, *, on_dispatch=None):
+    """Separate administrative receipts from ordinary Voice/HA status schemas."""
     operation = args.voice_action
+    require(not (operation == 'recover' and args.dry_run), 'voice_recover_dry_run_unsupported')
+    key = None
+    if operation == 'recover':
+        require(isinstance(args.session_id, str) and re.fullmatch(r'[0-9a-f]{32}', args.session_id)
+                and isinstance(args.journal_sha256, str)
+                and re.fullmatch(r'[0-9a-f]{64}', args.journal_sha256), 'voice_recovery_request_invalid')
+        key = args.idempotency_key or 'cli-' + secrets.token_hex(16)
+        require(isinstance(key, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{8,128}', key),
+                'voice_request_id_required')
+        if on_dispatch is not None:
+            client.on_dispatch = lambda: on_dispatch(key)
+        response = client.request(path + 'recover', {
+            'idempotency_key': key, 'session_id': args.session_id, 'journal_sha256': args.journal_sha256})
+        require(type(response) is dict and response.get('status') == 'accepted'
+                and response.get('action_id') == key, 'unconfirmed_gateway_response')
+    else:
+        response = client.request(path + 'recovery_status')
+        require(type(response) is dict and response.get('status') == 'ok', 'invalid_voice_recovery_response')
+    value = response.get('recovery')
+    require(type(value) is dict and type(value.get('schema_version')) is int
+            and value['schema_version'] == 1 and value.get('line') == args.extension
+            and isinstance(value.get('phone'), str) and re.fullmatch(r'2[0-9]{2}', value['phone']),
+            'invalid_voice_recovery_response')
+    result = {name: value[name] for name in ('schema_version', 'phone', 'line')}
+    for name, length in (('session_id', 32), ('journal_sha256', 64)):
+        token = value.get(name)
+        require((operation != 'recover' and token is None)
+                or isinstance(token, str) and re.fullmatch('[0-9a-f]{' + str(length) + '}', token),
+                'invalid_voice_recovery_response')
+        result[name] = token
+    if operation == 'recover':
+        require(value.get('status') == 'ORPHAN_RECOVERY_COMPLETE' and value.get('state') == 'recovered'
+                and value['session_id'] == args.session_id
+                and value.get('prior_journal_sha256') == args.journal_sha256
+                and value.get('stop_confirmed') is False
+                and value.get('historical_stop_confirmed') is False
+                and value.get('enabled') is False
+                and value.get('proof_kind') == 'phone_reported_transport_quiescence',
+                'invalid_voice_recovery_response')
+        result.update(status=value['status'], state='recovered', prior_journal_sha256=args.journal_sha256,
+                      stop_confirmed=False, historical_stop_confirmed=False, enabled=False,
+                      proof_kind=value['proof_kind'])
+    else:
+        remaining = value.get('minimum_age_remaining_seconds')
+        require(type(value.get('eligible')) is bool and value.get('quiescence_verified') is False
+                and type(remaining) in (int, float) and math.isfinite(remaining) and 0 <= remaining <= 3600
+                and (value.get('reason') is None or value.get('reason') in ERROR_REASONS),
+                'invalid_voice_recovery_response')
+        result.update(eligible=value['eligible'], quiescence_verified=False, reason=value.get('reason'),
+                      minimum_age_remaining_seconds=remaining)
+    return {'status': response['status'], 'action': 'voice_' + operation.replace('-', '_'),
+            'selected_line': args.extension, 'recovery': result, **({'action_id': key} if key else {})}
+
+
+def voice_command(args, config, *, on_dispatch=None):
+    operation = args.voice_action
+    client = Gateway(config, max(args.timeout, 45) if operation == 'recover' else args.timeout)
     path = '/v1/phones/' + args.extension + '/voice_'
+    if operation in ('recovery-status', 'recover'):
+        return voice_recovery_command(args, client, path, on_dispatch=on_dispatch)
     if operation in ('enable', 'disable'):
         return hands_free_command(args, client, path, on_dispatch=on_dispatch)
     key = None
@@ -951,6 +1011,10 @@ def parser():
     voice_sub.add_parser('stop', help='Stop the current session, or an exact supplied session ID').add_argument('--session-id')
     voice_sub.add_parser('enable', help='Authorize automatic microphone sessions; optional --idempotency-key and --dry-run')
     voice_sub.add_parser('disable', help='Disable automatic sessions durably and request owned-session cleanup')
+    voice_sub.add_parser('recovery-status', help='Read exact orphan identity and local gates; does not probe the phone')
+    recover = voice_sub.add_parser('recover', help='Administratively release an exact orphan after a bounded quiescence proof')
+    recover.add_argument('--session-id', required=True)
+    recover.add_argument('--journal-sha256', required=True)
     for command_parser in dict.fromkeys(sub.choices.values()):
         global_options(command_parser, inherited=True)
     for command_parser in (*timer_sub.choices.values(), *alarm_sub.choices.values(), *voice_sub.choices.values()):
@@ -1220,7 +1284,7 @@ def main(argv=None):
                     recovery_command=shlex.join(
                         ['cisco', '--config', args.config, '--timeout', str(args.timeout)]
                         + (['--json'] if args.json else [])
-                        + [args.extension, 'voice', 'status']),
+                        + [args.extension, 'voice', 'recovery-status' if args.voice_action == 'recover' else 'status']),
                     note='The request may have been applied. Do not retry blindly. '
                          'Restore the intended transport and KUBECONFIG, then run '
                          'the read-only recovery command with the same private configuration.')

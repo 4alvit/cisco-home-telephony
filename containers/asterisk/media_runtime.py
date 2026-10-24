@@ -592,6 +592,7 @@ class MediaSession:
             threading.Thread(target=self._receive, daemon=True).start()
             deadline = time.monotonic() + self.max_seconds
             generation, next_frame, last_audio = -1, time.monotonic(), time.monotonic()
+            pending_frame = None
             while not self.stop_event.is_set() and time.monotonic() < deadline:
                 with self.lock:
                     changed = generation != self.generation
@@ -599,6 +600,7 @@ class MediaSession:
                     source, current_generation = dict(self.queue[self.index]), self.generation
                     self.seek_position = None
                 if changed or seeking is not None:
+                    pending_frame = None
                     cached = self.decoder.close(keep_file=not changed) if self.decoder else None
                     with self.lock:
                         if self.stop_event.is_set():
@@ -619,7 +621,7 @@ class MediaSession:
                         with self.lock:
                             self.position = seeking
                 with self.lock:
-                    paused, level, muted = self.paused, self.volume, self.muted
+                    paused = self.paused
                     self.duration = self.decoder.duration
                     self.seekable = self.decoder.finite and self.duration is not None
                 # Preserve position for both finite tracks and Music Assistant
@@ -627,7 +629,8 @@ class MediaSession:
                 # silently dropping live bytes; never reopen a paused URL.
                 failure = None
                 try:
-                    frame = None if paused else self.decoder.read_frame()
+                    frame = (None if paused else pending_frame if pending_frame is not None
+                             else self.decoder.read_frame())
                 except (OSError, ValueError, EOFError) as error:
                     frame, failure = None, error
                 with self.lock:
@@ -652,15 +655,28 @@ class MediaSession:
                     last_audio = now
                 elif not paused and now - last_audio > (START_TIMEOUT if not self.position else IO_TIMEOUT):
                     raise MediaError('source_timeout')
-                with self.lock:
-                    if generation != self.generation:
-                        continue
-                    self.state = 'paused' if paused else 'playing' if frame is not None else 'buffering'
-                    if frame is not None and not paused:
-                        self.position += FRAME_SECONDS
+                if frame is not None:
+                    pending_frame = frame
                 if self.stop_event.wait(max(0, next_frame - now)):
                     break
-                radio.send_audio(self.peer, bytes(FRAME_BYTES) if paused or frame is None else gain_pcm(frame, level, muted))
+                with self.lock:
+                    # Controls can arrive during pacing. Serialize this bounded
+                    # socket write with their acknowledgement, and never emit a
+                    # frame from a replaced track or a pre-seek position. Keep a
+                    # paused frame so Resume does not skip any decoded samples.
+                    if self.stop_event.is_set():
+                        break
+                    if generation != self.generation or self.seek_position is not None:
+                        pending_frame = None
+                        continue
+                    paused = self.paused
+                    self.state = 'paused' if paused else 'playing' if pending_frame is not None else 'buffering'
+                    audio = (bytes(FRAME_BYTES) if paused or pending_frame is None else
+                             gain_pcm(pending_frame, self.volume, self.muted))
+                    radio.send_audio(self.peer, audio)
+                    if not paused and pending_frame is not None:
+                        self.position += FRAME_SECONDS
+                        pending_frame = None
                 next_frame = max(next_frame + FRAME_SECONDS, time.monotonic() - FRAME_SECONDS)
         except (OSError, ValueError, EOFError):
             with self.lock:

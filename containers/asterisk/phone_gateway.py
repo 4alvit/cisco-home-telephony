@@ -467,14 +467,14 @@ class Gateway:
         self._voice_module = module
 
         def authorize(context, action, canonical_phone_id):
-            if action not in ('start', 'status', 'stop', 'control',
+            if action not in ('start', 'status', 'stop', 'control', 'recover',
                               'hands_free_enable', 'hands_free_disable', 'hands_free_status'):
                 return False
             if canonical_phone_id not in self.phones:
                 return False
             if (isinstance(context, dict)
                     and context.get('_phone_proof') is self._voice_phone_proof):
-                return context.get('phone') == canonical_phone_id
+                return action != 'recover' and context.get('phone') == canonical_phone_id
             if action == 'control':
                 return False  # Only the trusted internal mutation adapter uses it.
             return api_authorize(context, action, canonical_phone_id)
@@ -522,6 +522,9 @@ class Gateway:
 
     def voice_request(self, target, operation, body, context, *, include_playback=False):
         require(self.voice is not None, 'voice_control_unavailable', 503)
+        if operation in ('recovery_status', 'recover'):
+            require(not include_playback, 'invalid_voice_request', 400)
+            return self.voice_recovery_request(target, operation, body, context)
         if operation.startswith('hands_free_'):
             require(not include_playback, 'invalid_voice_request', 400)
             return self.hands_free_request(target, operation[11:], body, context)
@@ -572,6 +575,39 @@ class Gateway:
             value = dict(value)
             value.pop('playback', None)  # Preserve strict deployed HA response schemas.
             return {'status': 'accepted', 'action_id': key, 'voice': value}
+        except self._voice_module.ControlError as error:
+            raise Refused(error.reason, error.status) from None
+
+    def voice_recovery_request(self, target, operation, body, context):
+        """Administrative recovery uses API authorization, never phone XML proof."""
+        require(isinstance(body, dict), 'json_object_required', 400)
+        try:
+            if operation == 'recovery_status':
+                require(not body, 'invalid_voice_request', 400)
+                return {'status': 'ok', 'recovery': self.voice.recovery_status(target, context=context)}
+            require(set(body) == {'idempotency_key', 'session_id', 'journal_sha256'},
+                    'invalid_voice_request', 400)
+            key, sid, digest = (body[name] for name in (
+                'idempotency_key', 'session_id', 'journal_sha256'))
+            require(isinstance(key, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{8,128}', key),
+                    'idempotency_key_required', 400)
+            require(isinstance(sid, str) and re.fullmatch(r'[0-9a-f]{32}', sid)
+                    and isinstance(digest, str) and re.fullmatch(r'[0-9a-f]{64}', digest),
+                    'voice_recovery_request_invalid', 400)
+
+            def verify_cleanup(*, profile, session_id, challenge, deadline):
+                phone = self.phones[profile.phone_id]
+                require(tuple(phone['lines']) == profile.lines and phone['device'] == profile.device
+                        and phone['ipv4'] == profile.ipv4, 'voice_inventory_mismatch', 409)
+                return app_module('phone_voice_quiescence').prove_quiescence(
+                    profile, session_id, challenge, deadline, private=self.config, phone=phone)
+
+            # Serialize against ordinary controls; the manager also holds the
+            # physical lease and compares the exact journals before releasing it.
+            with self.lock:
+                value = self.voice.recover(target, sid, digest, context=context,
+                                           verify_cleanup=verify_cleanup)
+            return {'status': 'accepted', 'action_id': key, 'recovery': value}
         except self._voice_module.ControlError as error:
             raise Refused(error.reason, error.status) from None
 
@@ -1521,11 +1557,11 @@ class Handler(BaseHTTPRequestHandler):
         require(len(self.headers.get_all('Authorization', [])) == 1
                 and constant(self.headers.get('Authorization', ''), 'Bearer ' + gateway.config['api_token']), 'forbidden', 403)
         voice_match = re.fullmatch(
-            r'/v1/phones/(2[0-9]{2})/voice_(status|start|stop|hands_free_status|hands_free_enable|hands_free_disable)(\?include_playback=1)?', self.path)
+            r'/v1/phones/(2[0-9]{2})/voice_(status|start|stop|recovery_status|recover|hands_free_status|hands_free_enable|hands_free_disable)(\?include_playback=1)?', self.path)
         if voice_match:
             target, operation, playback_query = voice_match.groups()
             require(not playback_query or operation == 'status', 'invalid_voice_request', 400)
-            if operation in ('status', 'hands_free_status'):
+            if operation in ('status', 'hands_free_status', 'recovery_status'):
                 require(self.command == 'GET' and not self.body(0), 'bad_voice_method', 400)
                 data = {}
             else:

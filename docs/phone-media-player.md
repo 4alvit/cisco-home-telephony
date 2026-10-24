@@ -124,6 +124,49 @@ an identification service. Signed URL query parameters are removed from state.
 - **Control refused after a hangup:** refresh state and start a new session.
   Every control carries the observed session and physical line. Old commands
   cannot hang up or change a replacement telephone call.
+- **`player_cleanup_pending`:** the local media session has closed, but its
+  unused Asterisk reservation has not been confirmed removed. The gateway
+  blocks new playback on that physical phone, including its other line, while
+  retrying cleanup. Restore AMI connectivity/permissions and check state again;
+  do not clear all AstDB entries or repeatedly retry playback with new keys.
+
+## Reservation recovery and rollback
+
+Before writing a media reservation to Asterisk, the gateway stores its exact
+line, port and random token in `player_reservations` inside its existing private
+`gateway.sqlite3`. A successfully observed player call retires this record because
+the dialplan consumed the reservation. Failed setup, unobserved expiry and Stop
+keep an unresolved record separately from active playback. Cleanup removes only
+an exact matching AstDB value; an absent entry or a different successor value
+retires the old owner without deleting the successor.
+
+Retries start after two seconds and back off to at most one attempt per minute
+per pending phone. Failed attempts do not discard ownership. There is at most
+one current reservation owner per physical phone and one cleanup transaction
+per background AMI connection, limiting repeated work when the PBX is slow.
+The background loop continues servicing other phones. Public player state reports `blocked` with reason
+`cleanup_pending`, without exposing ports, tokens or database contents.
+
+After a gateway restart, retained owners are loaded for cleanup, not resumed as
+playback. Keep the private state volume when replacing the image. If a phone has
+been removed or its line mapping changed, its saved owner is retained for
+explicit recovery rather than applied to an unrelated line.
+
+The SQLite table is additive and does not require an HA integration downgrade.
+Before rolling back to a gateway version that lacks this recovery logic, stop
+media, verify the phones are idle and confirm this read-only count is zero:
+
+```sh
+sqlite3 -readonly /path/to/private/state/gateway.sqlite3 \
+  'SELECT count(*) FROM player_reservations;'
+```
+
+An older gateway does not maintain this ledger. If it fails during a rollback
+test, restoring the new image alone cannot reconstruct an old reservation's
+owner. Retain a private exact reservation identity and verify its matching
+cleanup or absence before declaring recovery complete. Do not adopt or delete
+unknown AstDB values. Keep the corrected `699` dialplan/handset profiles, HA
+integration and private configuration when testing an image-only rollback.
 
 Manually dialing a radio number retains the legacy radio behavior and exact-call
 Stop. Start playback from HA or MA to use the richer controlled player.

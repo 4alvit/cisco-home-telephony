@@ -43,7 +43,11 @@ voice_display_port_collision invalid_voice_ffmpeg
 hands_free_unavailable hands_free_not_supported hands_free_enabled
 hands_free_start_cancelled hands_free_state_unavailable hands_free_owner_unavailable
 hands_free_recovery_required hands_free_observation_failed hands_free_retry_exhausted
-hands_free_start_failed'''.split())
+hands_free_start_failed hands_free_disable_required
+voice_recovery_unavailable voice_recovery_file_invalid voice_recovery_file_changed
+voice_recovery_lock_changed voice_recovery_session_changed voice_recovery_sip_required
+voice_recovery_grace_pending voice_recovery_request_invalid voice_recovery_proof_invalid
+voice_recovery_proof_stale voice_recovery_not_quiet voice_recovery_unverified'''.split())
 SAFE_REASONS = SAFE_REASONS | VOICE_REASONS
 ERROR_REASONS = SAFE_REASONS | frozenset(('invalid_gateway_response', 'gateway_http_error',
     'network_outcome_unknown', 'invalid_gateway_response_or_request', 'invalid_worker_input',
