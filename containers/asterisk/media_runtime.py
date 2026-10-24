@@ -33,6 +33,7 @@ _spec.loader.exec_module(radio)
 FRAME_BYTES, FRAME_SECONDS, SAMPLE_RATE = 640, .02, 16000
 MAX_BYTES, MAX_QUEUE, MAX_SECONDS = 64 * 1024 * 1024, 50, 7200
 IO_TIMEOUT, START_TIMEOUT = 8, 30
+CONNECT_TIMEOUT = 45  # Includes AMI setup and both authenticated phone commands.
 FORMATS = {'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/aac': 'aac',
            'audio/aacp': 'aac', 'audio/flac': 'flac', 'audio/x-flac': 'flac',
            'audio/ogg': 'ogg', 'application/ogg': 'ogg', 'audio/wav': 'wav',
@@ -572,7 +573,7 @@ class MediaSession:
 
     def _serve(self):
         try:
-            accept_deadline = time.monotonic() + 5
+            accept_deadline = time.monotonic() + CONNECT_TIMEOUT
             while not self.stop_event.is_set():
                 try:
                     self.peer, address = self.listener.accept()

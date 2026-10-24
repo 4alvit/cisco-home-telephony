@@ -184,6 +184,26 @@ class QueueControls(unittest.TestCase):
             self.assertEqual(self.session.snapshot()['state'], 'idle')
             fetch.assert_not_called()
 
+    def test_connection_can_arrive_after_slow_phone_commands(self):
+        # The controller may spend 10 seconds on each of two phone requests.
+        # A late, valid call must still reach UUID admission without fetching
+        # anything merely because the listener started before those requests.
+        self.session.listener.close()
+        listener, peer = Mock(), Mock()
+        listener.accept.side_effect = [socket.timeout(), (peer, ('127.0.0.1', 12345))]
+        self.session.listener = listener
+        clock = iter((0, 44))
+        with patch.object(media.time, 'monotonic', side_effect=lambda: next(clock, 44)), \
+                patch.object(media.radio, 'receive_frame', return_value=(1, self.session.token.bytes)) as received, \
+                patch.object(media.threading, 'Thread') as reader, \
+                patch.object(media, 'open_media') as fetch:
+            reader.return_value.start.side_effect = self.session.stop_event.set
+            self.session._serve()
+        self.assertEqual(listener.accept.call_count, 2)
+        received.assert_called_once_with(peer)
+        self.assertEqual(self.session.snapshot()['state'], 'idle')
+        fetch.assert_not_called()
+
 
 @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'), 'FFmpeg and ffprobe required')
 class AudioRuntime(unittest.TestCase):
