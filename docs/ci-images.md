@@ -218,3 +218,32 @@ This narrows decoder use; it does not remove the multimedia libraries or prevent
 all container-header parsing. The complete vulnerability inventory and the
 supported-library replacement follow-up in #48 remain necessary. Expanding the
 accepted codec set requires new fixtures and a fresh security review.
+
+## Required pull-request checks
+
+The required contexts are `validate` and `Wake gate`, both emitted by GitHub
+Actions. `validate` runs for every pull request. The wake workflow also always
+runs: its lightweight scope job compares the exact event commits with complete
+Git history, then builds the optional image only when an input changed.
+
+For pull requests, scope uses the unique merge base of the event's exact base
+and head, and verifies that the checked-out test merge contains both. For push
+updates it compares the event's before/after commits; a new branch checks the
+whole tree. Renames include both removed and added paths. An explicit workflow
+dispatch always builds. Missing commits, a mismatched checkout, ambiguous
+history, invalid paths or an unknown event fail scope; none are treated as an
+unrelated documentation update.
+
+`Wake gate` runs after scope and build even when a dependency fails. It passes
+only for successful scope plus either a successful required image build or a
+proven irrelevant diff with a skipped image build. Failed/cancelled scope,
+missing output, a required build that was skipped, and failed/cancelled builds
+cannot produce a green gate. Documentation-only changes therefore receive a
+real gate result without requiring a redundant image build.
+
+Branch policy is managed separately in the GitHub infrastructure configuration.
+Verify its live presence before enabling automatic merge: `gh pr merge --auto`
+can merge immediately in an unprotected repository and is not itself a CI wait.
+The one-review policy must require these two exact contexts with strict base
+updates; release publication still checks the complete exact-source image run
+and independently verifies exported bytes.
