@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MAX_SOURCE_BYTES = 1024 * 1024
 CONTEXT_FILES = (
     "containers/voice-wake/Dockerfile",
+    "containers/voice/install_locked.py",
     "containers/voice-wake/requirements.lock",
     "containers/voice-wake/smoke.py",
     "containers/voice-wake/stage_models.py",

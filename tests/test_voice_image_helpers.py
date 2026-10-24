@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 IMAGE_FILES = (
     "containers/voice/Dockerfile",
     "containers/voice/requirements.lock",
+    "containers/voice/install_locked.py",
     "containers/voice/smoke.py",
     "containers/voice/stage_private.py",
 )

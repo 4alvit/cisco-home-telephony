@@ -10,6 +10,9 @@ on:
       - 'voice_assistant/**'
       - 'scripts/build-voice-wake-image.sh'
       - 'scripts/build-voice-image.sh'
+      - 'scripts/verify_voice_security.py'
+      - 'tests/test_voice_installer.py'
+      - 'tests/test_voice_image_security.py'
       - 'scripts/voice_session.py'
       - 'scripts/voice_session_sip.py'
       - 'scripts/render_voice_job.py'
@@ -25,6 +28,9 @@ on:
       - 'voice_assistant/**'
       - 'scripts/build-voice-wake-image.sh'
       - 'scripts/build-voice-image.sh'
+      - 'scripts/verify_voice_security.py'
+      - 'tests/test_voice_installer.py'
+      - 'tests/test_voice_image_security.py'
       - 'scripts/voice_session.py'
       - 'scripts/voice_session_sip.py'
       - 'scripts/render_voice_job.py'
@@ -71,6 +77,31 @@ jobs:
             | tee .build/wake-build.log
           tail -n 1 .build/wake-build.log > .build/wake-image-artifacts/receipt.json
           python3 -c 'import json; r=json.load(open(".build/wake-image-artifacts/receipt.json")); assert r["smoke_passed"] and not r["private_models_included"]'
+      - name: Scan the complete wake runtime image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          image-ref: cisco-wake-ci/voice-wake:pilot
+          format: json
+          output: container-trivy.json
+          scanners: vuln
+          list-all-pkgs: true
+          ignore-unfixed: false
+          exit-code: '0'
+      - name: Export complete image SBOM
+        run: trivy convert --format cyclonedx --output container-sbom.cdx.json container-trivy.json
+      - name: Reject actionable image vulnerabilities
+        run: python3 scripts/verify_voice_security.py container-trivy.json
+      - name: Preserve complete image security evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wake-security-evidence
+          path: |
+            container-trivy.json
+            container-sbom.cdx.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Export the verified image
         if: inputs.export_image && github.ref == 'refs/heads/main'
         run: |
@@ -81,8 +112,9 @@ jobs:
           docker image save cisco-wake-ci/voice-wake:pilot | gzip -9 > .build/wake-image-artifacts/voice-wake-amd64.tar.gz
           docker image inspect "$image_id" > .build/wake-image-artifacts/image.json
           printf '{"source_commit":"%s","run_id":"%s","platform":"linux/amd64"}\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" > .build/wake-image-artifacts/source.json
+          cp container-trivy.json container-sbom.cdx.json .build/wake-image-artifacts/
           cd .build/wake-image-artifacts
-          sha256sum voice-wake-amd64.tar.gz receipt.json image.json source.json > SHA256SUMS
+          sha256sum voice-wake-amd64.tar.gz receipt.json image.json source.json container-trivy.json container-sbom.cdx.json > SHA256SUMS
           test "$(du -sb . | cut -f1)" -lt $((350 * 1024 * 1024))
       - name: Upload the bounded artifact
         if: inputs.export_image && github.ref == 'refs/heads/main'

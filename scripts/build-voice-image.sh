@@ -52,6 +52,7 @@ files = (
     'voice_assistant/audio.py', 'voice_assistant/service.py',
     'voice_assistant/ha.py', 'voice_assistant/pipeline.py', 'voice_assistant/playback.py',
     'containers/voice/Dockerfile', 'containers/voice/requirements.lock',
+    'containers/voice/install_locked.py',
     'containers/voice/smoke.py', 'containers/voice/stage_private.py',
 )
 for relative in files:
