@@ -51,6 +51,13 @@ jobs:
           for script in scripts/*.sh; do bash -n "$script"; done
       - name: Build and smoke-test the isolated voice runtime
         run: bash scripts/build-voice-image.sh cisco-home-ci
+      - name: Verify speech codecs and artwork isolation in the final image
+        run: |
+          docker run --rm --pull never --network none --read-only \
+            --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges \
+            --pids-limit 128 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+            --entrypoint python3 -i cisco-home-ci/voice:pilot - < tests/test_voice_speech_codecs.py
       - name: Scan the complete voice runtime image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
