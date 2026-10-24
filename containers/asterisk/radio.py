@@ -100,7 +100,7 @@ def public_addresses(host, port):
     return addresses
 
 
-def open_stream(station, url=None, content_types=None, purpose="stream"):
+def open_stream(station, url=None, content_types=None, purpose="stream", metadata=False):
     """Validate every redirect and connect to the checked IP, avoiding DNS rebinding."""
     if url is None and station.get("resolver") == "gpm-channel":
         url = gpm_stream_url(station)
@@ -130,7 +130,7 @@ def open_stream(station, url=None, content_types=None, purpose="stream"):
             target = p.path or "/"
             if p.query:
                 target += "?" + p.query
-            conn.request("GET", target, headers={"User-Agent": USER_AGENT, "Icy-MetaData": "0", "Accept-Encoding": "identity"})
+            conn.request("GET", target, headers={"User-Agent": USER_AGENT, "Icy-MetaData": "1" if metadata else "0", "Accept-Encoding": "identity"})
             response = conn.getresponse()
             if response.status in (301, 302, 303, 307, 308):
                 location = response.getheader("Location")
@@ -144,7 +144,7 @@ def open_stream(station, url=None, content_types=None, purpose="stream"):
             content_type = response.getheader("Content-Type", "").split(";", 1)[0].lower()
             if content_type not in content_types:
                 raise ValueError("stream is not supported direct audio")
-            if response.getheader("icy-metaint") not in (None, "0"):
+            if not metadata and response.getheader("icy-metaint") not in (None, "0"):
                 raise ValueError("server returned unsupported ICY metadata")
             return conn, response
         except BaseException:
