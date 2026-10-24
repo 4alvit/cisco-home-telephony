@@ -2,41 +2,7 @@ name: Optional wake image
 
 on:
   push:
-    paths:
-      - '.github/workflows/voice-wake.yml'
-      - 'containers/voice-wake/**'
-      - 'containers/voice/**'
-      - 'containers/asterisk/phone_*.py'
-      - 'voice_assistant/**'
-      - 'scripts/build-voice-wake-image.sh'
-      - 'scripts/build-voice-image.sh'
-      - 'scripts/verify_voice_security.py'
-      - 'tests/test_voice_installer.py'
-      - 'tests/test_voice_image_security.py'
-      - 'scripts/voice_session.py'
-      - 'scripts/voice_session_sip.py'
-      - 'scripts/render_voice_job.py'
-      - 'scripts/render_voice_wake_job.py'
-      - 'tests/test_voice_wake_*.py'
-      - 'tests/test_render_voice_wake_job.py'
   pull_request:
-    paths:
-      - '.github/workflows/voice-wake.yml'
-      - 'containers/voice-wake/**'
-      - 'containers/voice/**'
-      - 'containers/asterisk/phone_*.py'
-      - 'voice_assistant/**'
-      - 'scripts/build-voice-wake-image.sh'
-      - 'scripts/build-voice-image.sh'
-      - 'scripts/verify_voice_security.py'
-      - 'tests/test_voice_installer.py'
-      - 'tests/test_voice_image_security.py'
-      - 'scripts/voice_session.py'
-      - 'scripts/voice_session_sip.py'
-      - 'scripts/render_voice_job.py'
-      - 'scripts/render_voice_wake_job.py'
-      - 'tests/test_voice_wake_*.py'
-      - 'tests/test_render_voice_wake_job.py'
   workflow_dispatch:
     inputs:
       export_image:
@@ -53,7 +19,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  scope:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      required: ${{ steps.scope.outputs.required }}
+    steps:
+      - name: Check out the exact event and full comparison history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prove whether the wake image is affected
+        id: scope
+        run: python3 scripts/voice_wake_scope.py
+
   build:
+    needs: scope
+    if: needs.scope.outputs.required == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -125,3 +108,21 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
+
+  wake_gate:
+    name: Wake gate
+    needs: [scope, build]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out the exact gate implementation
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Require proven scope and successful applicable build
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          WAKE_REQUIRED: ${{ needs.scope.outputs.required }}
+          BUILD_RESULT: ${{ needs.build.result }}
+        run: python3 scripts/voice_wake_scope.py --gate
