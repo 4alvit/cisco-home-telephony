@@ -221,6 +221,12 @@ The attended helper consumes `--freeze`, `--freeze-sha256`, and `--attestation`,
 checks their binding and freshness, then performs its own phone/queue preflight.
 That attestation is a collector trust boundary, not cryptographic live proof.
 
+The attended runner's 60-second deadline bounds the local test process. If a
+timed-out start never becomes observable during its bounded cleanup window, it
+reports `start_outcome_unknown`; it cannot prove that the server will not start
+audio later. Inspect that target before retrying. Cleanup never falls back to
+stopping an unrelated call or clearing an entire Music Assistant queue.
+
 Keep candidate integrity, attended test results, and release acceptance as separate
 facts. A matching manifest never overrides a busy phone, stale state, a failed
 cleanup, or a missing audible confirmation. No command here automatically starts

@@ -38,6 +38,11 @@ conversion to MPP is not required.
   to separate power/provisioning, SIP registration, call routing, RTP audio and remote control.
 - **Improve call and radio sound:** [wideband audio](docs/audio-quality.md) explains
   G.722, the 16 kHz radio path, codec checks and safe fallback to G.711.
+- **Play audio from Home Assistant or Music Assistant:** [phone media players](docs/phone-media-player.md)
+  covers controlled playback, queues, volume, supported sources and deployment.
+- **Prepare an attended media check:** [freeze and verify the candidate](docs/media-candidate-acceptance.md)
+  before using the [bounded HA/Music Assistant test helper](scripts/attended_media_acceptance.py).
+  Both tools default to local preparation; a frozen manifest is not listening confirmation.
 - **Look up a command:** the [CLI reference](docs/cli.md) covers calls, one-time speaker
   intercom, DND, timers, weekday alarms, text and images.
 - **Find a number:** the [combined directory](docs/phone-directory.md) includes
