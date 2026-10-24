@@ -79,6 +79,13 @@ Both transports require an explicit RFC1918 IPv4 gateway literal and disable HTT
 
 ## Commands and scope
 
+[Physical volume controls](hardware-volume.md) use the phone's volume keys.
+They do not set an absolute percentage or switch audio outputs. Ringer changes
+require a physically on-hook, idle phone; call changes affect the output already
+in use. Asterisk cannot verify local hook state, hold or the chosen audio output.
+Active voice-assistant ownership is refused rather than stopped automatically.
+The media player's software-gain slider remains independent.
+
 ```bash
 cisco 213                       # Live status, commands and examples
 cisco directory                 # Complete room directory; no new call request
@@ -93,6 +100,8 @@ cisco 213 dial 600              # Echo test FROM 213
 cisco 213 answer                # Answer the exact observed ringing call on 213
 cisco 213 pickup                # Alias for Answer; requires an actual ringing call
 cisco 213 hangup                # Hang up the exact observed call on 213
+cisco 213 volume ringer up      # One physical step; idle and on-hook phone
+cisco 213 volume call down --steps 2  # Current handset/headset/speaker on line 213
 cisco 213 dnd                   # Read status without changing DND
 cisco 213 dnd on                # DND for the WHOLE phone, including its sibling line
 cisco 213 dnd off

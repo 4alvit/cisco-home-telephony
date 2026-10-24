@@ -17,7 +17,10 @@ alert_requires_manual_answer_or_stop alert_not_found bad_alert_id
 previous_action_outcome_unknown idempotency_key_conflict
 speaker_toggle_requires_idle_phone operation_failed_do_not_retry_blindly
 too_many_pending_messages intercom_requires_cisco_destination intercom_requires_two_phones
-intercom_not_connected_check_status'''.split())
+intercom_not_connected_check_status hardware_volume_outcome_unknown hardware_volume_timeout
+ringer_volume_requires_idle_phone call_volume_context_changed player_phone_busy
+invalid_volume_context invalid_volume_request invalid_volume_direction invalid_volume_steps
+invalid_volume_identity'''.split())
 HA_ERRORS = {
     'The selected line does not belong to this handset': 'ha_line_mapping_mismatch',
     'The timer belongs to the other line': 'ha_timer_owned_by_other_line',
