@@ -19,6 +19,7 @@ from cisco_http import ERROR_REASONS, SCHEDULE_PATH, gateway_url, perform
 COMMANDS = {
     'dial': 'dial NUMBER', 'intercom': 'intercom NUMBER', 'answer': 'answer', 'hangup': 'hangup',
     'speaker_toggle': 'speaker toggle', 'dnd': 'dnd [on|off]',
+    'hardware_volume': 'volume ringer|call up|down [--steps 1..5]',
     'autoanswer': 'autoanswer [on|off]', 'message': 'message TEXT [--title TITLE]',
     'image': 'image FILE [--title TITLE]', 'ring': 'ring [DESTINATION]',
     'alert': 'alert timer|alarm', 'alert_stop': 'stop-alert [--alert-id ID]',
@@ -379,7 +380,8 @@ def directory_result(data, selected_line=None):
 
 def make_action(args, data, phone):
     command, line = args.command, args.extension
-    action = {'stop-alert': 'alert_stop', 'pickup': 'answer', 'call': 'dial', 'drop-in': 'intercom'}.get(command, command)
+    action = {'stop-alert': 'alert_stop', 'pickup': 'answer', 'call': 'dial',
+              'drop-in': 'intercom', 'volume': 'hardware_volume'}.get(command, command)
     capability = 'speaker_toggle' if action == 'speaker' else action
     require(capability in phone['capabilities'], 'command_not_supported_by_gateway')
     body = {'line': line}
@@ -396,6 +398,17 @@ def make_action(args, data, phone):
                 require(not item['channels'], 'phone_busy')
                 require(not item['dnd'], 'do_not_disturb')
                 require(not item.get('alert') or item['alert']['state'] == 'ended', 'alert_already_active')
+    elif action == 'hardware_volume':
+        require(phone['online'], 'phone_unavailable')
+        require(not phone.get('alert') or phone['alert']['state'] == 'ended', 'alert_already_active')
+        body.update(context=args.context, direction=args.direction, steps=args.steps)
+        if args.context == 'ringer':
+            require(not phone['channels'], 'ringer_volume_requires_idle_phone')
+        else:
+            selected = [c for c in phone['channels'] if c['line'] == line and c['state'] == 'Up']
+            require(len(selected) == 1 and len(phone['channels']) == 1,
+                    'call_volume_requires_one_active_call_on_selected_line')
+            body.update(channel=selected[0]['name'], uniqueid=selected[0]['uniqueid'])
     elif action in ('answer', 'hangup'):
         selected = [c for c in phone['channels'] if c['line'] == line]
         if command == 'pickup' and not selected:
@@ -977,6 +990,15 @@ def parser():
     sub.add_parser('ring').add_argument('number', nargs='?', default='640')
     sub.add_parser('speaker', description='Explicit idle speaker-key toggle for the whole phone. '
                    'Final speaker state is unknown; this is not an idempotent on/off command.').add_argument('mode', choices=['toggle'])
+    volume = sub.add_parser('volume', help='Step physical ringer or current call volume.',
+        description='Send hardware volume-key steps. Ringer requires an idle, physically on-hook phone; '
+                    'call requires one active call on the selected line. The phone chooses the current '
+                    'handset, headset or speaker output. Absolute level and local audio path are unknown. '
+                    'This is separate from digital music gain. No automatic output switching or retry.')
+    volume.add_argument('context', choices=['ringer', 'call'])
+    volume.add_argument('direction', choices=['up', 'down'])
+    volume.add_argument('--steps', type=int, choices=range(1, 6), default=1,
+                        help='Number of key presses (default: 1; maximum: 5)')
     for name in ('dnd', 'autoanswer'):
         description = ('Set or read whole-phone Do Not Disturb.' if name == 'dnd' else
                        'Set or read whole-phone gateway auto-answer. Timer/alarm alerts always remain manual.')
@@ -1103,7 +1125,10 @@ def display(result):
     if 'schedule' in result['available_commands']:
         print(f'  cisco {line} timer start 5')
         print(f'  cisco {line} alarm set 07:30 --days weekdays --enable')
-    print('Calls use the selected line; DND, auto-answer, speaker and screen content affect its whole phone.')
+    if 'volume ringer|call up|down [--steps 1..5]' in result['available_commands']:
+        print(f'  cisco {line} volume ringer up  # Idle and physically on-hook only')
+        print(f'  cisco {line} volume call down --steps 2  # Current output; active call on this line')
+    print('Calls use the selected line; DND, auto-answer, speaker, hardware volume and screen content affect its whole phone.')
 
 
 def main(argv=None):
@@ -1253,6 +1278,23 @@ def main(argv=None):
                 result = {'status': 'accepted', 'selected_line': args.extension, 'phone_id': phone['id'],
                           'action': action, 'action_id': action_key,
                           'note': 'Request accepted; run status to observe the effect. No automatic retry.'}
+                if action == 'hardware_volume':
+                    require(response.get('context') == body['context']
+                            and response.get('direction') == body['direction']
+                            and type(response.get('requested_steps')) is int
+                            and type(response.get('acknowledged_steps')) is int
+                            and response['requested_steps'] == response['acknowledged_steps'] == body['steps']
+                            and response.get('level_known') is False
+                            and 'volume_level' in response and response['volume_level'] is None
+                            and response.get('physical_context_verified') is False
+                            and response.get('audio_output') == 'contextual',
+                            'unconfirmed_hardware_volume_response')
+                    result.update({k: response[k] for k in (
+                        'context', 'direction', 'requested_steps', 'acknowledged_steps',
+                        'level_known', 'volume_level', 'audio_output', 'physical_context_verified')})
+                    result['note'] = ('Phone acknowledged volume key presses. Absolute level and physical '
+                                      'audio path are unknown; no automatic Save or retry. The currently '
+                                      'active handset, headset or speaker determines call volume.')
                 if action == 'intercom':
                     require(response.get('connection_state') == 'connected'
                             and isinstance(response.get('intercom_id'), str)

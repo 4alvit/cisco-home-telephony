@@ -251,10 +251,13 @@ class AMI:
         action_id = secrets.token_hex(12)
         data = {'Action': name, 'ActionID': action_id, **headers}
         require(all(not re.search(r'[\r\n\x00]', str(value)) for value in data.values()), 'invalid_ami_header', 400)
+        # An optional operation budget also bounds multi-step physical controls.
+        deadline = min(time.monotonic() + 8,
+                       getattr(self, 'operation_deadline', float('inf')))
         # A previous response may have left only a tiny read timeout.
-        self.sock.settimeout(5)
+        self.sock.settimeout(min(5, self._remaining(deadline)))
         self.sock.sendall(('\r\n'.join(f'{key}: {value}' for key, value in data.items()) + '\r\n\r\n').encode())
-        results, total, deadline = [], 0, time.monotonic() + 8
+        results, total = [], 0
         while True:
             fields = {}
             while True:
@@ -306,7 +309,7 @@ class NoRedirect(request.HTTPRedirectHandler):
         raise Refused('phone_redirect_refused', 502)
 
 
-def execute(phone, uri, priority=0):
+def execute(phone, uri, priority=0, *, timeout=10):
     root = ET.Element('CiscoIPPhoneExecute')
     ET.SubElement(root, 'ExecuteItem', {'Priority': str(priority), 'URL': uri})
     payload = parse.urlencode({'XML': ET.tostring(root, encoding='unicode')}).encode()
@@ -315,7 +318,7 @@ def execute(phone, uri, priority=0):
                           headers={'Authorization': 'Basic ' + auth,
                                    'Content-Type': 'application/x-www-form-urlencoded'})
     opener = request.build_opener(request.ProxyHandler({}), NoRedirect())
-    with opener.open(req, timeout=10) as response:
+    with opener.open(req, timeout=timeout) as response:
         data = response.read(65537)
     require(len(data) <= 65536 and b'<!' not in data, 'invalid_phone_response', 502)
     document = ET.fromstring(data)
@@ -991,7 +994,7 @@ class Gateway:
                  'channels': [{'name': item['Channel'], 'uniqueid': item.get('Uniqueid'),
                                'state': item.get('ChannelStateDesc'), 'line': item['Channel'].split('/')[1].split('-')[0]}
                               for item in own_channels(phone, channels)],
-                 'capabilities': ['dial', 'intercom', 'answer', 'hangup', 'speaker_toggle', 'message', 'image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop'] + (['media'] if supported or media[phone['id']]['state'] in ('buffering', 'playing') else []) + (['voice'] if any(
+                 'capabilities': ['dial', 'intercom', 'answer', 'hangup', 'speaker_toggle', 'hardware_volume', 'message', 'image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop'] + (['media'] if supported or media[phone['id']]['state'] in ('buffering', 'playing') else []) + (['voice'] if any(
                      profile.phone_id == phone['id'] for profile in self._voice_profiles) else [])}
                 for phone in self.phones.values()]}
 
@@ -1178,12 +1181,101 @@ class Gateway:
         # images retain the phone's native idle-only delivery.
         execute(phone, uri, priority=0 if action == 'message' else 2)
 
+    @staticmethod
+    def validate_hardware_volume(phone, body):
+        fields = {'idempotency_key', 'line', 'context', 'direction', 'steps'}
+        require(body.get('context') in ('ringer', 'call'), 'invalid_volume_context', 400)
+        if body['context'] == 'call':
+            fields |= {'channel', 'uniqueid'}
+        require(set(body) == fields, 'invalid_volume_request', 400)
+        require(isinstance(body['line'], str) and body['line'] in phone['lines'],
+                'line_does_not_belong_to_phone', 400)
+        require(body['direction'] in ('up', 'down'), 'invalid_volume_direction', 400)
+        require(type(body['steps']) is int and 1 <= body['steps'] <= 5,
+                'invalid_volume_steps', 400)
+        if body['context'] == 'call':
+            require(isinstance(body['channel'], str) and re.fullmatch(
+                r'PJSIP/' + re.escape(body['line']) + r'-[0-9a-f]+', body['channel'])
+                and isinstance(body['uniqueid'], str) and re.fullmatch(
+                    r'[A-Za-z0-9_.:-]{1,160}', body['uniqueid']),
+                'invalid_volume_identity', 400)
+
+    def hardware_volume(self, phone, body):
+        """Step the physical volume without changing call, output or voice mode.
+
+        AMI guards the call context, not the local hook/audio-path state. The
+        phone acknowledges a key event, never an absolute measured level.
+        """
+        dispatched, acknowledged = False, 0
+        deadline = time.monotonic() + 15
+
+        def remaining():
+            value = deadline - time.monotonic()
+            require(value > 0, 'hardware_volume_timeout', 503)
+            return value
+
+        def observe(ami):
+            remaining()
+            endpoints, channels = ami.snapshot()
+            remaining()
+            require(all(endpoints.get(line) not in (None, 'Unavailable', 'Invalid', 'Unknown')
+                        for line in phone['lines']), 'phone_unavailable', 503)
+            owned = own_channels(phone, channels)
+            require(not any(row['phone'] == phone['id'] and row['state'] != 'ended'
+                            for row in self.alerts()), 'alert_already_active')
+            if self.player is not None:
+                require(phone['id'] not in self.player.pending_cleanup, 'player_phone_busy')
+                record = self.player.sessions.get(phone['id'])
+                require(record is None or body['context'] == 'call'
+                        and record.get('uid') == body.get('uniqueid')
+                        and record.get('line') == body['line'], 'player_phone_busy')
+            if body['context'] == 'ringer':
+                require(not owned and all(endpoints.get(line) == 'Not in use'
+                                          for line in phone['lines']),
+                        'ringer_volume_requires_idle_phone')
+            else:
+                require(len(owned) == 1 and owned[0].get('Channel') == body['channel']
+                        and owned[0].get('Uniqueid') == body['uniqueid']
+                        and owned[0].get('ChannelStateDesc') == 'Up'
+                        and endpoints.get(body['line']) == 'In use'
+                        and all(endpoints.get(line) == 'Not in use'
+                                for line in phone['lines'] if line != body['line']),
+                        'call_volume_context_changed')
+
+        try:
+            # A passive reservation refuses active/recovering voice. It must
+            # never stop hands-free capture to turn a call-volume key into a
+            # ringer-volume key. Avoid reconciliation side effects here too.
+            with self.reserve_motion_image(phone):
+                ami = AMI(self.config['ami'])
+                ami.operation_deadline = deadline
+                with ami:
+                    for _ in range(body['steps']):
+                        observe(ami)
+                        dispatched = True  # Preserve the durable claim even if acknowledgement is lost.
+                        execute(phone, 'Key:VolUp' if body['direction'] == 'up' else 'Key:VolDwn',
+                                timeout=min(3, remaining()))
+                        acknowledged += 1
+                    observe(ami)
+        except Exception:
+            if dispatched:
+                # A 4xx would discard the claim in mutate() and permit replay
+                # of already-applied increments, including after a restart.
+                raise Refused('hardware_volume_outcome_unknown', 503) from None
+            raise
+        return {'context': body['context'], 'direction': body['direction'],
+                'requested_steps': body['steps'], 'acknowledged_steps': acknowledged,
+                'level_known': False, 'volume_level': None, 'audio_output': 'contextual',
+                'physical_context_verified': False}
+
     def mutate(self, phone_id, action, body):
         require(phone_id in self.phones, 'unknown_phone', 404)
-        require(action in ('dial', 'intercom', 'answer', 'hangup', 'speaker', 'message', 'image', 'motion_image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop', 'media_play', 'media_stop')
+        require(action in ('dial', 'intercom', 'answer', 'hangup', 'speaker', 'hardware_volume', 'message', 'image', 'motion_image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop', 'media_play', 'media_stop')
                 or self.player is not None and action in app_module('phone_player').ACTIONS,
                 'unknown_action', 404)
         require(isinstance(body, dict), 'json_object_required', 400)
+        if action == 'hardware_volume':
+            self.validate_hardware_volume(self.phones[phone_id], body)
         if action.startswith('player_'):
             self.player.validate(self.phones[phone_id], action, body)
         if action in ('media_play', 'media_stop'):
@@ -1235,6 +1327,8 @@ class Gateway:
             return result
 
     def _mutate(self, phone, action, body):
+        if action == 'hardware_volume':
+            return self.hardware_volume(phone, body)
         if action.startswith('player_'):
             return self.player.mutate(phone, action, body)
         line = body.get('line', phone['id'])
