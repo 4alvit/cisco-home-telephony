@@ -104,7 +104,8 @@ class FakeClient:
     def ma(self, command, **values):
         if command == 'player_queues/get':
             return {'state': 'idle' if self.selected['player']['session_id'] is None else 'playing',
-                    'items': len(self.items), 'autoplay_enabled': self.autoplay}
+                    'items': len(self.items), 'autoplay_enabled': self.autoplay,
+                    'index_in_buffer': None if self.selected['player']['session_id'] is None else 0}
         if command == 'player_queues/items':
             return copy.deepcopy(self.items)
         if command == 'players/get':
@@ -263,6 +264,56 @@ class AttendedTests(unittest.TestCase):
         self.assertEqual(result['cleanup']['error'], 'queue_clear_not_confirmed')
         self.assertEqual(client.items, [{'queue_item_id': 'foreign', 'media_item': {'item_id': 'other'}}])
         self.assertFalse(any(x[1] == 'player_queues/clear' for x in client.operations))
+
+    def test_ma_waits_for_five_second_end_of_queue_debounce(self):
+        run, client, clock, _ = self.runner('ma')
+        original = client.ma
+        deletion_times = []
+        def lagged_buffer(command, **values):
+            if command == 'player_queues/delete_item':
+                deletion_times.append(clock.now)
+            result = original(command, **values)
+            if command == 'player_queues/get' and client.started is not None:
+                if clock.now < client.started + 3 + 5:
+                    result['index_in_buffer'] = 0
+            return result
+        client.ma = lagged_buffer
+        result = run.perform(40)
+        self.assertNotIn('error', result['cleanup'])
+        self.assertEqual(deletion_times, [8])
+        self.assertTrue(result['cleanup']['queue_cleared'])
+
+    def test_ma_unsettled_buffer_is_not_deleted_or_broadly_cleared(self):
+        run, client, clock, _ = self.runner('ma')
+        original = client.ma
+        def stuck_buffer(command, **values):
+            result = original(command, **values)
+            if command == 'player_queues/get' and client.started is not None:
+                result['index_in_buffer'] = 0
+            return result
+        client.ma = stuck_buffer
+        result = run.perform(40)
+        self.assertEqual(result['cleanup']['error'], 'queue_not_settled')
+        self.assertLessEqual(clock.now, 11.25)
+        self.assertFalse(any(x[1] in ('player_queues/delete_item', 'player_queues/clear')
+                             for x in client.operations))
+
+    def test_ma_foreign_append_during_settle_wait_is_preserved(self):
+        run, client, clock, _ = self.runner('ma')
+        original = client.ma
+        def changed_buffer(command, **values):
+            if command == 'player_queues/get' and clock.now >= 5 and len(client.items) == 1:
+                client.items.append({'queue_item_id': 'foreign', 'media_item': {'item_id': 'other'}})
+            result = original(command, **values)
+            if command == 'player_queues/get' and client.started is not None:
+                result['index_in_buffer'] = 0
+            return result
+        client.ma = changed_buffer
+        result = run.perform(40)
+        self.assertEqual(result['cleanup']['error'], 'queue_changed_while_settling')
+        self.assertEqual(len(client.items), 2)
+        self.assertFalse(any(x[1] in ('player_queues/delete_item', 'player_queues/clear')
+                             for x in client.operations))
 
     def test_watchdog_replays_only_exact_owned_journal(self):
         run, client, clock, _ = self.runner('ma')

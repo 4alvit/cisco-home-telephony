@@ -5,6 +5,10 @@ Default is a local plan. Runtime credentials and collector evidence are private
 files. A collector attestation is a trust boundary, not cryptographic live proof.
 The child normally cleans up; the parent watchdog repeats only exact-owned
 cleanup if the child exceeds its budget. No response claims a human heard audio.
+The 60-second bound limits this test process, not a delayed server-side action.
+An unobserved start is reconciled for eight seconds, then remains explicitly
+unknown: the operator must reconcile it without blindly retrying playback or
+claiming the phone stopped.
 """
 from __future__ import annotations
 
@@ -406,12 +410,32 @@ class Run:
                             'foreign_queue_during_cleanup')
                     item_id = items[0].get('queue_item_id')
                     require(self.state.get('queue_item_id') in (None, item_id), 'queue_changed_during_cleanup')
+                    # MA 2.10 waits five seconds after the player becomes idle
+                    # before clearing its committed buffer at normal EOF. A
+                    # delete sent earlier is silently ignored. Observe, never
+                    # retry the mutation, and preserve exact item ownership.
+                    settle_until = self.clock() + 8
+                    while (queue.get('state') != 'idle'
+                           or 'index_in_buffer' not in queue
+                           or queue['index_in_buffer'] is not None):
+                        require(self.clock() < settle_until, 'queue_not_settled')
+                        self.sleep(.25)
+                        phone, _ = self.snapshot(check_unrelated=False)
+                        require(phone.get('player', {}).get('session_id') is None
+                                and not channel_ids(phone), 'session_changed_while_queue_settling')
+                        queue, items = self.queue()
+                        require(queue.get('items') == 1 and len(items) == 1
+                                and items[0].get('queue_item_id') == item_id
+                                and items[0].get('media_item', {}).get('item_id')
+                                == self.spec['fixture']['url'], 'queue_changed_while_settling')
                     # Exact item deletion cannot delete a concurrent foreign
                     # append. MA may refuse a buffered item; report it pending
                     # instead of falling back to whole-queue clear.
                     again, again_items = self.queue()
                     require([i.get('queue_item_id') for i in again_items] == [item_id]
-                            and again.get('items') == 1, 'queue_changed_before_clear')
+                            and again.get('items') == 1 and again.get('state') == 'idle'
+                            and 'index_in_buffer' in again and again['index_in_buffer'] is None,
+                            'queue_changed_before_clear')
                     self.client.ma('player_queues/delete_item', queue_id=self.spec['entity_id'],
                                    item_id_or_index=item_id)
                 queue, items = self.queue()
