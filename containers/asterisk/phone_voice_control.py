@@ -30,6 +30,7 @@ import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
+_RECOVERY_IMPORT_LOCK = threading.Lock()
 MAX_CONFIG = 256 * 1024
 MAX_REPORT = 16 * 1024
 MAX_FAILURE_RECEIPT = 4096
@@ -624,6 +625,7 @@ class VoiceControl:
         self._control_phones = {line: phone for phone in control_phones for line in phone.lines}
         self._sessions, self._requests = OrderedDict(), {}
         self._current, self._lock, self._wake = {}, threading.RLock(), threading.Event()
+        self._recovering = set()
         self._closed = False
         self.hands_free = None
         self._thread = None
@@ -729,6 +731,7 @@ class VoiceControl:
         fd = None
         try:
             with self._lock:
+                _require(p.phone_id not in self._recovering, 'voice_phone_busy')
                 if shutdown:
                     _require(self._closed, 'voice_shutdown_not_started', 503)
                 else:
@@ -839,6 +842,7 @@ class VoiceControl:
         _require(type(dry_run) is bool)
         with self._lock:
             _require(not self._closed, 'voice_control_closed', 503)
+            _require(p.phone_id not in self._recovering, 'voice_phone_busy')
             _require(self.config.enabled, 'voice_control_disabled', 403)
             # Validation never reserves/replays an operation. In particular a
             # key previously used by a real attempt must still return the
@@ -987,12 +991,42 @@ class VoiceControl:
     def stop(self, target, session_id, *, context):
         p = self._profile(target, context, 'stop')
         with self._lock:
+            _require(p.phone_id not in self._recovering, 'voice_phone_busy')
             s = self._sessions.get(session_id) if isinstance(session_id, str) else None
             _require(s is not None and s.profile.phone_id == p.phone_id, 'unknown_voice_session', 404)
             if self.hands_free is not None and self._current.get(p.phone_id) is s:
                 self.hands_free.manual_stop(p.phone_id, session_id=s.session_id)
             self._request_stop(s)
             return self._view(s)
+
+    @staticmethod
+    def _recovery_module():
+        # File-relative import also supports standalone operator adapters.
+        name = '_phone_voice_recovery'
+        with _RECOVERY_IMPORT_LOCK:
+            if name not in sys.modules:
+                spec = importlib.util.spec_from_file_location(
+                    name, Path(__file__).with_name('phone_voice_recovery.py'))
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                sys.modules[name] = module
+            return sys.modules[name]
+
+    def recovery_status(self, target, *, context):
+        """Local orphan eligibility only; never a phone-stop proof."""
+        return self._recovery_module().status(self, target, context=context,
+                                             control=sys.modules[__name__])
+
+    def recover(self, target, session_id, expected_journal_sha256, *, context,
+                verify_cleanup):
+        """Administrative recovery with a trusted, bounded phone proof adapter.
+
+        The callback is supplied by the authenticated server implementation,
+        never deserialized from a client. No Start or automatic Enable follows.
+        """
+        return self._recovery_module().recover(
+            self, target, session_id, expected_journal_sha256, context=context,
+            verify_cleanup=verify_cleanup, control=sys.modules[__name__])
 
     def _proof_owner(self, s):
         # Called under the manager lock. Do not overwrite another session's

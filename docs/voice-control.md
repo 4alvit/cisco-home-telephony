@@ -3,6 +3,10 @@
 For normal use, start with the [phone and CLI quickstart](voice-quickstart.md).
 This page describes configuration, ownership and recovery.
 
+For an ownerless SIP session after a gateway restart, see
+[exact-session administrative recovery](voice-orphan-recovery.md). Its receipt
+confirms a bounded network-quiescence check, not a successful historical Stop.
+
 ![Finite voice session and explicit Stop](diagrams/voice-operator-flow.svg)
 
 `phone_voice_control.py` manages one attended voice session per physical phone.
@@ -632,8 +636,9 @@ A journal indicating unresolved ownership is conservatively shown as
 `recovery_required`, with no confirmed Stop; it is not proof of current audio
 activity. An explicit query for a retained older session still returns that
 session's history. Send Stop through the controller that owns the session;
-if that owner is unavailable, use the physical recovery procedure rather than
-adopting or signalling a process by PID.
+if that owner is unavailable, use [administrative SIP recovery](voice-orphan-recovery.md)
+when its strict gates apply, or the physical recovery procedure below. Do not
+adopt or signal a process by PID.
 
 When recovery is required, inspect the physical phone and the private session
 evidence. Use the phone's local controls if remote closure is uncertain. Do not

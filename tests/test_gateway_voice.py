@@ -111,11 +111,71 @@ class GatewayVoiceTests(unittest.TestCase):
         phone_context = self.gateway._phone_voice_context('201')
         self.assertTrue(authorize(phone_context, 'stop', '201'))
         self.assertTrue(authorize(phone_context, 'control', '201'))
+        self.assertTrue(authorize(context, 'recover', '201'))
+        self.assertFalse(authorize(phone_context, 'recover', '201'))
         self.assertFalse(authorize(context, 'control', '201'))
         self.assertFalse(authorize({'phone': '201', '_phone_proof': object()}, 'stop', '201'))
         self.assertFalse(authorize(phone_context, 'stop', '203'))
         with self.assertRaises(gateway.Refused):
             self.gateway._phone_voice_context('202')
+
+    def test_recovery_status_is_a_separate_read_only_api(self):
+        self.attach()
+        self.voice.recovery_status.return_value = {'synthetic': 'status'}
+        with mock.patch.object(gateway, 'AMI', side_effect=AssertionError('no AMI')), \
+             mock.patch.object(gateway, 'app_module', side_effect=AssertionError('no proof worker')):
+            handler = self.handler('recovery_status')
+            handler.do_GET()
+        self.assertEqual(handler.reply.call_args.args, (200, {
+            'status': 'ok', 'recovery': {'synthetic': 'status'}}))
+        self.voice.recovery_status.assert_called_once_with('202', context={
+            'source': '192.168.50.11', 'authorization': ('Bearer ' + config()['api_token'],)})
+
+    def test_recovery_proof_is_server_owned_and_gateway_serialized(self):
+        self.attach()
+        observed = []
+        def recover(target, sid, digest, *, context, verify_cleanup):
+            ownership = []
+            def probe_lock():
+                acquired = self.gateway.lock.acquire(blocking=False)
+                ownership.append(acquired)
+                if acquired:
+                    self.gateway.lock.release()
+            probe = threading.Thread(target=probe_lock)
+            probe.start()
+            probe.join(timeout=1)
+            self.assertEqual(ownership, [False])
+            observed.append(verify_cleanup(profile=self.profile, session_id=sid,
+                                           challenge='c' * 64, deadline=42.0))
+            return {'synthetic': 'receipt'}
+        self.voice.recover.side_effect = recover
+        adapter = SimpleNamespace(prove_quiescence=mock.Mock(return_value={'proof': 'synthetic'}))
+        body = {'idempotency_key': 'synthetic-recovery', 'session_id': 'a' * 32,
+                'journal_sha256': 'b' * 64}
+        with mock.patch.object(gateway, 'app_module', return_value=adapter):
+            handler = self.handler('recover', method='POST', body=json.dumps(body).encode())
+            handler.do_POST()
+        self.assertEqual(handler.reply.call_args.args, (200, {'status': 'accepted',
+            'action_id': body['idempotency_key'], 'recovery': {'synthetic': 'receipt'}}))
+        self.assertEqual(observed, [{'proof': 'synthetic'}])
+        adapter.prove_quiescence.assert_called_once_with(self.profile, 'a' * 32, 'c' * 64,
+            42.0, private=self.gateway.config, phone=self.gateway.phones['201'])
+
+    def test_recovery_rejects_client_proof_and_bad_methods_before_core(self):
+        self.attach()
+        body = {'idempotency_key': 'synthetic-recovery', 'session_id': 'a' * 32,
+                'journal_sha256': 'b' * 64}
+        for operation, method, data in (
+                ('recover', 'GET', b''), ('recovery_status', 'POST', b'{}'),
+                ('recover', 'POST', json.dumps(dict(body, proof={'quiet': True})).encode()),
+                ('recover', 'POST', json.dumps(dict(body, journal_sha256='bad')).encode()),
+                ('recover?include_playback=1', 'POST', json.dumps(body).encode())):
+            with self.subTest(operation=operation, method=method, data=data):
+                handler = self.handler(operation, method=method, body=data)
+                handler.do_POST()
+                self.assertEqual(handler.reply.call_args.args[0], 400)
+        self.voice.recover.assert_not_called()
+        self.voice.recovery_status.assert_not_called()
 
     def test_status_and_stop_bypass_inventory_ami_and_mutate(self):
         self.attach()
