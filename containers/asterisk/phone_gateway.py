@@ -100,6 +100,11 @@ def camera_preview_options(value):
 
 def validate(config):
     require(config.get('persistent_enabled') is True, 'explicit_persistent_mode_required', 400)
+    if 'media_player' in config:
+        try:
+            app_module('phone_player').options(config['media_player'])
+        except (ValueError, TypeError):
+            raise Refused('bad_media_player', 400) from None
     private_ip(config['bind_ipv4'])
     require(type(config['api_port']) is int and 1024 <= config['api_port'] <= 65535, 'bad_port', 400)
     require(re.fullmatch(r'[A-Za-z0-9_-]{32,128}', config['api_token']), 'bad_api_token', 400)
@@ -364,6 +369,13 @@ class Gateway:
             self.db.execute('INSERT OR IGNORE INTO preferences VALUES (?, 0, 0)', (phone,))
         self.db.commit()
 
+        self.player = None
+        if config.get('media_player', {}).get('enabled'):
+            # Pass this module's helpers explicitly (also works in script mode).
+            from types import SimpleNamespace
+            api = SimpleNamespace(app_module=app_module, require=require, Refused=Refused,
+                                  AMI=AMI, own_channels=own_channels, execute=execute)
+            self.player = app_module('phone_player').PhonePlayer(self, api)
         self.voice = None
         self.hands_free = None
         self._voice_profiles = ()
@@ -937,6 +949,7 @@ class Gateway:
                  'dnd_pending': phone['id'] in self.dnd_pending,
                  'alert': self.latest_alert(phone['id']),
                  'media': media[phone['id']],
+                 **({'player': self.player.snapshot(phone, ami, endpoints, channels)} if self.player else {}),
                  'online': all(endpoints.get(line) not in (None, 'Unavailable', 'Invalid') for line in phone['lines']),
                  'channels': [{'name': item['Channel'], 'uniqueid': item.get('Uniqueid'),
                                'state': item.get('ChannelStateDesc'), 'line': item['Channel'].split('/')[1].split('-')[0]}
@@ -1130,9 +1143,12 @@ class Gateway:
 
     def mutate(self, phone_id, action, body):
         require(phone_id in self.phones, 'unknown_phone', 404)
-        require(action in ('dial', 'intercom', 'answer', 'hangup', 'speaker', 'message', 'image', 'motion_image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop', 'media_play', 'media_stop'),
+        require(action in ('dial', 'intercom', 'answer', 'hangup', 'speaker', 'message', 'image', 'motion_image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop', 'media_play', 'media_stop')
+                or self.player is not None and action in app_module('phone_player').ACTIONS,
                 'unknown_action', 404)
         require(isinstance(body, dict), 'json_object_required', 400)
+        if action.startswith('player_'):
+            self.player.validate(self.phones[phone_id], action, body)
         if action in ('media_play', 'media_stop'):
             fields = {'idempotency_key', 'source', 'line'}
             if action == 'media_stop':
@@ -1182,6 +1198,8 @@ class Gateway:
             return result
 
     def _mutate(self, phone, action, body):
+        if action.startswith('player_'):
+            return self.player.mutate(phone, action, body)
         line = body.get('line', phone['id'])
         require(line in phone['lines'], 'line_does_not_belong_to_phone', 400)
         if action == 'media_play':
@@ -1348,6 +1366,9 @@ class Gateway:
                     endpoints, channels = ami.snapshot()
                     self.reconcile_alerts(ami, channels)
                     self.reconcile_intercoms(ami, channels)
+                    if self.player is not None:
+                        for phone in self.phones.values():
+                            self.player.observe(phone, ami, channels)
                     active = {item.get('Uniqueid') for item in channels}
                     self.auto_attempts.intersection_update(active)
                     for phone in self.phones.values():
@@ -1588,6 +1609,8 @@ def main():
             except Exception:
                 uncertain = True
         gateway.stopped.set()
+        if gateway.player is not None:
+            gateway.player.close()
         if gateway.camera_preview is not None:
             try:
                 gateway.camera_preview.close()
