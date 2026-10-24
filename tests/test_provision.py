@@ -18,6 +18,19 @@ class ProvisionTest(unittest.TestCase):
         self.site={'node_ipv4':'192.168.50.10','lan_cidr':'192.168.50.0/24','ntp_ipv4':'192.168.50.1'}
         self.inventory={'phones':[{'model':'CP-7945G','verified':True,'mac':'02:00:00:00:00:01','extension':'201','label':'Office','firmware_load':'SIP45.9-4-2SR4-3S'}]}
 
+    def test_player_route_has_a_matching_immediate_handset_dial_template(self):
+        site = dict(self.site, gateway={'enabled': True, 'ami_client_ipv4': '192.168.50.10'})
+        with tempfile.TemporaryDirectory() as tmp:
+            p.generate(site, self.inventory, tmp)
+            root = Path(tmp)
+            self.assertIn('exten => 699,1,Answer()', (root / 'asterisk/extensions.conf').read_text())
+            entries = ET.parse(root / 'tftp/dialplan.xml').findall('./TEMPLATE')
+            self.assertEqual([entry.attrib for entry in entries if entry.get('MATCH') == '699'],
+                             [{'MATCH': '699', 'Timeout': '0'}])
+        with tempfile.TemporaryDirectory() as tmp:
+            p.generate(self.site, self.inventory, tmp)
+            self.assertNotIn('MATCH="699"', (Path(tmp) / 'tftp/dialplan.xml').read_text())
+
     def test_rejects_unverified_and_wrong_hardware(self):
         for field,value in [('verified',False),('model','CP-7940'),('firmware_load','SIP42.9-4-2'),('mac','01:00:00:00:00:01'),('extension','911'),('label','Office\n[evil]')]:
             inventory=copy.deepcopy(self.inventory)

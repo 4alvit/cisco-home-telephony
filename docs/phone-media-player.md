@@ -21,7 +21,10 @@ next/previous, file seeking, digital volume and mute. It continues using the
    existing **private** site and inventory. Sites with the persistent gateway
    enabled gain the reserved `699` player route. Reload the dialplan. Do not
    assign `699` to another service. It does nothing without a pending player
-   reservation, and is not a public streaming endpoint.
+   reservation, and is not a public streaming endpoint. Serve the regenerated
+   `dialplan.xml` as well, then refresh/restart the handsets so their local dial
+   templates include `699` with `Timeout="0"`. Updating only Asterisk leaves
+   the phone's previous dialing rules active.
 3. Merge the `media_player` object in
    [the example](../deploy/gateway.media-player.example.json) into your private
    gateway JSON. Enable it explicitly. Replace the example origins with the
