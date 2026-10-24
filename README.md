@@ -299,3 +299,12 @@ virtual environment and run `python3 scripts/build-phone-reference.py`.
 Review all rendered pages before printing. The guide describes configured
 features; the [deployment record](docs/server-validation.md) records what has
 actually passed live acceptance.
+
+## RC fuzz assessment
+
+[![RC fuzz assessment](https://github.com/4alvit/cisco-home-telephony/actions/workflows/fuzz-candidate.yml/badge.svg)](https://github.com/4alvit/cisco-home-telephony/actions/workflows/fuzz-candidate.yml)
+
+The [fuzz testing guide](docs/fuzzing.md) describes bounded, offline mutation of
+the production SIP, SDP, RTP and AudioSocket parsers. Assessments require an
+explicit RC dispatch; ordinary tests replay fixed synthetic inputs. A passing
+assessment does not publish a release or establish phone/media acceptance.

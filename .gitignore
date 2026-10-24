@@ -20,3 +20,8 @@ cisco-cli.json
 gateway-token.txt
 ha-token.txt
 home-assistant-token.txt
+
+# Isolated RC fuzz dependencies and local diagnostics
+.fuzz-venv/
+.fuzz-toolkit/
+fuzz-output/
