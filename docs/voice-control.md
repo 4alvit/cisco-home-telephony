@@ -641,6 +641,27 @@ delete ownership files or restart the gateway merely to clear the refusal.
 This version does not promise unattended recovery. A displayed status page may
 remain visible after the process stops; server TTL does not dismiss it.
 
+### Rejected SIP setup diagnostics
+
+When setup refuses `call_changed`, the private terminal failure receipt retains
+which existing guard rejected the first snapshot: multiple matching phone rows,
+or a matching row outside the exact current call roots. Duplicate rows still
+count as multiple rows. The rejection, call ownership and cleanup rules do not
+change, and capture does not issue another AMI request or retry a call.
+
+The version 2 startup diagnostic is recorded only for this exact setup failure.
+It contains capped row counts, at most two projected rows, fixed state/relation
+categories and SHA-256 hashes of bounded channel/unique/linked identifiers.
+Raw identifiers, Caller ID, channel variables, credentials and audio are never
+included. Hashes allow correlation and are not an anonymity guarantee: retain
+this receipt privately. Other startup failures keep the version 1 schema.
+
+A valid diagnostic is an explanation, not cleanup proof. In particular, a setup
+rejection cannot support a claim that Originate was never attempted. Missing or
+malformed capture does not relax admission; preserve the original failure and
+use the existing recovery procedure. The new diagnostic cannot reconstruct old
+incidents for which the rejected snapshot was not retained.
+
 ## Gateway and interface integration
 
 The gateway retains the existing exact-source-IP and Bearer-token checks.

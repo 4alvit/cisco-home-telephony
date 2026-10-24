@@ -61,7 +61,7 @@ def startup_diagnostic(error, stage, port=None, *, reason=None):
     def fixed(value, allowed):
         return value if type(value) is str and value in allowed else 'other'
 
-    return {
+    result = {
         'version': 1,
         'reason': fixed(reason, control.STARTUP_DIAGNOSTIC_REASONS),
         'error_type': kind,
@@ -73,6 +73,15 @@ def startup_diagnostic(error, stage, port=None, *, reason=None):
         'ami_error': fixed(getattr(error, 'ami_error', None),
                            control.STARTUP_DIAGNOSTIC_AMI_ERRORS),
     }
+
+    projection = getattr(port, 'rejected_setup', None)
+    if (result['reason'] == 'call_changed' and result['stage'] == 'sip_start'
+            and result['ami_stage'] == 'setup_snapshot'
+            and control.valid_setup_rejection(projection)):
+        result['version'] = 2
+        # Cleanup may mutate the adapter; this is the already rejected snapshot.
+        result['rejected_setup'] = json.loads(json.dumps(projection))
+    return result
 
 
 async def run(args, config, private, phone, voice):
