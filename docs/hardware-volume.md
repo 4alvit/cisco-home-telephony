@@ -39,7 +39,8 @@ prove the physical handset is on-hook: local dial tone or someone lifting the
 receiver can change what the next volume key affects.
 
 For **call** volume, select the line with the phone's one active, answered call.
-A ringing, held, sibling-line, or ambiguous call is not a valid target. The
+A ringing, sibling-line, or ambiguous call is rejected. Resume a held call
+first: an AMI `Up` state alone does not prove that the phone is locally unheld. The
 client includes the observed channel and unique ID; the gateway rechecks that
 exact call before each key and after the sequence. The key adjusts whichever
 output is currently selected on the phone: handset, headset, or speakerphone.
