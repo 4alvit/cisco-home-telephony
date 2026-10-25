@@ -31,6 +31,8 @@ conversion to MPP is not required.
 
 ## Start here
 
+- **Remove obsolete local installation copies:** [re-download sources and retention](docs/local-artifact-retention.md)
+  records exact firmware, container and installer files while preserving running configuration.
 - **Use an existing PBX:** [install and configure the Cisco CLI](docs/cli-installation.md),
   check the directory, then place an ordinary call or an intercom call.
 - **Set up the server:** [Asterisk installation, connections and operations](docs/asterisk-operations.md)
