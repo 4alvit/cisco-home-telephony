@@ -58,6 +58,18 @@ ERROR_REASONS = SAFE_REASONS | frozenset(('invalid_gateway_response', 'gateway_h
 SCHEDULE_PATH = '/api/services/cisco_phone_control/schedule?return_response'
 
 
+def json_loads_unique(raw):
+    """Reject duplicate object fields instead of silently choosing a value."""
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate_json_field')
+            result[key] = value
+        return result
+    return json.loads(raw, object_pairs_hook=unique)
+
+
 def gateway_url(value):
     """Plain HTTP is deliberately restricted to a configured private IPv4 host."""
     if (not isinstance(value, str) or len(value) > 256 or any(c.isspace() for c in value)
@@ -117,7 +129,7 @@ def perform(payload):
             raw = response.read(MAX_RESPONSE + 1)
             if len(raw) > MAX_RESPONSE or response.status != 200:
                 return {'ok': False, 'reason': 'invalid_gateway_response'}
-            data = json.loads(raw)
+            data = json_loads_unique(raw)
             if not isinstance(data, dict):
                 raise ValueError('invalid_response')
             if api == 'home_assistant':

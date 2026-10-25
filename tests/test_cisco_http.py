@@ -254,6 +254,33 @@ class HTTPErrorBoundaryTests(unittest.TestCase):
                         self.assertEqual(actual_request.full_url, base + path)
                         self.assertEqual(actual_request.selector, path)
 
+    def test_duplicate_success_fields_are_rejected_without_retry(self):
+        cases = (
+            ('gateway', b'{"acknowledged_steps":0,"acknowledged_steps":1}'),
+            ('gateway', b'{"phones":[{"online":false,"online":true}]}'),
+            ('home_assistant', b'{"service_response":{},"service_response":{"status":"accepted"}}'),
+            ('home_assistant', b'{"service_response":{"status":"refused","status":"accepted"}}'),
+        )
+        for api, raw in cases:
+            with self.subTest(api=api, raw=raw):
+                payload = {'url': 'http://192.168.50.10', 'token': TOKEN, 'api': api,
+                           'timeout': 5, 'body': {},
+                           'path': worker.SCHEDULE_PATH if api == 'home_assistant' else '/v1/phones'}
+                response = TrackedBody(raw)
+                response.status = 200
+                with patch.object(worker.request, 'build_opener') as factory:
+                    factory.return_value.open.return_value = response
+                    result = worker.perform(payload)
+                    self.assertEqual(factory.return_value.open.call_count, 1)
+                self.assertTrue(response.closed)
+                self.assertEqual(response.read_sizes, [worker.MAX_RESPONSE + 1])
+                self.assertEqual(result, {'ok': False, 'reason': 'invalid_gateway_response_or_request'})
+
+    def test_unique_nested_success_fields_keep_existing_values(self):
+        expected = {'phones': [{'id': '212', 'online': True}, {'id': '213', 'online': False}],
+                    'metadata': {'id': None, 'steps': 1}}
+        self.assertEqual(worker.json_loads_unique(json.dumps(expected)), expected)
+
 
 if __name__ == "__main__":
     unittest.main()

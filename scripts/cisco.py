@@ -14,7 +14,7 @@ import subprocess
 import sys
 import time
 
-from cisco_http import ERROR_REASONS, SCHEDULE_PATH, gateway_url, perform
+from cisco_http import ERROR_REASONS, SCHEDULE_PATH, gateway_url, json_loads_unique, perform
 
 COMMANDS = {
     'dial': 'dial NUMBER', 'intercom': 'intercom NUMBER', 'answer': 'answer', 'hangup': 'hangup',
@@ -164,7 +164,7 @@ class Gateway:
         require(result.returncode == 0, 'kubectl_failed_no_automatic_retry')
         require(len(result.stdout) <= 1024 * 1024, 'kubectl_response_too_large')
         try:
-            return json.loads(result.stdout)
+            return json_loads_unique(result.stdout)
         except (ValueError, UnicodeError):
             raise Refused('invalid_kubectl_response') from None
 

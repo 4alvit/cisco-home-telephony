@@ -132,12 +132,13 @@ the extracted **base Secret only** during step 4; otherwise the preserved mount
 refers to a nonexistent Secret and the Pod cannot start. Do not apply
 `base-list.json`, which also contains the original Deployment.
 
-For a published installation, [Beta 19](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.19)
+For a published installation, [Beta 25](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.25)
 provides `voice-wake-amd64.tar.gz`, `SHA256SUMS`, `image.json`, `receipt.json`
-and `source.json`. Download all five into a new private directory. Verify
+and `source.json`, plus `container-trivy.json` and `container-sbom.cdx.json`.
+Download all seven image assets into a new private directory. Verify
 `SHA256SUMS` with `sha256sum -c SHA256SUMS` (or `shasum -a 256 -c SHA256SUMS`
 on macOS), and confirm that the source record identifies
-`4aaeb264fade4911466010b8c39169e990355a68`. Before conversion, compare the
+`213454385b7e75057f6b4d5db5a7b6a79922ccdd`. Before conversion, compare the
 exported archive's configuration ID and `linux/amd64` platform with the supplied
 metadata. After import, verify the final manifest and any configuration/rootfs
 mapping as described below; the converted configuration ID need not equal the
@@ -145,19 +146,24 @@ exported Docker ID. Keep the receipt with the archive. This is the wake-capable 
 hands-free operation, not the lean manual voice image. Supply private
 profiles, credentials and wake models separately.
 
-Beta 19 includes the gateway media capability introduced in Beta 18 for the companion
-**Cisco phone controls 0.7.0b2**. Its [HA media player](https://github.com/ha-homelab/asterisk-telephony/blob/main/docs/media-player.md)
-provides one player per physical handset, with configured numeric radio stations
-and Stop restricted to the exact observed radio call. Coordinate the matching HA
-component and gateway update with regeneration and activation of the PBX radio
-routes, following the [radio requirements](phone-gateway.md#radio-state-and-home-assistant-media-players).
-Verify actual media state and playback after the coordinated update.
+The release's verified OCI conversion has manifest digest
+`sha256:d07f9beb047a9ffa891058da0755df4d9f5e27dfb09db85df6c96a0543d81fff`.
+The exported Docker configuration ID is
+`sha256:7dfac42fa4b2c31cb96627efc7ad0fd226b93713736f05e3b9cb4c988a30799b`;
+it is not the manifest digest. Verify your own import and retain its mapping.
+The separate `release-evidence-SHA256SUMS` covers release evidence, not the
+seven image assets; use their original `SHA256SUMS` for the image checks.
 
-Beta 19 also brings manual text messages to the foreground over an open menu or
-motion image after the existing call and voice checks. Images keep idle-only
-delivery. Updating an already compatible Beta 18 installation for this display
-fix requires only the gateway image; existing PBX routes and HA 0.7.0b2 settings
-can stay in place. See [message behavior](phone-gateway.md).
+For [physical volume controls](hardware-volume.md), pair this gateway with
+the Beta 25 CLI and **Cisco phone controls 0.8.0b2 or later** for the optional
+HA buttons. Existing [phone media players](phone-media-player.md) keep their
+separate digital gain. Preserve the configured PBX radio/player routes and
+private player settings when upgrading; installing the HA component alone
+does not add them. Verify actual media state and playback separately.
+
+Manual text messages appear in the foreground over an open menu or motion
+image after the existing call and voice checks. Images keep idle-only delivery.
+See [message behavior](phone-gateway.md).
 
 Alternatively, build and smoke-test the dedicated image using the
 [voice image instructions](voice-k3s.md#build-and-check-the-voice-runtime), or

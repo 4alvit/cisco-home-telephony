@@ -2,12 +2,13 @@
 
 For an already configured hands-free phone, use the [daily-use guide](docs/voice-daily-use.md).
 For setup and opt-in voice operation, start with the [phone and CLI voice quickstart](docs/voice-quickstart.md).
-To install [Beta 19](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.19),
+To install [Beta 25](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.25),
 use its matching source and wake-capable archive with the [gateway installation guide](docs/voice-gateway-deployment.md)
 and [CLI installation guide](docs/cli-installation.md).
 For profiles available at every phone boot, [Beta 20](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.20)
 adds a TFTP-only image and the [permanent profile service](docs/daily-phone-boot.md).
-It can be installed alongside the existing PBX and Beta 19 voice gateway.
+The TFTP service is separate from the PBX and voice gateway; keep its own
+verified image and configuration when updating the gateway.
 
 A practical guide to converting **Cisco 7945G** phones to SIP and running them
 with Asterisk on k3s, integrated with Home Assistant.
