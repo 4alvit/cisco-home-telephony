@@ -322,10 +322,24 @@ class OwnershipDiagnosticsTests(unittest.TestCase):
         result = self.collect(rows, [], current=rows * 5)
         self.assertIs(result['owned_matches_prior_operation'], False)
         self.assertEqual(result['owned_count'], 5)
+        self.assertEqual(result['owned_distinct_identities'], 1)
         self.assertEqual(result['snapshot_count'], 25)
+        self.assertEqual(result['snapshot_distinct_identities'], 1)
         for value in result.values():
             if isinstance(value, list):
                 self.assertEqual(len(value), 4)
+
+    def test_identity_counts_distinguish_snapshot_replacement_from_another_call(self):
+        earlier = self.row(ChannelStateDesc='Down')
+        later = self.row(ChannelStateDesc='Ringing')
+        other_identity = self.row(Uniqueid='private-other-call')
+        other_name = self.row(Channel='PJSIP/204-private-other-channel')
+        result = self.collect([earlier, later], [],
+                              current=[earlier, later, other_identity, other_name])
+        self.assertEqual(result['owned_count'], 2)
+        self.assertEqual(result['owned_distinct_identities'], 1)
+        self.assertEqual(result['snapshot_count'], 4)
+        self.assertEqual(result['snapshot_distinct_identities'], 3)
 
     def test_missing_frame_and_empty_owned_are_bounded(self):
         self.assertEqual(fixture.ownership_diagnostics(RuntimeError('private')), {})

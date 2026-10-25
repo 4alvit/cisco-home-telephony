@@ -66,11 +66,16 @@ def ownership_diagnostics(error):
                 values = frame.f_locals
                 owned, related = values.get('owned', []), values.get('related', [])
                 root, number, server = values.get('root'), values.get('number'), values.get('self')
+                current = values.get('current', [])
                 sample = owned[:4]
                 return {
                     'owned_count': len(owned),
+                    'owned_distinct_identities': len({(item.get('Channel'), item.get('Uniqueid'))
+                                                      for item in owned}),
                     'related_count': len(related),
-                    'snapshot_count': len(values.get('current', [])),
+                    'snapshot_count': len(current),
+                    'snapshot_distinct_identities': len({(item.get('Channel'), item.get('Uniqueid'))
+                                                         for item in current}),
                     'owned_matches_prior_operation': any(
                         item not in related and server is not None
                         and server.is_intercom_channel(item) for item in sample),
