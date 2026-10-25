@@ -94,6 +94,18 @@ that anyone heard the result. A timeout, lost connection, or partial sequence
 can leave an unknown outcome. Inspect the phone before sending another
 adjustment; do not blindly repeat a multi-step request.
 
+Waiting for another gateway operation consumes the same 15-second budget as
+the volume sequence. If admission expires, the queued request sends no keys;
+it does not start later when the gateway becomes free. Once a key may have
+been sent, an incomplete sequence retains its operation ID to prevent replay.
+This is not a hard end-to-end HTTP deadline: the phone transport's socket
+timeouts bound inactivity, and a slowly arriving response can take longer.
+
+Only an HTTP 200 response containing one matching, successful Cisco response
+item acknowledges a key. Conflicting XML results or duplicate JSON fields in
+the client response are treated as uncertain outcomes, never as permission to
+repeat the adjustment automatically.
+
 ## Protocol and implementation limits
 
 The gateway action is `hardware_volume`, with `context` set to `ringer` or

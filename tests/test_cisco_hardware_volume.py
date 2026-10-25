@@ -3,10 +3,12 @@ import contextlib
 import copy
 import io
 import json
+import subprocess
 import unittest
 from unittest.mock import patch
 
 from test_cisco_cli import cisco, inventory, channel
+import cisco_http
 
 
 class HardwareVolumeCLITests(unittest.TestCase):
@@ -107,3 +109,70 @@ class HardwareVolumeCLITests(unittest.TestCase):
                     contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 cisco.main(['213', 'volume', *tail])
             client.assert_not_called()
+
+    def test_duplicate_acknowledgements_through_real_transports_are_not_accepted(self):
+        action_id = 'audit-volume-request-1'
+        for transport, duplicate in (('direct', 'acknowledgement'),
+                                     ('kubectl', 'acknowledgement'), ('kubectl', 'envelope')):
+            with self.subTest(transport=transport, duplicate=duplicate):
+                config = {'gateway_url': 'http://192.168.50.10:8080',
+                          'token': 'a' * 32, 'transport': transport,
+                          'kubectl': {'context': 'fixture', 'namespace': 'fixture',
+                                      'selector': 'app=fixture', 'container': 'fixture'}}
+                calls = []
+
+                def reply(body):
+                    calls.append(copy.deepcopy(body))
+                    if body is None:
+                        result = json.dumps(inventory())
+                    else:
+                        result = json.dumps(dict(
+                            status='accepted', action_id=body['idempotency_key'],
+                            context='ringer', direction='up', requested_steps=1,
+                            acknowledged_steps=1, level_known=False, volume_level=None,
+                            audio_output='contextual', physical_context_verified=False))
+                        if duplicate == 'acknowledgement':
+                            result = result.replace('"acknowledged_steps": 1',
+                                                    '"acknowledged_steps": 0, "acknowledged_steps": 1')
+                    if transport == 'kubectl':
+                        prefix = '"ok":false,' if body is not None and duplicate == 'envelope' else ''
+                        result = '{' + prefix + '"ok":true,"data":' + result + '}'
+                    return result.encode()
+
+                def http_reply(request, **_kwargs):
+                    response = io.BytesIO(reply(None if request.data is None else json.loads(request.data)))
+                    response.status = 200
+                    return response
+
+                def worker_reply(args, **kwargs):
+                    payload = json.loads(kwargs['input'])
+                    return subprocess.CompletedProcess(args, 0, reply(payload['body']), b'')
+
+                output = io.StringIO()
+                with patch('socket.socket', side_effect=AssertionError('network forbidden')) as socket, \
+                        patch('socket.create_connection', side_effect=AssertionError('network forbidden')) as connect, \
+                        patch('subprocess.Popen', side_effect=AssertionError('process forbidden')) as process, \
+                        patch.object(cisco, 'load_config', return_value=config), \
+                        patch.object(cisco.Gateway, 'resolve_pod', return_value='fixture-ready'), \
+                        patch.object(cisco_http.request, 'build_opener') as factory, \
+                        patch.object(cisco.subprocess, 'run', side_effect=worker_reply) as worker, \
+                        contextlib.redirect_stdout(output):
+                    factory.return_value.open.side_effect = http_reply
+                    code = cisco.main(['--json', '--idempotency-key', action_id,
+                                       '213', 'volume', 'ringer', 'up'])
+                    socket.assert_not_called()
+                    connect.assert_not_called()
+                    process.assert_not_called()
+                    self.assertEqual(factory.return_value.open.call_count, 2 if transport == 'direct' else 0)
+                    self.assertEqual(worker.call_count, 2 if transport == 'kubectl' else 0)
+                result = json.loads(output.getvalue())
+                self.assertEqual(code, 1)
+                self.assertEqual(result['status'], 'not_confirmed')
+                self.assertEqual(result['action_id'], action_id)
+                self.assertEqual(result['reason'], 'invalid_gateway_response_or_request'
+                                 if transport == 'direct' else 'invalid_kubectl_response')
+                self.assertIn('Do not retry blindly', result['note'])
+                self.assertNotIn('acknowledged_steps', result)
+                self.assertEqual(len(calls), 2)
+                self.assertIsNone(calls[0])
+                self.assertEqual(calls[1]['idempotency_key'], action_id)

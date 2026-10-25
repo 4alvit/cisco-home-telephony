@@ -1,6 +1,7 @@
 """Hardware volume ownership and replay regression tests; no network or phone I/O."""
 import contextlib
 import tempfile
+import threading
 import unittest
 from unittest import mock
 from types import SimpleNamespace
@@ -262,6 +263,107 @@ class HardwareVolumeTests(unittest.TestCase):
         self.server.player.snapshot.assert_not_called()
         self.server.player.observe.assert_not_called()
         self.assertEqual(FakeAMI.calls, [])
+
+    def test_expired_queue_wait_sends_no_keys_and_leaves_no_claim(self):
+        now = [100.0]
+        class BusyLock:
+            def __enter__(self):
+                now[0] += 20
+                return self
+            def __exit__(self, *args):
+                pass
+            def acquire(self, *, timeout):
+                self.timeout = timeout
+                now[0] += 20
+                return False
+            def release(self):
+                raise AssertionError('Unacquired lock must not be released')
+        self.server.lock = BusyLock()
+        with mock.patch.object(gateway.time, 'monotonic', side_effect=lambda: now[0]):
+            with self.assertRaises(gateway.Refused) as caught:
+                self.request()
+        self.assertGreaterEqual(caught.exception.status, 500)
+        self.execute.assert_not_called()
+        self.assertLessEqual(self.server.lock.timeout, 15)
+        self.assertIsNone(self.server.db.execute(
+            'SELECT response FROM operations WHERE key=?', ('volume-test-1234',)).fetchone())
+
+    def test_real_lock_contention_times_out_without_poisoning_replay(self):
+        locked, release = threading.Event(), threading.Event()
+
+        def hold_lock():
+            with self.server.lock:
+                locked.set()
+                release.wait(2)
+
+        holder = threading.Thread(target=hold_lock)
+        holder.start()
+        try:
+            self.assertTrue(locked.wait(1))
+            # Consume most of the budget before admission, leaving a short
+            # real acquire timeout without a wall-clock speed assertion.
+            with mock.patch.object(gateway.time, 'monotonic', side_effect=[100, 114.99]):
+                with self.assertRaises(gateway.Refused) as caught:
+                    self.request()
+            self.assertEqual(caught.exception.reason, 'hardware_volume_timeout')
+            self.execute.assert_not_called()
+            self.assertIsNone(self.server.db.execute(
+                'SELECT response FROM operations WHERE key=?', ('volume-test-1234',)).fetchone())
+        finally:
+            release.set()
+            holder.join(2)
+        self.assertFalse(holder.is_alive())
+        accepted = self.request()
+        self.assertEqual(self.request(), accepted)
+        self.assertEqual(self.execute.call_count, 1)
+
+    def test_queue_wait_consumes_the_same_operation_budget(self):
+        now = [100.0]
+        class DelayedLock:
+            released = False
+            def __enter__(self):
+                now[0] += 10
+                return self
+            def __exit__(self, *args):
+                self.release()
+            def acquire(self, *, timeout):
+                now[0] += 10
+                return True
+            def release(self):
+                self.released = True
+        self.server.lock = DelayedLock()
+        self.execute.side_effect = lambda *args, **kwargs: now.__setitem__(0, now[0] + 6)
+        with mock.patch.object(gateway.time, 'monotonic', side_effect=lambda: now[0]):
+            with self.assertRaises(gateway.Refused) as caught:
+                self.request()
+        self.assertGreaterEqual(caught.exception.status, 500)
+        self.assertEqual(self.execute.call_count, 1)
+        self.assertTrue(self.server.lock.released)
+        self.assertEqual(self.server.db.execute(
+            'SELECT response FROM operations WHERE key=?', ('volume-test-1234',)).fetchone(), (None,))
+
+    def test_lock_obtained_after_deadline_is_released_without_dispatch(self):
+        now = [100.0]
+        class LateLock:
+            released = False
+            def __enter__(self):
+                now[0] += 16
+                return self
+            def __exit__(self, *args):
+                self.release()
+            def acquire(self, *, timeout):
+                now[0] += 16
+                return True
+            def release(self):
+                self.released = True
+        self.server.lock = LateLock()
+        with mock.patch.object(gateway.time, 'monotonic', side_effect=lambda: now[0]):
+            with self.assertRaises(gateway.Refused):
+                self.request()
+        self.execute.assert_not_called()
+        self.assertTrue(self.server.lock.released)
+        self.assertIsNone(self.server.db.execute(
+            'SELECT response FROM operations WHERE key=?', ('volume-test-1234',)).fetchone())
 
     def test_budget_expiring_after_key_stops_and_retains_claim(self):
         now = [100.0]

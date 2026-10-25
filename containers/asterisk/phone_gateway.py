@@ -319,20 +319,25 @@ def execute(phone, uri, priority=0, *, timeout=10):
                                    'Content-Type': 'application/x-www-form-urlencoded'})
     opener = request.build_opener(request.ProxyHandler({}), NoRedirect())
     with opener.open(req, timeout=timeout) as response:
+        require(response.status == 200, 'phone_did_not_confirm_action', 502)
         data = response.read(65537)
     require(len(data) <= 65536 and b'<!' not in data, 'invalid_phone_response', 502)
     document = ET.fromstring(data)
     items = document.findall('ResponseItem')
+    matching_item = (document.tag == 'CiscoIPPhoneResponse' and len(items) == 1
+                     and len(document) == 1 and not len(items[0])
+                     and items[0].get('URL') == uri
+                     and not any((value or '').strip() for value in
+                                 (document.text, items[0].text, items[0].tail)))
     code = None
-    if document.tag == 'CiscoIPPhoneError' and not len(document):
+    if (document.tag == 'CiscoIPPhoneError' and not len(document)
+            and not (document.text or '').strip()):
         code = document.get('Number')
-    elif (document.tag == 'CiscoIPPhoneResponse' and len(items) == 1
-          and len(document) == 1 and items[0].get('URL') == uri):
+    elif matching_item:
         code = items[0].get('Status')
     if code in {'1', '2', '3', '4', '5', '6'}:
         raise PhoneCommandRejected(int(code))
-    require(document.tag == 'CiscoIPPhoneResponse' and len(items) == 1
-            and items[0].get('Status') == '0' and items[0].get('URL') == uri,
+    require(matching_item and items[0].get('Status') == '0',
             'phone_did_not_confirm_action', 502)
 
 
@@ -1200,14 +1205,29 @@ class Gateway:
                     r'[A-Za-z0-9_.:-]{1,160}', body['uniqueid']),
                 'invalid_volume_identity', 400)
 
-    def hardware_volume(self, phone, body):
+    @contextmanager
+    def _hardware_volume_admission(self, deadline):
+        """Do not dispatch expired volume keys after waiting for another action."""
+        remaining = deadline - time.monotonic()
+        require(remaining > 0, 'hardware_volume_timeout', 503)
+        acquired = self.lock.acquire(timeout=remaining)
+        require(acquired, 'hardware_volume_timeout', 503)
+        try:
+            # A scheduler delay can resume a successful acquire after its budget.
+            require(time.monotonic() < deadline, 'hardware_volume_timeout', 503)
+            yield
+        finally:
+            self.lock.release()
+
+    def hardware_volume(self, phone, body, *, deadline=None):
         """Step the physical volume without changing call, output or voice mode.
 
         AMI guards the call context, not the local hook/audio-path state. The
         phone acknowledges a key event, never an absolute measured level.
         """
         dispatched, acknowledged = False, 0
-        deadline = time.monotonic() + 15
+        if deadline is None:
+            deadline = time.monotonic() + 15
 
         def remaining():
             value = deadline - time.monotonic()
@@ -1269,6 +1289,7 @@ class Gateway:
                 'physical_context_verified': False}
 
     def mutate(self, phone_id, action, body):
+        volume_deadline = time.monotonic() + 15 if action == 'hardware_volume' else None
         require(phone_id in self.phones, 'unknown_phone', 404)
         require(action in ('dial', 'intercom', 'answer', 'hangup', 'speaker', 'hardware_volume', 'message', 'image', 'motion_image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop', 'media_play', 'media_stop')
                 or self.player is not None and action in app_module('phone_player').ACTIONS,
@@ -1304,7 +1325,8 @@ class Gateway:
         key = body.get('idempotency_key')
         require(isinstance(key, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{8,128}', key), 'idempotency_key_required', 400)
         digest = hashlib.sha256(json.dumps([phone_id, action, body], sort_keys=True).encode()).hexdigest()
-        with self.lock:
+        admission = self._hardware_volume_admission(volume_deadline) if volume_deadline is not None else self.lock
+        with admission:
             previous = self.db.execute('SELECT digest,response FROM operations WHERE key=?', (key,)).fetchone()
             if previous:
                 require(previous[0] == digest, 'idempotency_key_conflict')
@@ -1314,7 +1336,10 @@ class Gateway:
             self.db.execute('INSERT INTO operations VALUES (?, ?, NULL, ?)', (key, digest, time.time()))
             self.db.commit()  # Persist intent BEFORE any phone or AMI mutation.
             try:
-                result = self._mutate(self.phones[phone_id], action, body)
+                if volume_deadline is not None:
+                    result = self._mutate(self.phones[phone_id], action, body, hardware_deadline=volume_deadline)
+                else:
+                    result = self._mutate(self.phones[phone_id], action, body)
                 result.update(status='accepted', action_id=key)
             except Refused as error:
                 # Keep ambiguous I/O outcomes claimed; a retry must not dial again.
@@ -1326,9 +1351,9 @@ class Gateway:
             self.db.commit()
             return result
 
-    def _mutate(self, phone, action, body):
+    def _mutate(self, phone, action, body, *, hardware_deadline=None):
         if action == 'hardware_volume':
-            return self.hardware_volume(phone, body)
+            return self.hardware_volume(phone, body, deadline=hardware_deadline)
         if action.startswith('player_'):
             return self.player.mutate(phone, action, body)
         line = body.get('line', phone['id'])
