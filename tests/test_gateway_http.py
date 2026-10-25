@@ -94,7 +94,7 @@ class HTTPTests(unittest.TestCase):
             FakeAMI.channels.append(unrelated)
 
             def hangup(_ami, name, **values):
-                self.assertEqual((name, values['Channel']), ('Hangup', 'Local/201@cisco-alert-a1;1'))
+                self.assertEqual((name, values['Channel']), ('Hangup', root + '-a'))
                 FakeAMI.calls.append((name, values))
                 FakeAMI.channels = [unrelated]
                 return [{'Response': 'Success'}]

@@ -58,7 +58,7 @@ cisco --help
 
 Keep `scripts/cisco.py` and `scripts/cisco_http.py` together in the checkout; the symlink follows future repository updates. If `cisco` already exists, inspect it before changing the link. Add the PATH line to your shell startup file if needed.
 
-The default configuration is `~/.config/cisco-home/cli.json`. Override it with `--config PATH` or `CISCO_CONFIG`. Configuration and token files must be owned by your user, have no group/other permissions, and must not be symlinks. Use a private parent directory as well:
+The default configuration is `~/.config/cisco-home/cli.json`. Override it with `--config PATH` or `CISCO_CONFIG`. Configuration and token files must be owned by your user, have no group/other permissions, and must not be symlinks. Duplicate JSON field names are rejected, including inside nested objects; each setting must have one unambiguous value. Use a private parent directory as well:
 
 ```bash
 umask 077
@@ -289,6 +289,11 @@ Starting a timer when another countdown is pending requires `--replace`. Moving 
 Pending schedules persist in HA. A due occurrence is saved as claimed before it is sent to the gateway. Events missed while HA is down are not replayed, and a running scheduler skips events more than 20 seconds late. Busy phones, DND, an existing active/unknown alert, unavailable services and ambiguous outcomes are not retried. The repeated autumn DST minute runs once; a nonexistent spring minute is skipped. These are convenience alerts, not a guaranteed wake-up service.
 
 `stop-alert` ends the current exact alert but leaves future recurring alarms enabled. `timer cancel` also clears the pending countdown; `alarm off` disables future weekly occurrences. Scheduled alerts always require manual answer/reject or Stop even if gateway auto-answer is enabled. DND suppresses new calls and alerts; it does not cancel a pending schedule. Disable/cancel the schedule if that is the intended result.
+
+An alert acknowledgement must identify the requested line and timer/alarm kind;
+a Stop acknowledgement must identify the exact alert that was selected. Missing
+or mismatched identities produce `not_confirmed` with the action ID retained.
+The CLI does not resend the action automatically.
 
 The scheduler uses HA's [REST service response interface](https://developers.home-assistant.io/docs/api/rest/#post-apiservicesdomainservice), with an explicit request ID for mutations. The CLI filters responses to the selected schedule; it does not expose unrelated `changed_states`. If the service is absent, refuses the request, or times out, the CLI reports failure without falling back to non-atomic helper changes. Inspect the schedule before deciding what to do next.
 

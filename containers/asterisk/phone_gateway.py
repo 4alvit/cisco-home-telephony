@@ -815,7 +815,7 @@ class Gateway:
                        for candidate in self.alert_channels(alert, current)):
                 continue
             try:
-                ami.action('Hangup', Channel=item['Channel'], Cause='16')
+                ami.action('Hangup', Channel=item['Uniqueid'], Cause='16')
             except Refused:
                 _, current = ami.snapshot()
                 require(not any(candidate.get('Uniqueid') == item['Uniqueid']
@@ -1016,12 +1016,13 @@ class Gateway:
     def stop_intercom(self, ami, root):
         _, channels = ami.snapshot()
         for candidate in self.intercom_channels(root, channels):
+            require(candidate.get('Uniqueid'), 'intercom_channel_identity_missing', 503)
             _, current = ami.snapshot()
             if any(item.get('Channel') == candidate.get('Channel')
                    and item.get('Uniqueid') == candidate.get('Uniqueid')
                    for item in self.intercom_channels(root, current)):
                 try:
-                    ami.action('Hangup', Channel=candidate['Channel'], Cause='16')
+                    ami.action('Hangup', Channel=candidate['Uniqueid'], Cause='16')
                 except Refused:
                     # Stopping one bridged leg can end the other after its
                     # fresh ownership check. CoreShowChannels can briefly
@@ -1513,7 +1514,9 @@ class Gateway:
                     if channel in self.alert_channels(alert, channels):
                         self.db.execute('UPDATE alerts SET stop_requested=1 WHERE id=?', (alert['id'],))
                         self.db.commit()
-                ami.action('Hangup', Channel=channel['Channel'], Cause='16')
+                # Preserve the checked identity even if this name is reused
+                # after the snapshot, as with media and owned-call cleanup.
+                ami.action('Hangup', Channel=channel['Uniqueid'], Cause='16')
             return {'line': line, 'channel': channel['Channel'], 'uniqueid': channel['Uniqueid']}
 
     def background(self):

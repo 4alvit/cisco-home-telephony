@@ -37,7 +37,7 @@ def channel(line='213', state='Up'):
 
 
 class CLITests(unittest.TestCase):
-    def invoke(self, arguments, data=None, error=None):
+    def invoke(self, arguments, data=None, error=None, response_override=None, omit_response_fields=()):
         data = inventory() if data is None else data
         calls = []
 
@@ -49,7 +49,16 @@ class CLITests(unittest.TestCase):
                     return data
                 if error:
                     raise error
-                return {'status': 'accepted', 'action_id': body['idempotency_key']}
+                response = {'status': 'accepted', 'action_id': body['idempotency_key']}
+                if path.endswith('/alert'):
+                    response.update(alert_id='a' * 32, line=body['line'], kind=body['kind'],
+                                    ring_timeout_seconds=None)
+                elif path.endswith('/alert_stop'):
+                    response.update(alert_id=body['alert_id'], state='ended')
+                response.update(response_override or {})
+                for field in omit_response_fields:
+                    response.pop(field, None)
+                return response
 
         output, errors = io.StringIO(), io.StringIO()
         with patch.object(cisco, 'Gateway', FakeGateway), patch.object(cisco, 'load_config', return_value={}), \
@@ -159,6 +168,34 @@ class CLITests(unittest.TestCase):
         for arguments in (['212', 'stop-alert'], ['213', 'stop-alert', '--alert-id', 'b' * 32]):
             code, _, calls = self.invoke(arguments, data)
             self.assertEqual(code, 1); self.assertEqual(len(calls), 1)
+
+    def test_alert_receipt_must_match_requested_identity(self):
+        data = inventory()
+        data['phones'][0]['alert'] = {
+            'id': 'a' * 32, 'line': '213', 'kind': 'timer', 'state': 'ringing'}
+        cases = ((['stop-alert'], {'alert_id': 'b' * 32}),
+                 (['stop-alert'], {'alert_id': None}),
+                 (['alert', 'timer'], {'line': '212'}),
+                 (['alert', 'timer'], {'kind': 'alarm'}),
+                 (['alert', 'timer'], {'alert_id': None}))
+        for command, response in cases:
+            with self.subTest(command=command, response=response):
+                code, result, calls = self.invoke(
+                    ['--idempotency-key', 'alert-receipt-test', '213', *command],
+                    data if command[0] == 'stop-alert' else inventory(),
+                    response_override=response)
+                self.assertEqual(code, 1)
+                self.assertEqual(result['status'], 'not_confirmed')
+                self.assertEqual(result['action_id'], 'alert-receipt-test')
+                self.assertEqual(len(calls), 2)
+                self.assertNotIn('alert_id', result)
+
+    def test_alert_receipt_requires_alert_id(self):
+        code, result, calls = self.invoke(
+            ['213', 'alert', 'timer'], omit_response_fields=('alert_id',))
+        self.assertEqual((code, result['status'], result['reason']),
+                         (1, 'not_confirmed', 'invalid_alert_response'))
+        self.assertEqual(len(calls), 2)
 
     def test_unlisted_destination_and_softphone_are_refused(self):
         for args in (['213', 'dial', '911'], ['213', 'dial', 'sip:bad@example.net'],
@@ -319,6 +356,20 @@ class ConfigTests(unittest.TestCase):
         self.save(); self.assertEqual(cisco.load_config(self.path)['token'], TOKEN)
         token.chmod(0o644)
         with self.assertRaises(cisco.Refused): cisco.load_config(self.path)
+
+    def test_duplicate_private_config_fields_are_ambiguous(self):
+        self.save()
+        raw = json.dumps(self.value)
+        duplicates = (
+            raw.replace('"gateway_url":', '"gateway_url":"http://192.168.50.99", "gateway_url":', 1),
+            raw.replace('"token":', '"token":"' + 'b' * 48 + '", "token":', 1),
+        )
+        for value in duplicates:
+            with self.subTest(value=value[:32]):
+                self.path.write_text(value)
+                with self.assertRaises(cisco.Refused) as caught:
+                    cisco.load_config(self.path)
+                self.assertEqual(caught.exception.reason, 'invalid_private_config')
 
     def test_rejects_symlinks_and_shared_config(self):
         self.save(); self.path.chmod(0o644)

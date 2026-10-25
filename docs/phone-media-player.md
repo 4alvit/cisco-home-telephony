@@ -38,8 +38,10 @@ next/previous, file seeking, digital volume and mute. It continues using the
 5. Allow enough writable temporary space for `max_calls × max_bytes` plus
    overhead (for example 512 MiB for four 64 MiB files). Temporary audio is
    removed when playback changes or ends; caller microphone audio is discarded.
-6. Reload the HA integration. All configured phones retain entities while
-   unplugged; controls become available after the phone comes online.
+6. After replacing integration Python files, restart Home Assistant in a planned
+   maintenance window; reloading its config entry alone does not load the new
+   code. All configured phones retain entities while unplugged; controls become
+   available after the phone comes online.
 
 Keep real URLs with access tokens, addresses, credentials, private config and
 deployment receipts out of Git. The example is deliberately not a complete

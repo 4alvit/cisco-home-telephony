@@ -286,7 +286,7 @@ def test_inside():
         fresh = [c for c in ami.channels() if c['Channel'] == physical['Channel']
                  and c.get('Uniqueid') == physical['Uniqueid'] and c.get('Linkedid') == linked]
         need(len(fresh) == 1, 'exact stop identity changed')
-        ami.action('Hangup', Channel=fresh[0]['Channel'], Cause='16')
+        ami.action('Hangup', Channel=fresh[0]['Uniqueid'], Cause='16')
         await_condition(lambda:call['cancel'], 5, 'CANCEL after exact stop')
         await_condition(lambda:not ami.channels(), 5, 'stop cleanup')
         need(call['answer'] is None and phone.audio_packets == 0, 'stop test sent audio or answered')
@@ -298,7 +298,7 @@ def test_inside():
                  and c.get('Linkedid') == linked
                  and re.fullmatch(r'Local/201@cisco-alert-[0-9a-f]+;[12]', c['Channel'])]
         need(len(roots) == 1, 'exact Local root changed before stop')
-        ami.action('Hangup', Channel=roots[0]['Channel'], Cause='16')
+        ami.action('Hangup', Channel=roots[0]['Uniqueid'], Cause='16')
         await_condition(lambda:call['cancel'], 5, 'CANCEL after Local root stop')
         await_condition(lambda:not ami.channels(), 5, 'Local root stop cleanup')
         need(call['answer'] is None and phone.audio_packets == 0, 'Local stop sent audio or answered')
@@ -336,7 +336,7 @@ def test_inside():
         try:
             for channel in ami.channels():
                 if channel.get('Uniqueid') in owned_ids or channel.get('Linkedid') in owned_ids:
-                    ami.action('Hangup', Channel=channel['Channel'], Cause='16')
+                    ami.action('Hangup', Channel=channel['Uniqueid'], Cause='16')
         finally:
             ami.close()
             phone.close()

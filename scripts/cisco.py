@@ -83,7 +83,7 @@ def read_file(path, limit, *, private=False):
 
 def load_config(path):
     try:
-        config = json.loads(read_file(path, 16384, private=True))
+        config = json_loads_unique(read_file(path, 16384, private=True))
         require(isinstance(config, dict), 'config_requires_object')
         allowed = {'gateway_url', 'token', 'token_file', 'transport', 'kubectl', 'home_assistant'}
         require(set(config) <= allowed, 'unknown_config_field')
@@ -704,7 +704,7 @@ def voice_recovery_command(args, client, path, *, on_dispatch=None):
     else:
         remaining = value.get('minimum_age_remaining_seconds')
         require(type(value.get('eligible')) is bool and value.get('quiescence_verified') is False
-                and type(remaining) in (int, float) and math.isfinite(remaining) and 0 <= remaining <= 3600
+                and type(remaining) in (int, float) and 0 <= remaining <= 3600 and math.isfinite(remaining)
                 and (value.get('reason') is None or value.get('reason') in ERROR_REASONS),
                 'invalid_voice_recovery_response')
         result.update(eligible=value['eligible'], quiescence_verified=False, reason=value.get('reason'),
@@ -1304,9 +1304,14 @@ def main(argv=None):
                                   intercom_id=response['intercom_id'], speaker_requested=response['speaker_requested'],
                                   note='Both lines were Up in the same PBX bridge. Speaker state and audibility '
                                        'cannot be read back. Use hangup to end the call.')
-                if 'alert_id' in response:
-                    require(isinstance(response['alert_id'], str) and re.fullmatch(r'[0-9a-f]{32}', response['alert_id']),
+                if action in ('alert', 'alert_stop') or 'alert_id' in response:
+                    require(isinstance(response.get('alert_id'), str) and re.fullmatch(r'[0-9a-f]{32}', response['alert_id']),
                             'invalid_alert_response')
+                    if action == 'alert_stop':
+                        require(response['alert_id'] == body['alert_id'], 'invalid_alert_response')
+                    elif action == 'alert':
+                        require(response.get('line') == body['line'] and response.get('kind') == body['kind'],
+                                'invalid_alert_response')
                     result['alert_id'] = response['alert_id']
         if args.json:
             print(json.dumps(result, ensure_ascii=True))

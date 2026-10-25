@@ -89,7 +89,13 @@ class RecoveryCLITests(unittest.TestCase):
 
     def test_status_rejects_unbounded_or_unknown_values(self):
         for field, value in (('minimum_age_remaining_seconds', float('inf')),
+                             ('minimum_age_remaining_seconds', float('nan')),
+                             ('minimum_age_remaining_seconds', 10 ** 1000),
+                             ('minimum_age_remaining_seconds', -(10 ** 1000)),
                              ('minimum_age_remaining_seconds', True),
+                             ('minimum_age_remaining_seconds', False),
+                             ('minimum_age_remaining_seconds', -1),
+                             ('minimum_age_remaining_seconds', 3601),
                              ('quiescence_verified', True), ('reason', 'PRIVATE')):
             with self.subTest(field=field):
                 code, result, _ = self.invoke(['recovery-status'], dict(status(), **{field: value}))
