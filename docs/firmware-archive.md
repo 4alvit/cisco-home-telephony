@@ -7,7 +7,7 @@ this repository.
 
 ## Source and verification limits
 
-The working download is
+The copy reviewed on that date came from
 [7945-7965.tar.gz on Internet Archive](https://archive.org/download/20250911_20250911_1148/7945-7965.tar.gz).
 The [item page](https://archive.org/details/20250911_20250911_1148) and
 [metadata API](https://archive.org/metadata/20250911_20250911_1148) identify an
@@ -15,6 +15,16 @@ upload dated September 11, 2025. This is a third-party preserved archive,
 not Cisco's original ZIP distribution or a Cisco-hosted download. The legacy
 7945G download page was unavailable during this check, so the reproducible
 procedure below uses this preserved copy.
+
+On **October 25, 2026**, the metadata API still listed this exact archive name,
+size, MD5 and SHA-1. The binary was not downloaded again for that check.
+Availability is not proof of Cisco origin or licensing.
+
+After a verified installation, the workstation's downloaded archive and
+duplicate extracted firmware sets do not need to be retained. The
+[re-download and local retention guide](local-artifact-retention.md) explains
+what can be removed and what belongs to the running services. This does not
+authorize removing files from an active TFTP root during provisioning.
 
 The downloaded archive has these values:
 
@@ -210,7 +220,10 @@ After it passes, follow [firmware staging](provisioning.md) and the
 [k3s runbook](k3s-deployment.md). Those commands normally read
 `.local/firmware/` and `.local/firmware-manifest.json`; deliberately copy this
 reviewed set to those deployment locations when ready, without merging it with
-another release. Keep the downloaded archive and review record separately.
+another release. Keep the small source/hash review record with the private
+deployment records. After installation is verified and no active service reads
+the workstation copy, the downloaded archive and duplicate staging files may
+be removed; the instructions above recreate them when maintenance is needed.
 Set the phone's `firmware_load` to `SIP45.9-4-2SR4-3S`, without `.loads`.
 Have the complete TFTP set available before a phone restart. Never interrupt
 power during a flash write. A successful hash check is not a successful flash,
