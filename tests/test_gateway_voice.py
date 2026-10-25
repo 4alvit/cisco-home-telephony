@@ -363,7 +363,7 @@ class GatewayVoiceTests(unittest.TestCase):
                 'idempotency_key': 'hangup-during-voice'})
             self.gateway.mutate('201', 'dnd', {
                 'enabled': True, 'idempotency_key': 'dnd-during-voice'})
-        self.assertIn(('Hangup', {'Channel': channel['Channel'], 'Cause': '16'}), FakeAMI.calls)
+        self.assertIn(('Hangup', {'Channel': channel['Uniqueid'], 'Cause': '16'}), FakeAMI.calls)
         self.assertTrue(self.gateway.preference('201')['dnd'])
         self.voice.status.assert_not_called()
 

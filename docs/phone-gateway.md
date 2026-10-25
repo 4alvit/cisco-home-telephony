@@ -121,6 +121,9 @@ call, DND or alert checks. Every mutation is a JSON POST to
   `phone.media` object. Only that exact, freshly revalidated radio session is
   stopped, using AMI Uniqueid. A changed or ordinary call is never substituted.
 - `answer` / `hangup`: `line`, `channel`, `uniqueid` copied from a fresh inventory.
+  Hangup revalidates that identity, then addresses AMI by `Uniqueid`. Alert and
+  intercom cleanup use the same rule: a later call that reuses the old channel
+  name must not be ended.
 - `speaker`: `mode: "toggle"`; only an idle phone is accepted. This emulates a
   physical button, so there is no invented boolean speaker state.
 - `dnd` / `autoanswer`: `enabled: true` or `false`. Both default to false.

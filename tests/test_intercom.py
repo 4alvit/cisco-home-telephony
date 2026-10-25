@@ -38,8 +38,13 @@ class IntercomAMI:
             if self.fail_originate:
                 raise OSError('synthetic ambiguous result')
         if name == 'Hangup':
-            self.ended.add(fields['Channel'])
+            self.end_channel(fields['Channel'])
         return [{'Response': 'Success'}]
+
+    def end_channel(self, identity):
+        for channel in IntercomAMI.snapshot(self)[1]:
+            if identity in (channel['Channel'], channel['Uniqueid']):
+                self.ended.add(channel['Channel'])
 
     def snapshot(self):
         self.clock += .5
@@ -259,13 +264,13 @@ class IntercomTests(unittest.TestCase):
             if name == 'Hangup':
                 attempts.append(fields['Channel'])
                 if len(attempts) == 2:
-                    self.ami.ended.add(fields['Channel'])
+                    self.ami.end_channel(fields['Channel'])
                     raise gateway.Refused('ami_action_rejected', 503)
             return original(name, **fields)
 
         with patch.object(self.ami, 'action', disappears):
             self.server.stop_intercom(self.ami, self.ami.root)
-        self.assertEqual(attempts, ['PJSIP/202-000000ab', 'PJSIP/204-000000ab'])
+        self.assertEqual(attempts, ['test.201', 'test.203'])
         self.assertEqual(self.ami.snapshot()[1], [])
 
     def test_cleanup_refuses_unconfirmed_hangup_without_retry(self):
@@ -280,7 +285,7 @@ class IntercomTests(unittest.TestCase):
         with patch.object(self.ami, 'action', refuses):
             with self.assertRaisesRegex(gateway.Refused, 'intercom_hangup_not_confirmed'):
                 self.server.stop_intercom(self.ami, self.ami.root)
-        self.assertEqual(attempts, ['PJSIP/202-000000ab'])
+        self.assertEqual(attempts, ['test.201'])
         self.assertEqual(len(self.ami.snapshot()[1]), 2)
 
     def test_cleanup_waits_for_channel_cache_after_no_such_channel(self):
@@ -292,7 +297,7 @@ class IntercomTests(unittest.TestCase):
             for channel in list(pending):
                 pending[channel] -= 1
                 if not pending[channel]:
-                    self.ami.ended.add(channel)
+                    self.ami.end_channel(channel)
                     del pending[channel]
             return original_snapshot()
 
@@ -305,7 +310,7 @@ class IntercomTests(unittest.TestCase):
 
         with patch.object(self.ami, 'action', already_gone), patch.object(self.ami, 'snapshot', stale_snapshot):
             self.server.stop_intercom(self.ami, self.ami.root)
-        self.assertEqual(attempts, ['PJSIP/202-000000ab', 'PJSIP/204-000000ab'])
+        self.assertEqual(attempts, ['test.201', 'test.203'])
         self.assertEqual(self.ami.snapshot()[1], [])
 
     def test_same_handset_softphone_service_and_unlisted_destinations_refused(self):

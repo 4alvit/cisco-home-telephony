@@ -93,6 +93,8 @@ class HardwareVolumeCLITests(unittest.TestCase):
 
     def test_bad_acknowledgement_is_unknown_and_never_retried(self):
         for change in ({'acknowledged_steps': 0}, {'acknowledged_steps': True},
+                       {'requested_steps': True}, {'requested_steps': 10 ** 1000},
+                       {'acknowledged_steps': 10 ** 1000},
                        {'context': 'call'}, {'level_known': True}, {'volume_level': .5},
                        {'physical_context_verified': True}, {'audio_output': 'speaker'}):
             with self.subTest(change=change):
