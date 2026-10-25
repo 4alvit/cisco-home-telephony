@@ -118,6 +118,128 @@ class IntercomTests(unittest.TestCase):
         self.assertTrue(all(self.server.is_intercom_channel(ch) for ch in channels))
         self.assertEqual(len(self.server.intercom_channels(self.ami.root, channels)), 2)
 
+    def duplicate_snapshot(self, *, line='202', changes=None, persistent=False):
+        original = self.ami.snapshot
+        evidence = {'injections': 0, 'ambiguous': False}
+
+        def snapshot():
+            endpoints, channels = original()
+            selected = [row for row in channels if row['Channel'].startswith('PJSIP/' + line + '-')]
+            evidence['ambiguous'] = bool(selected and (persistent or not evidence['injections']))
+            if evidence['ambiguous']:
+                channels.append(dict(selected[0], **(changes or {})))
+                evidence['injections'] += 1
+            return endpoints, channels
+
+        return evidence, snapshot
+
+    def assert_transient_duplicate_waits(self, line, changes):
+        evidence, snapshot = self.duplicate_snapshot(line=line, changes=changes)
+        speakers = []
+
+        def execute(phone, uri):
+            self.assertFalse(evidence['ambiguous'], 'Speaker must wait for a coherent snapshot')
+            speakers.append(phone['id'])
+            self.ami.execute(phone, uri)
+
+        with patch.object(self.ami, 'snapshot', snapshot), patch.object(gateway, 'execute', execute):
+            result = self.call()
+        self.assertEqual(result['connection_state'], 'connected')
+        self.assertEqual(evidence['injections'], 1)
+        self.assertEqual(self.ami.pressed, {'201', '203'})
+        self.assertEqual(speakers, ['201', '203'])
+        self.assertEqual(sum(name == 'Originate' for name, _ in self.ami.calls), 1)
+
+    def test_duplicate_source_state_transition_waits_without_speaker_or_new_originate(self):
+        self.assert_transient_duplicate_waits('202', {'ChannelStateDesc': 'Down'})
+
+    def test_duplicate_destination_rows_wait_without_repeating_source_speaker(self):
+        self.assert_transient_duplicate_waits('204', {})
+
+    def test_persistent_duplicate_rows_exhaust_existing_setup_deadline_without_speaker(self):
+        evidence, snapshot = self.duplicate_snapshot(persistent=True)
+        with patch.object(self.ami, 'snapshot', snapshot):
+            with self.assertRaisesRegex(gateway.Refused, 'intercom_not_connected') as caught:
+                self.call()
+        self.assertEqual(caught.exception.__context__.reason, 'intercom_setup_timeout')
+        self.assertGreater(evidence['injections'], 1)
+        self.assertLess(evidence['injections'], 30)
+        self.assertEqual(self.ami.pressed, set())
+        self.assertEqual(sum(name == 'Originate' for name, _ in self.ami.calls), 1)
+
+    def test_duplicate_source_does_not_hide_unrelated_destination_call(self):
+        self.ami.intruder = True
+        evidence, snapshot = self.duplicate_snapshot()
+        with patch.object(self.ami, 'snapshot', snapshot):
+            with self.assertRaisesRegex(gateway.Refused, 'intercom_not_connected') as caught:
+                self.call()
+        self.assertEqual(caught.exception.__context__.reason, 'intercom_call_changed')
+        self.assertEqual(evidence['injections'], 1)
+        self.assertEqual(self.ami.pressed, set())
+        self.assertNotIn('PJSIP/204-000000ab', self.ami.ended)
+        self.assertIn('PJSIP/202-000000ab', self.ami.ended)
+
+    def test_seen_source_disappearing_refuses_despite_duplicate_destination(self):
+        original = self.ami.snapshot
+        evidence = {'duplicated_destination': False}
+
+        def snapshot():
+            if '201' in self.ami.pressed:
+                self.ami.ended.add('PJSIP/202-000000ab')
+            endpoints, channels = original()
+            selected = [row for row in channels if row['Channel'].startswith('PJSIP/204-')]
+            if selected:
+                channels.append(dict(selected[0]))
+                evidence['duplicated_destination'] = True
+            return endpoints, channels
+
+        with patch.object(self.ami, 'snapshot', snapshot), \
+                patch.object(gateway, 'execute', wraps=self.ami.execute) as execute:
+            with self.assertRaisesRegex(gateway.Refused, 'intercom_not_connected') as caught:
+                self.call()
+        self.assertEqual(caught.exception.__context__.reason, 'intercom_call_ended')
+        self.assertTrue(evidence['duplicated_destination'])
+        execute.assert_called_once()
+        self.assertEqual(self.ami.pressed, {'201'})
+        self.assertEqual(self.ami.snapshot()[1], [])
+
+    def test_persistent_duplicate_destination_times_out_without_repeating_source(self):
+        evidence, snapshot = self.duplicate_snapshot(line='204', persistent=True)
+        with patch.object(self.ami, 'snapshot', snapshot), \
+                patch.object(gateway, 'execute', wraps=self.ami.execute) as execute:
+            with self.assertRaisesRegex(gateway.Refused, 'intercom_not_connected') as caught:
+                self.call()
+        self.assertEqual(caught.exception.__context__.reason, 'intercom_setup_timeout')
+        self.assertGreater(evidence['injections'], 1)
+        self.assertLess(evidence['injections'], 30)
+        execute.assert_called_once()
+        self.assertEqual(self.ami.pressed, {'201'})
+        self.assertEqual(sum(name == 'Originate' for name, _ in self.ami.calls), 1)
+        self.assertEqual(self.ami.snapshot()[1], [])
+
+    def assert_conflicting_duplicate_refused(self, changes):
+        _, snapshot = self.duplicate_snapshot(changes=changes)
+        with patch.object(self.ami, 'snapshot', snapshot):
+            with self.assertRaisesRegex(gateway.Refused, 'intercom_not_connected') as caught:
+                self.call()
+        self.assertEqual(caught.exception.__context__.reason, 'intercom_call_changed')
+        self.assertEqual(self.ami.pressed, set())
+
+    def test_same_channel_with_different_identity_is_still_refused(self):
+        self.assert_conflicting_duplicate_refused({'Uniqueid': 'another-call'})
+
+    def test_different_channel_with_same_identity_is_still_refused(self):
+        self.assert_conflicting_duplicate_refused({'Channel': 'PJSIP/202-000000ac'})
+
+    def test_duplicate_with_unrelated_linkedid_is_still_refused(self):
+        self.assert_conflicting_duplicate_refused({'Linkedid': 'unrelated-call'})
+
+    def test_duplicate_with_missing_identity_is_still_refused(self):
+        self.assert_conflicting_duplicate_refused({'Uniqueid': ''})
+
+    def test_duplicate_on_sibling_line_is_still_refused(self):
+        self.assert_conflicting_duplicate_refused({'Channel': 'PJSIP/201-000000ab'})
+
     def test_cleanup_includes_both_local_roots_and_both_linked_physical_legs(self):
         root = 'cisco-intercom-' + 'b' * 32
         self.ami.root, self.ami.intruder = root, False
