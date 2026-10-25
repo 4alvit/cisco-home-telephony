@@ -244,6 +244,19 @@ AMI channel state to answer each isolated ringing leg with one Speaker command. 
 only when the two exact Cisco lines are `Up` in the same bridge. Caller ID is
 display metadata, not proof that a channel belongs to this operation.
 
+`CoreShowChannels` reads a changing Asterisk cache; its iterator can report the
+same channel more than once while snapshots are replaced. If every row belongs
+to the selected line and current operation but repeats one `(Channel, Uniqueid)`
+pair, the gateway waits for a new, unambiguous observation before pressing either
+Speaker. It keeps the original 12-second setup deadline and does not repeat
+Originate. Different identities, unrelated ownership, missing IDs and wrong
+lines still abort setup. See the
+[Asterisk iterator contract](https://github.com/asterisk/asterisk/blob/22.11.0/include/asterisk/astobj2.h#L1753-L1764).
+
+The isolated regression fixture supports `--repeat 5` to run five independent
+network-disabled PBX containers. Every attempt must pass, including a fresh
+source and destination redirect refusal; a later success cannot erase a failure.
+
 DND, busy phones, active alerts, a sibling-line call, or an unexpected channel
 prevent setup. Persistent auto-answer preferences are unchanged. A failed or
 interrupted setup is recorded for cleanup of only its own channels; restart

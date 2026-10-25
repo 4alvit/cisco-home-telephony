@@ -1091,16 +1091,29 @@ class Gateway:
             while time.monotonic() < deadline:
                 _, current = ami.snapshot()
                 related = self.intercom_channels(root, current)
-                legs = []
+                selected, duplicate = [], False
                 for item, number in ((phone, line), (target, destination)):
                     owned = own_channels(item, current)
-                    require(len(owned) <= 1 and all(ch in related for ch in owned), 'intercom_call_changed', 503)
+                    require(all(ch in related and ch.get('Uniqueid')
+                                and ch['Channel'].startswith('PJSIP/' + number + '-') for ch in owned),
+                            'intercom_call_changed', 503)
+                    require(len({(ch['Channel'], ch['Uniqueid']) for ch in owned}) <= 1,
+                            'intercom_call_changed', 503)
+                    require(owned or number not in seen, 'intercom_call_ended', 503)
+                    duplicate = duplicate or len(owned) > 1
+                    selected.append((item, number, owned))
+                if duplicate:
+                    # CoreShowChannels iterates a changing snapshot cache. One
+                    # channel can appear more than once during replacement.
+                    # Do not choose a row or press either Speaker until a new
+                    # observation is unambiguous, within the same deadline.
+                    time.sleep(0.2)
+                    continue
+                legs = []
+                for item, number, owned in selected:
                     if not owned:
-                        require(number not in seen, 'intercom_call_ended', 503)
                         continue
                     ch = owned[0]
-                    require(ch['Channel'].startswith('PJSIP/' + number + '-') and ch.get('Uniqueid'),
-                            'intercom_call_changed', 503)
                     seen.add(number)
                     legs.append(ch)
                     if ch.get('ChannelStateDesc') == 'Ringing' and number not in attempted:

@@ -56,6 +56,48 @@ def refusal_diagnostics(error):
     return result
 
 
+def ownership_diagnostics(error):
+    """Classify the failed guard using counts/booleans, never channel IDs."""
+    for exception in (error, error.__context__):
+        trace = getattr(exception, '__traceback__', None)
+        while trace is not None:
+            frame = trace.tb_frame
+            if frame.f_code.co_name == '_intercom_reserved':
+                values = frame.f_locals
+                owned, related = values.get('owned', []), values.get('related', [])
+                root, number, server = values.get('root'), values.get('number'), values.get('self')
+                current = values.get('current', [])
+                sample = owned[:4]
+                return {
+                    'owned_count': len(owned),
+                    'owned_distinct_identities': len({(item.get('Channel'), item.get('Uniqueid'))
+                                                      for item in owned}),
+                    'related_count': len(related),
+                    'snapshot_count': len(current),
+                    'snapshot_distinct_identities': len({(item.get('Channel'), item.get('Uniqueid'))
+                                                         for item in current}),
+                    'owned_matches_prior_operation': any(
+                        item not in related and server is not None
+                        and server.is_intercom_channel(item) for item in sample),
+                    'owned_belongs_to_operation': [item in related for item in sample],
+                    'owned_matches_selected_line': [
+                        item.get('Channel', '').startswith('PJSIP/' + str(number) + '-')
+                        for item in sample],
+                    'owned_has_uniqueid': [bool(item.get('Uniqueid')) for item in sample],
+                    'owned_uniqueid_is_root': [item.get('Uniqueid') in (root, str(root) + '-b')
+                                             for item in sample],
+                    'owned_linkedid_is_root': [item.get('Linkedid') in (root, str(root) + '-b')
+                                             for item in sample],
+                    'owned_linkedid_is_self': [bool(item.get('Uniqueid'))
+                        and item.get('Uniqueid') == item.get('Linkedid') for item in sample],
+                    'owned_states': [item.get('ChannelStateDesc') if item.get('ChannelStateDesc')
+                                    in ('Down', 'Ring', 'Ringing', 'Up', 'Busy') else 'other'
+                                    for item in sample],
+                }
+            trace = trace.tb_next
+    return {}
+
+
 def redirect_evidence(peers, previous, presses):
     result = {}
     for phone_id, peer in peers.items():
@@ -269,6 +311,7 @@ def test_inside():
                 try:
                     error.intercom_diagnostics = {'case': mode,
                         'errors': refusal_diagnostics(refusal or error),
+                        'ownership': ownership_diagnostics(refusal or error),
                         'peers': redirect_evidence(peers, before_invites, presses)}
                 except Exception:
                     pass  # Diagnostics must never replace the original failure.
@@ -292,12 +335,31 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--image', default=os.environ.get('ASTERISK_TEST_IMAGE'))
     parser.add_argument('--docker-context', default=os.environ.get('ASTERISK_DOCKER_CONTEXT'))
+    parser.add_argument('--repeat', type=int, choices=range(1, 11), default=1,
+                        help='Run 1-10 independent fresh containers; every attempt must pass.')
     parser.add_argument('--inside', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.inside:
+        need(args.repeat == 1, '--repeat is only available outside the isolated container')
         print(json.dumps(test_inside(), sort_keys=True), flush=True)
         return
     need(args.image, '--image or ASTERISK_TEST_IMAGE is required')
+    if args.repeat == 1:
+        print(json.dumps(run_fixture(args), sort_keys=True), flush=True)
+        return
+    failed = 0
+    for attempt in range(1, args.repeat + 1):
+        try:
+            result = run_fixture(args)
+        except Exception as error:
+            failed += 1
+            result = {'status': 'FAIL', 'error': str(error)}
+        print(json.dumps({'attempt': attempt, **result}, sort_keys=True), flush=True)
+    need(failed == 0, f'{failed} of {args.repeat} isolated intercom attempts failed')
+
+
+def run_fixture(args):
+    """Each invocation creates and removes only its own network-none container."""
     docker = ['docker'] + (['--context', args.docker_context] if args.docker_context else [])
     provision = module('intercom_provision', Path(__file__).with_name('provision.py'))
     container = None
@@ -364,7 +426,7 @@ def main():
             need(completed.returncode == 0, 'isolated intercom regression failed: ' + completed.stdout[-3000:] + completed.stderr[-3000:])
             result = json.loads(completed.stdout)
             need(result.get('status') == 'PASS', 'isolated intercom regression did not pass')
-            print(json.dumps(result, sort_keys=True))
+            return result
         except Exception:
             if container:
                 try:
