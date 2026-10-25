@@ -24,8 +24,11 @@ class GitScopeTests(unittest.TestCase):
         self.base = self.commit('README.md', 'base')
 
     def git(self, *args):
+        # Detached Git maintenance can outlive commit and race temporary-repo
+        # cleanup. Disable both modern maintenance and older automatic GC.
         return subprocess.check_output([
             'git', '-C', str(self.root), '-c', 'commit.gpgsign=false',
+            '-c', 'maintenance.auto=false', '-c', 'gc.auto=0',
             '-c', 'core.hooksPath=/dev/null', '-c', 'user.name=Synthetic Test',
             '-c', 'user.email=test@example.invalid', *args], stderr=subprocess.DEVNULL).decode().strip()
 
@@ -45,6 +48,17 @@ class GitScopeTests(unittest.TestCase):
         self.assertFalse(result['required'])
         self.assertEqual(result['reason'], 'proven-irrelevant-diff')
         self.assertEqual(result['changed_paths'], 1)
+
+    def test_synthetic_commit_does_not_spawn_background_maintenance(self):
+        trace = self.root / '.git' / 'test-trace.jsonl'
+        with patch.dict(os.environ, GIT_TRACE2_EVENT=str(trace)):
+            self.commit('docs/guide.md', 'guide')
+        records = [json.loads(line) for line in trace.read_text().splitlines()]
+        self.assertTrue(any(item.get('event') == 'start' and 'commit' in item.get('argv', [])
+                            for item in records))
+        automatic = [item['argv'] for item in records if item.get('event') == 'child_start'
+                     and len(item.get('argv', [])) > 1 and item['argv'][1] in ('maintenance', 'gc')]
+        self.assertEqual(automatic, [])
 
     def test_runtime_change_and_deletion_require_build(self):
         head = self.commit('containers/voice/Dockerfile', 'FROM synthetic')
