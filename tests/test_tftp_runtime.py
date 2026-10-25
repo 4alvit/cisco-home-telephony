@@ -44,19 +44,24 @@ os.closerange(3, 256)  # model a daemon closing all inherited descriptors
 ready = Path(os.environ['TFTP_TEST_READY'])
 release = Path(os.environ['TFTP_TEST_RELEASE'])
 stopping = Path(os.environ['TFTP_TEST_STOPPING'])
+def publish(path, value):
+    # Existence is the reader's handshake: expose only complete contents.
+    pending = path.with_name(path.name + '.tmp')
+    pending.write_text(value)
+    pending.replace(path)
 def stop(number, frame):
-    stopping.write_text(str(number))
+    publish(stopping, str(number))
 signal.signal(signal.SIGTERM, stop)
 signal.signal(signal.SIGINT, stop)
 signal.signal(signal.SIGHUP, stop)
 if os.environ.get('TFTP_TEST_FORK') == '1':
     child = os.fork()
     if child:
-        ready.write_text(json.dumps({'pid': os.getpid(), 'args': sys.argv[1:], 'child': child}))
+        publish(ready, json.dumps({'pid': os.getpid(), 'args': sys.argv[1:], 'child': child}))
         sys.exit(17)
-    Path(os.environ['TFTP_TEST_TRANSFER']).write_text(str(os.getpid()))
+    publish(Path(os.environ['TFTP_TEST_TRANSFER']), str(os.getpid()))
 else:
-    ready.write_text(json.dumps({'pid': os.getpid(), 'args': sys.argv[1:]}))
+    publish(ready, json.dumps({'pid': os.getpid(), 'args': sys.argv[1:]}))
 if os.environ.get('TFTP_TEST_HOLD') == '1':
     while not release.exists():
         time.sleep(.01)
