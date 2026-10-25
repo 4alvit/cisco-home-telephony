@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import threading
 from types import SimpleNamespace
 import unittest
@@ -159,6 +160,67 @@ class IntercomFixtureTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'before intended peer sent 302'):
             self.run_inside(early_failure=True, diagnostic_failure=True)
 
+    def test_ownership_collector_failure_preserves_original_error_and_cleanup(self):
+        with mock.patch.object(fixture, 'ownership_diagnostics', side_effect=ValueError('private collector')):
+            with self.assertRaisesRegex(RuntimeError, 'before intended peer sent 302'):
+                self.run_inside(early_failure=True)
+
+    def test_repeat_keeps_failure_and_runs_remaining_independent_attempts(self):
+        output = io.StringIO()
+        with mock.patch.object(sys, 'argv', [str(SCRIPT), '--image', 'synthetic', '--repeat', '3']), \
+                mock.patch.object(fixture, 'run_fixture', side_effect=[
+                    {'status': 'PASS'}, RuntimeError('classified failure'), {'status': 'PASS'}]) as run, \
+                contextlib.redirect_stdout(output):
+            with self.assertRaisesRegex(RuntimeError, '1 of 3 isolated intercom attempts failed'):
+                fixture.main()
+        self.assertEqual(run.call_count, 3)
+        rows = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual([row['attempt'] for row in rows], [1, 2, 3])
+        self.assertEqual([row['status'] for row in rows], ['PASS', 'FAIL', 'PASS'])
+        self.assertEqual(rows[1]['error'], 'classified failure')
+
+    def test_repeat_creates_and_cleans_distinct_network_none_containers(self):
+        created, removed, copied = [], [], []
+
+        def run(command, **kwargs):
+            action, output = command[1], ''
+            if action == 'create':
+                self.assertIn('none', command)
+                self.assertIn('never', command)
+                created.append('fresh-' + str(len(created) + 1))
+                output = created[-1] + '\n'
+            elif action == 'inspect':
+                output = 'none\n'
+            elif action == 'cp':
+                copied.append(command[2])
+            elif action == 'exec' and command[3] == 'asterisk':
+                output = ('PJSIP/202,8,i' if 'dialplan' in command[-1] else
+                          '\n'.join(' Endpoint: ' + line + '/line' for line in ('201', '202', '203', '204')))
+            elif action == 'exec':
+                output = '{"status":"PASS"}'
+            elif action == 'rm':
+                removed.append(command[-1])
+            return subprocess.CompletedProcess(command, 0, output, '')
+
+        output = io.StringIO()
+        with mock.patch.object(sys, 'argv', [str(SCRIPT), '--image', 'synthetic', '--repeat', '2']), \
+                mock.patch.object(fixture.subprocess, 'run', side_effect=run), \
+                contextlib.redirect_stdout(output):
+            fixture.main()
+        self.assertEqual(created, ['fresh-1', 'fresh-2'])
+        self.assertEqual(removed, created)
+        self.assertEqual(len(set(copied)), 2)
+        self.assertEqual([json.loads(line)['attempt'] for line in output.getvalue().splitlines()], [1, 2])
+
+    def test_repeat_is_bounded_before_any_container_operation(self):
+        for count in ('0', '-1', '11'):
+            with self.subTest(count=count), \
+                    mock.patch.object(sys, 'argv', [str(SCRIPT), '--image', 'synthetic', '--repeat', count]), \
+                    mock.patch.object(fixture, 'run_fixture') as run, contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    fixture.main()
+                run.assert_not_called()
+
     def test_created_intercom_container_logs_precede_cleanup_even_if_logging_fails(self):
         for logging_fails in (False, True):
             with self.subTest(logging_fails=logging_fails):
@@ -198,6 +260,88 @@ class IntercomFixtureTests(unittest.TestCase):
                 self.assertEqual(calls[-2:], ['logs', 'rm'])
                 if not logging_fails:
                     self.assertIn('Isolated intercom fixture log tail:', stderr.getvalue())
+
+
+def _intercom_reserved(self, owned, related, root='private-current-root', number='202', current=None):
+    """Synthetic traceback frame with the same diagnostic inputs as the guard."""
+    current = owned if current is None else current
+    raise RuntimeError('private-error-payload')
+
+
+class OwnershipDiagnosticsTests(unittest.TestCase):
+    def setUp(self):
+        from test_intercom import gateway, pair_config
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.server = gateway.Gateway(pair_config(), directory.name)
+        self.addCleanup(self.server.db.close)
+        self.server.db.execute('INSERT INTO intercoms VALUES (?, ?, ?)',
+                               ('private-previous-root', 'stopping', 1))
+
+    @staticmethod
+    def row(**changes):
+        return {'Channel': 'PJSIP/202-private-channel-secret', 'Uniqueid': 'private-channel-uid',
+                'Linkedid': 'private-previous-root', 'ChannelStateDesc': 'Ringing',
+                'CallerIDName': 'private-person', 'URI': 'https://private.example/?token=private-token',
+                **changes}
+
+    def collect(self, owned, related, *, wrapped=False, **kwargs):
+        try:
+            try:
+                _intercom_reserved(self.server, owned, related, **kwargs)
+            except RuntimeError:
+                if wrapped:
+                    raise Refused('intercom_not_connected_check_status') from None
+                raise
+        except Exception as error:
+            return fixture.ownership_diagnostics(error)
+
+    def test_distinguishes_previous_operation_and_self_linked_new_channel(self):
+        for linked in ('private-previous-root', 'private-previous-root-b'):
+            with self.subTest(linked=linked):
+                result = self.collect([self.row(Linkedid=linked)], [])
+                self.assertIs(result['owned_matches_prior_operation'], True)
+                self.assertEqual(result['owned_belongs_to_operation'], [False])
+                self.assertEqual(result['owned_matches_selected_line'], [True])
+                self.assertEqual(result['owned_states'], ['Ringing'])
+        result = self.collect([self.row(Linkedid='private-channel-uid')], [])
+        self.assertIs(result['owned_matches_prior_operation'], False)
+        self.assertEqual(result['owned_linkedid_is_self'], [True])
+        self.assertEqual(result['owned_linkedid_is_root'], [False])
+
+    def test_current_operation_and_wrapped_error_do_not_export_ids(self):
+        channel = self.row(Linkedid='private-current-root-b')
+        result = self.collect([channel], [dict(channel)], wrapped=True)
+        self.assertIs(result['owned_matches_prior_operation'], False)
+        self.assertEqual(result['owned_belongs_to_operation'], [True])
+        self.assertEqual(result['owned_linkedid_is_root'], [True])
+        self.assertNotIn('private', json.dumps(result))
+
+    def test_only_first_four_rows_are_classified(self):
+        rows = [self.row(Linkedid='unknown') for _ in range(4)] + [self.row()]
+        result = self.collect(rows, [], current=rows * 5)
+        self.assertIs(result['owned_matches_prior_operation'], False)
+        self.assertEqual(result['owned_count'], 5)
+        self.assertEqual(result['snapshot_count'], 25)
+        for value in result.values():
+            if isinstance(value, list):
+                self.assertEqual(len(value), 4)
+
+    def test_missing_frame_and_empty_owned_are_bounded(self):
+        self.assertEqual(fixture.ownership_diagnostics(RuntimeError('private')), {})
+        result = self.collect([], [])
+        self.assertEqual(result['owned_count'], 0)
+        self.assertEqual(result['owned_states'], [])
+        self.assertIs(result['owned_matches_prior_operation'], False)
+
+    def test_unknown_states_and_raw_identifiers_never_leak(self):
+        result = self.collect([self.row(ChannelStateDesc='private-' + 'x' * 100000)], [])
+        encoded = json.dumps(result)
+        self.assertEqual(result['owned_states'], ['other'])
+        self.assertLess(len(encoded), 800)
+        for private in ('private', 'PJSIP/', 'https://', 'token=', 'CallerID', '202'):
+            self.assertNotIn(private, encoded)
+        self.assertTrue(all(type(value) in (int, bool, list) for value in result.values()))
 
 
 if __name__ == '__main__':

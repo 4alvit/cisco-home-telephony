@@ -140,7 +140,7 @@ docker exec "$container" asterisk -rx 'dialplan show 630@home' | grep 'ha-assist
 python3 tests/ami_runtime.py "$container" "$test_root/generated/ha-ami-secret.json"
 python3 tests/gateway_ami_runtime.py "$container" "$test_root/generated/gateway-ami-secret.json"
 python3 scripts/test-alert-originate.py --image "$prefix/asterisk:22.11.0"
-python3 scripts/test-intercom-originate.py --image "$prefix/asterisk:22.11.0"
+python3 scripts/test-intercom-originate.py --image "$prefix/asterisk:22.11.0" --repeat 5
 python3 scripts/test-radio-wideband.py --image "$prefix/asterisk:22.11.0"
 for module in chan_audiosocket codec_g722 codec_resample; do
   docker exec "$container" asterisk -rx "module show like $module" |
