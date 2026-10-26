@@ -87,6 +87,12 @@ verified. Chunked streams and live radio have no seek bar. A supplied duration
 label alone never enables seeking. Direct file size and session duration limits
 are configurable; the default session ceiling is two hours.
 
+Embedded cover art can be rejected by the audio-only metadata probe even when
+the audio itself is supported. The player then continues without probe metadata,
+retaining the supplied title and the same audio decoder restrictions. Duration
+and seeking remain unavailable for that file; play, pause and queue controls
+still work. A cancelled, timed-out or oversized probe is not bypassed.
+
 ## Music Assistant
 
 In Music Assistant add/enable the **Home Assistant Media Players** provider and

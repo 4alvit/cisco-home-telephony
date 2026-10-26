@@ -5,6 +5,10 @@ for macOS/Linux prerequisites, private configuration, direct or Kubernetes
 connections and optional Home Assistant scheduling. Server preparation is in
 [Asterisk setup and operations](asterisk-operations.md).
 
+For MP3/FLAC library selection, direct audio URLs and managed playback controls,
+see [CLI music](cli-music.md). Local names map to the existing HA/NAS copy;
+the Mac does not upload or serve audio.
+
 `cisco LINE` reads live status and shows commands and concrete examples. When HA scheduling is configured, it also shows the current timer/alarm slots, their owning lines and HA timezone. A second numeric argument places a call **from the selected line**:
 
 ```bash
@@ -47,7 +51,10 @@ for a fictional ten-room example, caller-ID behavior and safe inventory updates.
 The [step-by-step installation guide](cli-installation.md) expands this quick
 reference and includes first-connection checks and fixes for common errors.
 
-Use Python 3.10 or later on macOS or Linux; there are no extra Python dependencies. From the repository root:
+Use Python 3.10 or later on macOS or Linux. Ordinary commands, local music
+search and direct audio URLs use the standard library. Direct HA media-source
+resolution additionally needs optional `aiohttp>=3.12,<4`; see
+[CLI music](cli-music.md#install-the-client-files). From the repository root:
 
 ```bash
 mkdir -p "$HOME/.local/bin"
@@ -56,7 +63,12 @@ export PATH="$HOME/.local/bin:$PATH"
 cisco --help
 ```
 
-Keep `scripts/cisco.py` and `scripts/cisco_http.py` together in the checkout; the symlink follows future repository updates. If `cisco` already exists, inspect it before changing the link. Add the PATH line to your shell startup file if needed.
+Keep all five music-capable scripts together from the same revision:
+`cisco.py`, `cisco_http.py`, `cisco_player.py`, `cisco_library.py` and
+`cisco_media_source.py`. The symlink follows repository updates. If `cisco`
+already exists, inspect it before changing the link. Add the PATH line to your
+shell startup file if needed. The older Beta 25 installation pin does not
+contain the new music commands.
 
 The default configuration is `~/.config/cisco-home/cli.json`. Override it with `--config PATH` or `CISCO_CONFIG`. Configuration and token files must be owned by your user, have no group/other permissions, and must not be symlinks. Duplicate JSON field names are rejected, including inside nested objects; each setting must have one unambiguous value. Use a private parent directory as well:
 

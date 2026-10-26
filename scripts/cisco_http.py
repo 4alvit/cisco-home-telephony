@@ -20,7 +20,11 @@ too_many_pending_messages intercom_requires_cisco_destination intercom_requires_
 intercom_not_connected_check_status hardware_volume_outcome_unknown hardware_volume_timeout
 ringer_volume_requires_idle_phone call_volume_context_changed player_phone_busy
 invalid_volume_context invalid_volume_request invalid_volume_direction invalid_volume_steps
-invalid_volume_identity'''.split())
+invalid_volume_identity player_disabled invalid_player_request invalid_player_session
+invalid_player_source invalid_enqueue invalid_player_position invalid_player_volume_level
+invalid_player_mute player_session_changed player_line_changed player_call_not_observed
+player_control_not_supported player_cleanup_pending player_dialplan_unavailable
+player_call_limit player_not_active line_does_not_belong_to_phone'''.split())
 HA_ERRORS = {
     'The selected line does not belong to this handset': 'ha_line_mapping_mismatch',
     'The timer belongs to the other line': 'ha_timer_owned_by_other_line',

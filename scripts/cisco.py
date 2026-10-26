@@ -53,6 +53,11 @@ MAX_FILE = 2 * 1024 * 1024
 SCHEDULE_COMMANDS = ['schedule', 'timer [status]', 'timer start MINUTES [--replace]',
     'timer cancel', 'alarm [status]', 'alarm set HH:MM --days DAYS [--enable] [--replace]',
     'alarm on', 'alarm off']
+MUSIC_COMMANDS = frozenset(('play', 'search', 'music', 'queue', 'pause', 'resume', 'stop',
+                            'next', 'previous', 'clear-queue', 'seek', 'gain', 'mute', 'unmute'))
+MUSIC_HELP = ['play FILE_OR_QUERY_OR_URL [--all] [--enqueue MODE]', 'search QUERY',
+              'music', 'queue', 'pause', 'resume', 'stop', 'next', 'previous',
+              'clear-queue', 'seek SECONDS', 'gain PERCENT', 'mute', 'unmute']
 
 
 class Refused(Exception):
@@ -85,7 +90,7 @@ def load_config(path):
     try:
         config = json_loads_unique(read_file(path, 16384, private=True))
         require(isinstance(config, dict), 'config_requires_object')
-        allowed = {'gateway_url', 'token', 'token_file', 'transport', 'kubectl', 'home_assistant'}
+        allowed = {'gateway_url', 'token', 'token_file', 'transport', 'kubectl', 'home_assistant', 'music'}
         require(set(config) <= allowed, 'unknown_config_field')
         config['gateway_url'] = gateway_url(config['gateway_url'])
         require(('token' in config) != ('token_file' in config), 'choose_token_or_token_file')
@@ -113,6 +118,15 @@ def load_config(path):
             require('kubectl' not in config, 'kubectl_requires_explicit_transport')
         if 'home_assistant' in config:
             config['home_assistant'] = load_ha_config(config['home_assistant'], path)
+        if 'music' in config:
+            try:
+                from cisco_library import LibraryError, validate_config
+            except ImportError:
+                raise Refused('music_client_not_installed') from None
+            try:
+                config['music'] = validate_config(config['music'])
+            except LibraryError as error:
+                raise Refused(error.reason) from None
         return config
     except (ValueError, KeyError, TypeError, UnicodeError):
         raise Refused('invalid_private_config') from None
@@ -338,6 +352,8 @@ def commands(phone):
         result.append('drop-in NUMBER')
     if 'voice' in phone['capabilities']:
         result.extend(VOICE_COMMANDS)
+    if isinstance(phone.get('player'), dict) and phone['player'].get('v') == 1:
+        result.extend(MUSIC_HELP)
     return result
 
 
@@ -1006,6 +1022,21 @@ def parser():
     msg = sub.add_parser('message'); msg.add_argument('text', nargs='?')
     msg.add_argument('--text-file'); msg.add_argument('--title', default='Notice')
     img = sub.add_parser('image'); img.add_argument('file'); img.add_argument('--title', default='Notice')
+    play = sub.add_parser('play', help='Play one library match, file or direct HTTP audio URL.',
+        description='Use the selected SIP line and the controlled player. Multiple library matches '
+                    'require --all; queuing several tracks is not atomic. No automatic mutation retries.')
+    play.add_argument('source', metavar='FILE_OR_QUERY_OR_URL')
+    play.add_argument('--all', action='store_true', help='Explicitly queue all matches, at most 50.')
+    play.add_argument('--enqueue', choices=('replace', 'add', 'next', 'play'), default='replace')
+    sub.add_parser('search', help='Search library filenames without opening audio or contacting phones.').add_argument('query')
+    for name in ('music', 'queue'):
+        sub.add_parser(name, help='Show controlled playback, current item and queue index/count.')
+    for name in ('pause', 'resume', 'stop', 'next', 'previous', 'clear-queue', 'mute', 'unmute'):
+        sub.add_parser(name, help='Control the current music session on this exact line.',
+            description='Controls music only. Stop does not hang up an unrelated telephone call; '
+                        'use hangup for an ordinary call. Clear-queue keeps the current track.')
+    sub.add_parser('seek', help='Seek a finite, seekable music file in seconds.').add_argument('seconds', type=float)
+    sub.add_parser('gain', help='Set digital music gain from 0 to 100 percent, separate from physical volume.').add_argument('percent', type=float)
     sub.add_parser('alert').add_argument('kind', choices=['timer', 'alarm'])
     sub.add_parser('stop-alert').add_argument('--alert-id')
     sub.add_parser('schedule')
@@ -1136,20 +1167,21 @@ def main(argv=None):
     p = parser()
     if not argv or argv in (['--json'], ['-j']):
         if argv:
-            print(json.dumps({'status': 'help', 'commands': ['status', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS]}))
+            print(json.dumps({'status': 'help', 'commands': ['status', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS, *MUSIC_HELP]}))
         else:
             p.print_help()
         return 0
     args = p.parse_args(normalize_shorthand(argv))
     if args.command == 'help':
         if args.json:
-            print(json.dumps({'status': 'help', 'commands': ['status', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS]}))
+            print(json.dumps({'status': 'help', 'commands': ['status', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS, *MUSIC_HELP]}))
         else:
             p.print_help()
             print('\nDevice commands: ' + '; '.join(COMMANDS.values()))
             print('pickup: answer one exact ringing call; idle speaker use requires explicit speaker toggle.')
             print('Schedules (optional Home Assistant config): ' + '; '.join(SCHEDULE_COMMANDS))
             print('Voice (requires configured gateway supervisor): ' + '; '.join(VOICE_COMMANDS))
+            print('Music (requires controlled player): ' + '; '.join(MUSIC_HELP))
         return 0
     action_key = None
     exit_code = 0
@@ -1166,6 +1198,23 @@ def main(argv=None):
             require(re.fullmatch(r'2[0-9]{2}', args.extension), 'extension_requires_three_digit_cisco_line')
         require(1 <= args.timeout <= 60, 'timeout_requires_1_to_60_seconds')
         config = load_config(args.config)
+        if args.command in MUSIC_COMMANDS:
+            try:
+                import cisco_player
+            except ImportError:
+                raise Refused('music_client_not_installed') from None
+            client, music_phone = None, None
+            if args.command != 'search':
+                client = Gateway(config, args.timeout)
+                music_phone = validate_inventory(client.request('/v1/phones'), args.extension)
+            result, code = cisco_player.run(args, config, client=client, phone=music_phone,
+                gateway_factory=Gateway, inventory_validator=validate_inventory,
+                on_dispatch=remember_voice_dispatch)
+            if args.json:
+                print(json.dumps(result, ensure_ascii=True))
+            else:
+                cisco_player.display(result)
+            return code
         if args.command == 'voice':
             result = voice_command(args, config, on_dispatch=remember_voice_dispatch)
             if args.json or not ('voice' in result or 'hands_free' in result):
@@ -1336,7 +1385,7 @@ def main(argv=None):
                          'Restore the intended transport and KUBECONFIG, then run '
                          'the read-only recovery command with the same private configuration.')
         elif args.command is None:
-            result['offline_commands'] = ['status', 'help', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS]
+            result['offline_commands'] = ['status', 'help', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS, *MUSIC_HELP]
         print(json.dumps(result), file=sys.stdout if args.json else sys.stderr)
         if not args.json and args.command is None:
             print('Offline command help (live availability unknown):', file=sys.stderr)
