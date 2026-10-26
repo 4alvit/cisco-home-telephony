@@ -11,12 +11,13 @@ playback can continue after the CLI exits.
 These commands require a newer source revision containing all five CLI files
 listed below. The **Beta 25 installation pin in the main installation guide does
 not include these music commands**. The following source pin includes the CLI
-and the cover-art playback fix; it is a source revision, not a release tag:
+with default all-match playback, filename masks and the cover-art playback fix;
+it is a source revision, not a release tag:
 
 ```bash
 git clone --no-checkout https://github.com/4alvit/cisco-home-telephony.git cisco-home-telephony-music
 cd cisco-home-telephony-music
-git checkout --detach 4f6a84060d15219b983a66f530b1ce7e80ed2596
+git checkout --detach a9302fef78bfa43e9a4ddf711601dd0ee2e15d19
 git rev-parse HEAD
 python3 scripts/cisco.py --help
 ```
@@ -111,15 +112,27 @@ worker on stdin. The CLI does not install packages in the container.
 cisco 212 search "Example Artist"
 cisco 212 play "Album/Track.flac"
 cisco 213 play "$HOME/Music/Album/Track.mp3"
-cisco 212 play "Example Artist" --all
-cisco 212 play "Album" --all --enqueue add
+cisco 212 play "Example Artist"
+cisco 212 play "*Artist*.flac"
+cisco 212 play "Album/Track ?.mp3"
+cisco 212 play "Album" --enqueue add
 cisco 212 play "https://media.example.org/track.mp3"
 ```
 
-Search matches literal, case-insensitive substrings of relative filenames and
-returns deterministic sorted results. Exact file and directory paths are also
-accepted. The scan reads only metadata: OneDrive placeholders need not be
-downloaded on the Mac when the corresponding NAS copy is available. A configured
+Plain text matches literal, case-insensitive substrings of relative filenames.
+Queries containing `*` or `?` are filename masks: `*` matches any number of
+characters and `?` matches one character. These are masks, not regular
+expressions; brackets and other regex punctuation remain literal. Quote masks
+so the shell passes them to `cisco` without expanding files in its own directory.
+A mask without `/` matches filenames at any scanned depth or the whole relative
+path. A mask with `/` matches the relative path; `*` may span folder separators.
+Absolute masks must remain inside the configured library.
+
+Results are sorted deterministically, ignoring case with a case-sensitive tie
+break. Exact file and directory paths take priority, including filenames that
+literally contain `*` or `?`. The scan reads only metadata: OneDrive placeholders
+need not be downloaded on the Mac when the corresponding NAS copy is
+available. A configured
 root may resolve through a symlink; links inside the library are not followed.
 Traversal outside the root and special files are refused.
 
@@ -128,9 +141,12 @@ The scan includes files through four directory levels and examines at most
 An exceeded scan or match limit is an error, not a truncated playlist. Narrow
 the query when necessary. Files deeper than the scan depth are not included.
 
-`play` requires exactly one match unless `--all` is explicit. Direct HTTP(S)
-audio bypasses library search and HA resolution, but still goes through the
-gateway's source validation. It must be an audio resource rather than a website.
+`play` queues **all matches by default**, in sorted order. The old `--all` flag
+is still accepted for compatibility and does not change this behavior. An exact
+file selects that file; a directory selects its scanned tracks. The configured
+limit still applies: too many matches fail before any playback command, without
+silently dropping tracks. Direct HTTP(S) audio bypasses library search and HA
+resolution, but still goes through the gateway's source validation. It must be an audio resource rather than a website.
 For radio station numbers, use normal dialing such as `cisco 212 dial 708`.
 
 The selected number is preserved: playback requested with `213` uses line
@@ -170,7 +186,7 @@ before dispatch, then submits individual commands bound to the same line and
 session. A later failure can leave earlier entries accepted. It reports
 accepted item numbers and action IDs, plus unconfirmed and unattempted counts
 when applicable. There is **no automatic retry**. After a partial or uncertain
-result, inspect `music`/`queue`; do not blindly repeat `--all` or change request
+result, inspect `music`/`queue`; do not blindly repeat `play` or change request
 IDs to bypass an uncertain operation. An accepted request is not proof of
 audible playback.
 

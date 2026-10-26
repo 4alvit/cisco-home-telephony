@@ -143,15 +143,19 @@ class PlayerCLITests(unittest.TestCase):
         self.assertEqual(calls[-1][1]['session_id'], SESSION)
         self.assertEqual(calls[-1][1]['metadata'], {'title': 'One'})
 
-    def test_multiple_matches_require_explicit_all_before_resolving_or_playing(self):
-        code, result, calls, _, resolver = self.invoke(['play', 'example'], tracks=[track('One'), track('Two')])
-        self.assertEqual((code, result['reason']), (1, 'multiple_music_matches_use_all'))
-        self.assertEqual(len(calls), 1)
-        resolver.assert_not_called()
+    def test_multiple_matches_play_by_default_and_legacy_all_is_equivalent(self):
+        for flags in ([], ['--all']):
+            with self.subTest(flags=flags):
+                code, result, calls, _, resolver = self.invoke(
+                    ['play', 'example', *flags], tracks=[track('One'), track('Two')])
+                self.assertEqual((code, result['accepted_count']), (0, 2))
+                resolver.assert_called_once()
+                self.assertEqual([body['metadata']['title'] for _, body in calls if body], ['One', 'Two'])
+                self.assertEqual([body['line'] for _, body in calls if body], ['213', '213'])
 
     def test_all_tracks_resolve_up_front_and_append_only_after_readiness(self):
         code, result, calls, _, resolver = self.invoke(
-            ['play', 'example', '--all', '--idempotency-key', 'playlist-example'],
+            ['play', 'example', '--idempotency-key', 'playlist-example'],
             tracks=[track('One'), track('Two'), track('Three')])
         self.assertEqual((code, result['accepted_count'], result['remaining_count']), (0, 3, 0))
         resolver.assert_called_once()
@@ -168,7 +172,7 @@ class PlayerCLITests(unittest.TestCase):
                 ('play', ['One', 'Three', 'Two'], ['play', 'next', 'next']),
                 ('add', ['One', 'Two', 'Three'], ['add', 'add', 'add'])):
             with self.subTest(mode=mode):
-                code, _, calls, _, _ = self.invoke(['play', 'example', '--all', '--enqueue', mode],
+                code, _, calls, _, _ = self.invoke(['play', 'example', '--enqueue', mode],
                                                    tracks=selected, initial=active())
                 self.assertEqual(code, 0)
                 bodies = [body for _, body in calls if body]
@@ -179,7 +183,7 @@ class PlayerCLITests(unittest.TestCase):
         def accepted(body):
             return dict(status='accepted', action_id=body['idempotency_key'], session_id=SESSION)
         code, result, calls, _, _ = self.invoke(
-            ['play', 'example', '--all', '--idempotency-key', 'partial-example'],
+            ['play', 'example', '--idempotency-key', 'partial-example'],
             tracks=[track('One'), track('Two'), track('Three')], initial=active(),
             posts=[accepted, OSError(PRIVATE)])
         self.assertEqual((code, result['status']), (1, 'not_confirmed'))
