@@ -10,9 +10,22 @@ playback can continue after the CLI exits.
 
 These commands require a newer source revision containing all five CLI files
 listed below. The **Beta 25 installation pin in the main installation guide does
-not include these music commands**. Use a reviewed revision that includes this
-guide and its corresponding code; this guide does not claim that a particular
-release or home deployment has already been updated.
+not include these music commands**. The following source pin includes the CLI
+and the cover-art playback fix; it is a source revision, not a release tag:
+
+```bash
+git clone --no-checkout https://github.com/4alvit/cisco-home-telephony.git cisco-home-telephony-music
+cd cisco-home-telephony-music
+git checkout --detach 4f6a84060d15219b983a66f530b1ce7e80ed2596
+git rev-parse HEAD
+python3 scripts/cisco.py --help
+```
+
+Confirm the printed commit matches the full pin. Then follow the
+[command symlink and private connection setup](cli-installation.md#2-install-on-macos-or-linux)
+using this checkout, skipping that guide's older clone command. Installing the
+CLI alone does not update a running gateway; deploy the matching runtime fix
+to support files whose embedded artwork causes metadata probing to fail.
 
 ## Prepare the existing services
 
