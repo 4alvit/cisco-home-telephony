@@ -1,5 +1,6 @@
 """Bounded, metadata-only selection of music mirrored into HA media sources."""
 import os
+from fnmatch import fnmatchcase
 from pathlib import Path
 import re
 import stat
@@ -101,10 +102,10 @@ def _scan(root):
 
 
 def select_tracks(config, query):
-    """Select exact files/directories or a literal substring of relative paths.
+    """Select exact paths, literal substrings, or case-insensitive * / ? masks.
 
     Files at directory depths zero through four are eligible. Selection is
-    case-sensitive for exact paths and case-insensitive for substring searches.
+    case-sensitive for exact paths and case-insensitive for searches and masks.
     A configured root may be a symlink; descendant links are never traversed.
     OneDrive dataless flags and allocated-block counts are deliberately ignored:
     only names and stat metadata are needed to use the independent NAS mirror.
@@ -150,6 +151,17 @@ def select_tracks(config, query):
             selected = [relative]
         elif relative in directories:
             selected = [path for path in tracks if not relative or path.startswith(relative + '/')]
+        elif '*' in relative or '?' in relative:
+            # Only * and ? are operators. Brackets and regex punctuation stay
+            # literal, as they do in ordinary substring searches.
+            pattern = relative.casefold().replace('[', '[[]')
+            def matches(path):
+                return (fnmatchcase(path.casefold(), pattern)
+                        or '/' not in relative and fnmatchcase(Path(path).name.casefold(), pattern))
+            for excluded, reason in rejected.items():
+                if matches(excluded):
+                    raise LibraryError(reason)
+            selected = [path for path in tracks if matches(path)]
         elif path_query:
             raise LibraryError('library_no_matches')
         else:

@@ -50,7 +50,32 @@ class LibraryTests(unittest.TestCase):
             self.add(name)
         self.assertEqual(self.paths('aLbUm'), ['album a.Mp3', 'ALBUM B.mp3', 'Album/z.FLAC'])
         self.assertEqual(self.paths('[1]'), ['Other/song[1].mp3'])
-        self.refused('song*', 'library_no_matches')
+        self.assertEqual(self.paths('song*'), ['Other/song2.mp3', 'Other/song[1].mp3'])
+
+    def test_masks_match_names_and_paths_without_treating_regex_as_operators(self):
+        for name in ('Album/ПЕСНЯ 1.FLAC', 'Album/Песня 2.flac', 'Other/Песня 3.mp3',
+                     'Other/song[1].mp3', 'Other/song2.mp3'):
+            self.add(name)
+        self.assertEqual(self.paths('песня *.flac'), ['Album/ПЕСНЯ 1.FLAC', 'Album/Песня 2.flac'])
+        self.assertEqual(self.paths('album/песня ?.flac'), ['Album/ПЕСНЯ 1.FLAC', 'Album/Песня 2.flac'])
+        self.assertEqual(self.paths(str(self.root / 'Album' / '*.FLAC')),
+                         ['Album/ПЕСНЯ 1.FLAC', 'Album/Песня 2.flac'])
+        self.assertEqual(self.paths('*song[1]*'), ['Other/song[1].mp3'])
+        self.assertEqual(self.paths('song?.mp3'), ['Other/song2.mp3'])
+        self.refused('(song|песня)', 'library_no_matches')
+
+    def test_exact_path_with_mask_characters_wins_and_mask_limit_is_not_truncated(self):
+        self.add('literal?.mp3')
+        self.add('literal1.mp3')
+        self.assertEqual(self.paths('literal?.mp3'), ['literal?.mp3'])
+        self.refused('literal*', 'library_too_many_matches', dict(self.config, max_matches=1))
+
+    def test_masks_cannot_escape_root_or_follow_links(self):
+        track = self.add('track.mp3')
+        (self.root / 'alias.mp3').symlink_to(track)
+        self.refused('ali*.mp3', 'library_symlink_not_allowed')
+        self.refused('../*.mp3', 'library_path_escape')
+        self.refused(str(self.parent / '*.mp3'), 'library_path_escape')
 
     def test_exact_file_directory_and_absolute_paths(self):
         track = self.add('Album/first.mp3')

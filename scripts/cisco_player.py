@@ -9,7 +9,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 COMMANDS = frozenset(('play', 'search', 'music', 'queue', 'pause', 'resume', 'stop',
                       'next', 'previous', 'clear-queue', 'seek', 'gain', 'mute', 'unmute'))
-EXAMPLES = ['play FILE_OR_QUERY_OR_URL [--all]', 'search QUERY', 'music', 'queue',
+EXAMPLES = ['play FILE_OR_QUERY_OR_URL', 'search QUERY', 'music', 'queue',
             'pause', 'resume', 'stop', 'next', 'previous', 'clear-queue',
             'seek SECONDS', 'gain PERCENT', 'mute', 'unmute']
 SESSION = re.compile(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}')
@@ -111,7 +111,6 @@ def resolve_tracks(args, config, gateway_factory):
         return [{'source': source_url(args.source), 'metadata': {}}]
     tracks = library_tracks(config, args.source)
     require(1 <= len(tracks) <= 50, 'invalid_music_selection')
-    require(len(tracks) == 1 or args.all, 'multiple_music_matches_use_all')
     require('home_assistant' in config, 'home_assistant_media_config_required')
     from cisco_media_source import resolve_media
     urls = resolve_media(gateway_factory(config['home_assistant'], args.timeout),
@@ -272,7 +271,7 @@ def display(result):
     if result.get('action') == 'search' and result['status'] == 'ok':
         for track in result['matches']:
             print(str(track['size_bytes']) + ' bytes  ' + track['relative_path'])
-        print(str(len(result['matches'])) + ' matches. Use play --all to queue multiple matches.')
+        print(str(len(result['matches'])) + ' matches. Play the same query to queue all matches.')
     elif 'player' in result:
         player = result['player']
         print('Music on phone ' + result['phone_id'] + ': ' + player['state'])

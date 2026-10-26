@@ -55,7 +55,7 @@ SCHEDULE_COMMANDS = ['schedule', 'timer [status]', 'timer start MINUTES [--repla
     'alarm on', 'alarm off']
 MUSIC_COMMANDS = frozenset(('play', 'search', 'music', 'queue', 'pause', 'resume', 'stop',
                             'next', 'previous', 'clear-queue', 'seek', 'gain', 'mute', 'unmute'))
-MUSIC_HELP = ['play FILE_OR_QUERY_OR_URL [--all] [--enqueue MODE]', 'search QUERY',
+MUSIC_HELP = ['play FILE_OR_QUERY_OR_URL [--enqueue MODE]', 'search QUERY',
               'music', 'queue', 'pause', 'resume', 'stop', 'next', 'previous',
               'clear-queue', 'seek SECONDS', 'gain PERCENT', 'mute', 'unmute']
 
@@ -1022,11 +1022,12 @@ def parser():
     msg = sub.add_parser('message'); msg.add_argument('text', nargs='?')
     msg.add_argument('--text-file'); msg.add_argument('--title', default='Notice')
     img = sub.add_parser('image'); img.add_argument('file'); img.add_argument('--title', default='Notice')
-    play = sub.add_parser('play', help='Play one library match, file or direct HTTP audio URL.',
-        description='Use the selected SIP line and the controlled player. Multiple library matches '
-                    'require --all; queuing several tracks is not atomic. No automatic mutation retries.')
+    play = sub.add_parser('play', help='Play all matching library tracks, a file or direct HTTP audio URL.',
+        description='Queue every match on the selected SIP line, in sorted order (at most 50). '
+                    'Use text or quoted * / ? filename masks. Queuing several tracks is not atomic. '
+                    'No automatic mutation retries.')
     play.add_argument('source', metavar='FILE_OR_QUERY_OR_URL')
-    play.add_argument('--all', action='store_true', help='Explicitly queue all matches, at most 50.')
+    play.add_argument('--all', action='store_true', help='Compatibility flag: all matches are already queued by default.')
     play.add_argument('--enqueue', choices=('replace', 'add', 'next', 'play'), default='replace')
     sub.add_parser('search', help='Search library filenames without opening audio or contacting phones.').add_argument('query')
     for name in ('music', 'queue'):
