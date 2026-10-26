@@ -27,6 +27,13 @@ the selected HA media-source root. Confirm the same track is visible in HA's
 media browser before configuring the CLI. This feature does not create a NAS
 mount, synchronize music, install Music Assistant or change network access.
 
+Mount the mirror read-only beneath an existing HA media directory, preserving
+the deployment's other volumes and mounts. Verify an actual file read from the
+HA container after deployment: resolving a media-source identifier alone does
+not prove that the audio is readable. The HA address used by the resolver must
+also be an exact approved gateway origin; another address for the same HA
+server is not implicitly approved.
+
 Keep the existing private gateway configuration and add or retain the optional
 `home_assistant` connection described in the
 [installation guide](cli-installation.md#7-add-optional-home-assistant-timers-and-alarms).
@@ -162,6 +169,11 @@ audible playback.
   seekable after its complete download and duration check. Larger FLAC files
   can stream, but are not seekable through this player. The limit is a cache
   threshold, not a blanket ban on larger files.
+- Embedded cover art can prevent the strict audio-only metadata probe from
+  identifying a duration. Playback still uses the existing audio decoder and
+  retains the supplied track title; duration and seeking remain unavailable
+  for that file. This fallback requires a gateway runtime containing the
+  optional-metadata fix, not just the updated CLI.
 - HA **2026.10** local-media signed URLs currently have a **24-hour** lifetime,
   longer than the gateway's two-hour session ceiling. Other providers may issue
   shorter-lived URLs. Do not store resolved URLs as a permanent music catalog;

@@ -361,7 +361,18 @@ class Decoder:
             if self.stop.is_set():
                 return
             if self.finite:
-                info = probe_file(self.file, self.format, self.stop)
+                try:
+                    info = probe_file(self.file, self.format, self.stop)
+                except MediaError as error:
+                    if str(error) != 'unsupported_source':
+                        raise
+                    if self.stop.is_set():
+                        return
+                    # Attached artwork may make FFprobe reject an otherwise
+                    # decodable audio file under the audio-only whitelist.
+                    # Metadata is optional; the unchanged decoder still checks
+                    # the audio. Failed/partial probes never authorize seeking.
+                    info = {}
                 self.duration = info.get('duration')
                 self.metadata(info)
                 self.file.seek(0)

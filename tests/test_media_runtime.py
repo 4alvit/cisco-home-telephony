@@ -7,6 +7,7 @@ import shutil
 import socket
 import struct
 import subprocess
+import tempfile
 import threading
 import time
 import unittest
@@ -119,6 +120,17 @@ class RuntimeValidation(unittest.TestCase):
         for fmt in ('hls', 'concat', 'mp3;id', 'image2'):
             with self.assertRaises(media.MediaError):
                 media.decoder_args(fmt)
+
+    def test_nonzero_probe_never_trusts_even_complete_metadata(self):
+        process = Mock()
+        process.stdout = io.BytesIO(b'{"format":{"duration":"120","tags":{"title":"Unverified"}}}')
+        process.stdin = None
+        process.wait.return_value = process.poll.return_value = 1
+        with tempfile.TemporaryFile() as file, \
+                patch.object(media.subprocess, 'Popen', return_value=process), \
+                patch.object(media.select, 'select', return_value=([process.stdout], [], [])):
+            with self.assertRaisesRegex(media.MediaError, 'unsupported_source'):
+                media.probe_file(file, 'mp3')
 
     def test_software_gain_and_mute_preserve_signed_pcm(self):
         data = struct.pack('<5h', -32768, -1000, 0, 1000, 32767)
@@ -325,6 +337,22 @@ class AudioRuntime(unittest.TestCase):
             '-metadata', 'title=Embedded title', '-metadata', 'artist=Embedded artist',
             '-f', 'mp3', 'pipe:1'], stderr=subprocess.DEVNULL, timeout=10)
 
+    def covered_audio(self, fmt, picture_codec):
+        """Generate real attached art; no personal music or binary fixtures."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            audio, picture, output = root / 'audio.mp3', root / 'picture', root / ('covered.' + fmt)
+            audio.write_bytes(self.mp3)
+            picture.write_bytes(subprocess.check_output([
+                'ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=16x16',
+                '-frames:v', '1', '-c:v', picture_codec, '-f', 'image2pipe', 'pipe:1'],
+                stderr=subprocess.DEVNULL, timeout=10))
+            subprocess.run(['ffmpeg', '-v', 'error', '-i', str(audio), '-i', str(picture),
+                '-map', '0:a:0', '-map', '1:v:0', '-c:a', 'copy' if fmt == 'mp3' else 'flac',
+                '-c:v', 'copy', '-disposition:v:0', 'attached_pic', str(output)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=10)
+            return output.read_bytes()
+
     def connect(self, *, streaming=False, body=None, headers=None, max_seconds=10):
         data = self.mp3 if body is None else body
         values = {'content-type': 'audio/mpeg'}
@@ -408,6 +436,86 @@ class AudioRuntime(unittest.TestCase):
         self.assertEqual(session.snapshot()['state'], 'idle')
         self.assertIsNotNone(session.decoder.process.poll())
         self.assertTrue(session.decoder.file.closed)
+
+    def test_attached_art_never_blocks_mp3_or_flac_audio(self):
+        for fmt, mime in (('mp3', 'audio/mpeg'), ('flac', 'audio/flac')):
+            for picture_codec in ('mjpeg', 'png'):
+                with self.subTest(format=fmt, picture=picture_codec):
+                    data = self.covered_audio(fmt, picture_codec)
+                    failures = []
+                    original_probe = media.probe_file
+
+                    def probe(*args, **kwargs):
+                        try:
+                            return original_probe(*args, **kwargs)
+                        except media.MediaError as error:
+                            failures.append(str(error))
+                            raise
+
+                    with patch.object(media, 'probe_file', side_effect=probe):
+                        session, peer = self.connect(body=data, headers={'content-type': mime})
+                        try:
+                            self.assertTrue(any(self.sounding(session, peer)))
+                            self.assertIsNone(session.snapshot()['error'])
+                            # FFprobe versions may differ in whether they open
+                            # excluded picture streams. Never trust a failed probe.
+                            if failures:
+                                self.assertIsNone(session.snapshot()['duration'])
+                                self.assertFalse(session.snapshot()['seekable'])
+                                self.assertEqual(session.snapshot()['title'], SOURCE['title'])
+                        finally:
+                            session.close()
+                            peer.close()
+
+    def test_rejected_probe_preserves_audio_but_never_enables_seek(self):
+        with patch.object(media, 'probe_file', side_effect=media.MediaError('unsupported_source')):
+            session, peer = self.connect()
+            self.assertTrue(any(self.sounding(session, peer)))
+            self.assertIsNone(session.snapshot()['duration'])
+            self.assertFalse(session.snapshot()['seekable'])
+            self.assertEqual(session.snapshot()['title'], SOURCE['title'])
+            with self.assertRaisesRegex(media.MediaError, 'seek_unavailable'):
+                session.control('seek', position=1)
+
+    def test_other_probe_failures_still_prevent_decoding(self):
+        errors = [media.MediaError('invalid_metadata'), media.MediaError('decoder_timeout'),
+                  FileNotFoundError('ffprobe')]
+        for error in errors:
+            with self.subTest(error=str(error)), patch.object(media, 'probe_file', side_effect=error):
+                session, peer = self.connect()
+                session.thread.join(3)
+                self.assertFalse(session.thread.is_alive())
+                self.assertEqual(session.snapshot()['state'], 'error')
+                self.assertIsNone(session.decoder.process)
+                self.assertTrue(session.decoder.file.closed)
+
+    def test_invalid_audio_still_fails_when_metadata_probe_is_optional(self):
+        session, peer = self.connect(body=b'not an audio file' * 100)
+        session.thread.join(3)
+        self.assertFalse(session.thread.is_alive())
+        self.assertEqual(session.snapshot()['state'], 'error')
+        self.assertEqual(session.snapshot()['error'], 'playback_failed')
+        self.assertIsNotNone(session.decoder.process)
+        self.assertTrue(session.decoder.file.closed)
+
+    def test_cancel_during_metadata_probe_never_starts_a_late_decoder(self):
+        entered, release = threading.Event(), threading.Event()
+
+        def blocked_probe(_file, _fmt, stop):
+            entered.set()
+            release.wait(3)
+            self.assertTrue(stop.is_set())
+            raise media.MediaError('session_ended')
+
+        with patch.object(media, 'probe_file', side_effect=blocked_probe), \
+                patch.object(media.subprocess, 'Popen') as process:
+            session, peer = self.connect()
+            self.assertTrue(entered.wait(1))
+            threading.Timer(.1, release.set).start()
+            session.close()
+            session.decoder.thread.join(2)
+            self.assertFalse(session.decoder.thread.is_alive())
+            process.assert_not_called()
 
     def test_streaming_pause_keeps_socket_and_never_claims_seek(self):
         session, peer = self.connect(streaming=True, headers={'content-length': '99999999999'})
