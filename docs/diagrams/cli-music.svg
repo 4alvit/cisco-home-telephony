@@ -21,7 +21,7 @@
     <g font-size="13.5">
       <text x="36" y="137">Names + size metadata</text>
       <text x="36" y="160">MP3 / FLAC; no file reads</text>
-      <text x="36" y="183">Explicit selection / --all</text>
+      <text x="36" y="183">All matches → queue</text>
       <text x="286" y="137">Resolves media-source IDs</text>
       <text x="286" y="160">Serves signed audio URLs</text>
       <text x="286" y="183">Uses the existing NAS copy</text>

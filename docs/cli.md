@@ -6,7 +6,9 @@ connections and optional Home Assistant scheduling. Server preparation is in
 [Asterisk setup and operations](asterisk-operations.md).
 
 For MP3/FLAC library selection, direct audio URLs and managed playback controls,
-see [CLI music](cli-music.md). Local names map to the existing HA/NAS copy;
+see [CLI music](cli-music.md). `play` queues every matching track by default;
+plain text and quoted `*` / `?` filename masks are supported. Local names map to
+the existing HA/NAS copy;
 the Mac does not upload or serve audio.
 
 `cisco LINE` reads live status and shows commands and concrete examples. When HA scheduling is configured, it also shows the current timer/alarm slots, their owning lines and HA timezone. A second numeric argument places a call **from the selected line**:
