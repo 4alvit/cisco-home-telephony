@@ -1,0 +1,16 @@
+{
+  "gateway_url": "http://192.168.50.10:18084",
+  "transport": "direct",
+  "token_file": "gateway-token.txt",
+  "home_assistant": {
+    "url": "http://192.168.50.11:8123",
+    "transport": "direct",
+    "entry_id": "REPLACE_WITH_LOADED_CISCO_ENTRY_ID",
+    "token_file": "home-assistant-token.txt"
+  },
+  "music": {
+    "directory": "~/Music",
+    "media_source_prefix": "media-source://media_source/music/Example",
+    "max_matches": 50
+  }
+}

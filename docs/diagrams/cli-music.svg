@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="280" viewBox="0 0 1000 280" role="img" aria-labelledby="title desc">
+  <title id="title">Cisco CLI music from a mirrored library</title>
+  <desc id="desc">The CLI selects local metadata. Home Assistant resolves and serves the NAS copy. The CLI controls the gateway directly using the exact SIP line and session. The gateway sends audio to the Cisco handset.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#475569"/></marker>
+  </defs>
+  <rect width="1000" height="280" rx="16" fill="#f8fafc"/>
+  <g font-family="Arial, Helvetica, sans-serif" fill="#0f172a">
+    <text x="22" y="31" font-size="22" font-weight="700">Your music library → the selected phone line</text>
+    <text x="22" y="55" font-size="14" fill="#475569">Existing HA/NAS delivery · no Mac web server · no audio upload</text>
+    <rect x="20" y="82" width="215" height="128" rx="12" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+    <rect x="270" y="82" width="215" height="128" rx="12" fill="#ccfbf1" stroke="#0f766e" stroke-width="2"/>
+    <rect x="520" y="82" width="215" height="128" rx="12" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+    <rect x="770" y="82" width="210" height="128" rx="12" fill="#ffedd5" stroke="#c2410c" stroke-width="2"/>
+    <g font-size="17" font-weight="700">
+      <text x="36" y="109">1  CLI library selection</text>
+      <text x="286" y="109">2  HA + NAS mirror</text>
+      <text x="536" y="109">3  Gateway player</text>
+      <text x="786" y="109">4  Cisco handset</text>
+    </g>
+    <g font-size="13.5">
+      <text x="36" y="137">Names + size metadata</text>
+      <text x="36" y="160">MP3 / FLAC; no file reads</text>
+      <text x="36" y="183">Explicit selection / --all</text>
+      <text x="286" y="137">Resolves media-source IDs</text>
+      <text x="286" y="160">Serves signed audio URLs</text>
+      <text x="286" y="183">Uses the existing NAS copy</text>
+      <text x="536" y="137">Fetches audio from HA</text>
+      <text x="536" y="160">Checks session + SIP line</text>
+      <text x="536" y="183">Queue / gain / playback</text>
+      <text x="786" y="137">Selected SIP line</text>
+      <text x="786" y="160">Mono 16 kHz audio</text>
+      <text x="786" y="183">Continues after CLI exits</text>
+    </g>
+    <g fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arrow)">
+      <path d="M238 146H264"/>
+      <path d="M488 146H514"/>
+      <path d="M738 146H764"/>
+      <path d="M126 214V231H626V216"/>
+    </g>
+    <text x="142" y="258" font-size="14" fill="#475569">CLI → gateway control directly: exact SIP line + session ID</text>
+    <text x="783" y="250" font-size="13" fill="#9a3412">50 items · 2-hour session</text>
+  </g>
+</svg>

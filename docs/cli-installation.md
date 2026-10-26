@@ -51,9 +51,11 @@ new random token on the client will not authorize it.
 
 ## 2. Install on macOS or Linux
 
-The CLI requires **Python 3.10 or later** and Git. It uses the Python standard
-library; `pip install`, a virtual environment, Docker and a running softphone
-are not needed for the client.
+The CLI requires **Python 3.10 or later** and Git. Ordinary commands, local
+music search and direct audio URLs use the Python standard library. Only
+direct Home Assistant media-source resolution additionally needs optional
+`aiohttp>=3.12,<4`; see [CLI music](cli-music.md) for its virtual environment
+setup. Docker and a running softphone are not needed for the client.
 
 If Python is missing on macOS, use the
 [official Python installer instructions](https://docs.python.org/3/using/mac.html).
@@ -79,6 +81,10 @@ Confirm that the printed commit is
 release, use its recorded full source commit and matching server image; the
 latest default branch is not a release pin.
 
+The Beta 25 pin above does **not** include the newer local-library music
+commands. To use them, select a reviewed newer revision containing the five
+CLI files described in [CLI music](cli-music.md).
+
 For an existing checkout, inspect `git status` and preserve uncommitted work
 before changing revisions. Use a clean checkout at the selected release's
 commit, or clone into a new directory as above. Do not reset or clean an
@@ -97,9 +103,10 @@ cisco 212 volume --help
 
 The link command intentionally refuses to replace an existing `cisco`. If that
 happens, inspect `command -v cisco` and `ls -l "$HOME/.local/bin/cisco"` before
-choosing which installation to keep. Keep `scripts/cisco.py` and
-`scripts/cisco_http.py` together in the checkout. Copying only `cisco.py` breaks
-its import and the Kubernetes worker.
+choosing which installation to keep. Keep the scripts together in the checkout.
+Music-capable revisions require all five: `cisco.py`, `cisco_http.py`,
+`cisco_player.py`, `cisco_library.py` and `cisco_media_source.py`, from the same
+revision. Copying only `cisco.py` breaks its imports and workers.
 
 Put the following line in your shell's startup file once: `~/.zshrc` for
 interactive zsh, `~/.bashrc` for interactive bash. For a macOS bash login shell,
@@ -395,7 +402,8 @@ before replacing an existing schedule.
 - **`cisco: command not found`:** reopen the terminal after adding PATH, or
   run `python3 /path/to/cisco-home-telephony/scripts/cisco.py --help`. Check the
   symlink still points at an existing checkout.
-- **`No module named cisco_http`:** restore both scripts together; do not
+- **`No module named cisco_http`:** restore the scripts from the same revision
+  together (all five for the music-capable CLI); do not
   install a similarly named package from a package index.
 - **Wrong Python or syntax error:** inspect `python3 --version` and
   `command -v python3`; the executable uses `/usr/bin/env python3`.
@@ -535,7 +543,7 @@ cisco 212 volume --help
 cisco 212
 ```
 
-The symlink follows the code in this checkout. Keep the two scripts at the same
+The symlink follows the code in this checkout. Keep all companion scripts at the same
 revision. If you deliberately maintain a branch checkout instead, `git pull
 --ff-only` applies only to that branch with its configured upstream; it does
 not select a verified release.
