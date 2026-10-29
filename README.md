@@ -2,9 +2,12 @@
 
 For an already configured hands-free phone, use the [daily-use guide](docs/voice-daily-use.md).
 For setup and opt-in voice operation, start with the [phone and CLI voice quickstart](docs/voice-quickstart.md).
-To install [Beta 25](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.25),
-use its matching source and wake-capable archive with the [gateway installation guide](docs/voice-gateway-deployment.md)
-and [CLI installation guide](docs/cli-installation.md).
+To install [Beta 28](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.28),
+use its CLI and announcement-service packages with the [CLI installation guide](docs/cli-installation.md);
+the wake-capable gateway image remains on
+[Beta 25](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.25)
+with the [gateway installation guide](docs/voice-gateway-deployment.md).
+Beta 28 does not replace firmware, TFTP, the gateway/wake image or Echo device software.
 For profiles available at every phone boot, [Beta 20](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.20)
 adds a TFTP-only image and the [permanent profile service](docs/daily-phone-boot.md).
 The TFTP service is separate from the PBX and voice gateway; keep its own

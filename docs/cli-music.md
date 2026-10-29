@@ -8,14 +8,13 @@ playback can continue after the CLI exits.
 
 ![Local library selection, Home Assistant resolution and exact-line playback](diagrams/cli-music.svg)
 
-These commands require a newer source revision containing the music modules
-listed below. The **Beta 25 installation pin in the main installation guide does
-not include these music commands**. Music itself needs five modules; a revision
-that also ships announcements and LifeSize controls contains [seven CLI
-files](cli.md#install-and-private-configuration), and every file must come from
-that one revision. The following source pin includes the CLI with default
-all-match playback, filename masks and the cover-art playback fix; it is a source
-revision, not a release tag:
+These commands ship with the current installation pin (Beta 28). A host still on
+the Beta 25 baseline needs a newer revision: music itself needs five modules, and
+a revision that also ships announcements and LifeSize controls contains [seven
+CLI files](cli.md#install-and-private-configuration), all from that one revision.
+The following source pin adds the CLI with default all-match playback, filename
+masks and the cover-art playback fix without changing the gateway; it is a
+source revision, not a release tag:
 
 ```bash
 git clone --no-checkout https://github.com/4alvit/cisco-home-telephony.git cisco-home-telephony-music

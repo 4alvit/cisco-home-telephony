@@ -144,7 +144,8 @@ metadata. After import, verify the final manifest and any configuration/rootfs
 mapping as described below; the converted configuration ID need not equal the
 exported Docker ID. Keep the receipt with the archive. This is the wake-capable image required for
 hands-free operation, not the lean manual voice image. Supply private
-profiles, credentials and wake models separately.
+profiles, credentials and wake models separately. Beta 28 is a CLI and
+announcement-service release; it does not replace this wake-capable image.
 
 The release's verified OCI conversion has manifest digest
 `sha256:d07f9beb047a9ffa891058da0755df4d9f5e27dfb09db85df6c96a0543d81fff`.
@@ -154,10 +155,10 @@ it is not the manifest digest. Verify your own import and retain its mapping.
 The separate `release-evidence-SHA256SUMS` covers release evidence, not the
 seven image assets; use their original `SHA256SUMS` for the image checks.
 
-For [physical volume controls](hardware-volume.md), pair this gateway with
-the Beta 25 CLI and **Cisco phone controls 0.8.0b2 or later** for the optional
-HA buttons. Existing [phone media players](phone-media-player.md) keep their
-separate digital gain. Preserve the configured PBX radio/player routes and
+For [physical volume controls](hardware-volume.md), pair this gateway with a CLI
+from Beta 25 or later (the current installation pin is Beta 28) and
+**Cisco phone controls 0.8.0b2 or later** for the optional HA buttons. Existing
+[phone media players](phone-media-player.md) keep their separate digital gain. Preserve the configured PBX radio/player routes and
 private player settings when upgrading; installing the HA component alone
 does not add them. Verify actual media state and playback separately.
 

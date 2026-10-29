@@ -69,25 +69,26 @@ python3 --version
 git --version
 mkdir -p "$HOME/src"
 cd "$HOME/src"
-git clone --branch v0.1.0-beta.25 --single-branch \
-  https://github.com/4alvit/cisco-home-telephony.git cisco-home-telephony-beta25
-cd cisco-home-telephony-beta25
+git clone --branch v0.1.0-beta.28 --single-branch \
+  https://github.com/4alvit/cisco-home-telephony.git cisco-home-telephony-beta28
+cd cisco-home-telephony-beta28
 git rev-parse HEAD
 ```
 
-This example selects [Beta 25](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.25).
+This example selects [Beta 28](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.28).
 Confirm that the printed commit is
-`213454385b7e75057f6b4d5db5a7b6a79922ccdd` before continuing. For another
+`62c763e7ee006e70107e55a78594d9b7828a69bc` before continuing. For another
 release, use its recorded full source commit and matching server image; the
 latest default branch is not a release pin.
 
-The Beta 25 pin above does **not** include the newer local-library music
-commands, ringer/call volume controls or announcements. Select a reviewed newer
-revision instead: Beta 27 carries the five-file CLI with music and volume
-commands, and Beta 28 adds the seven-file CLI plus the announcement service.
-Each release must be paired with its own assets; neither replaces the gateway or
-wake image. See [CLI music](cli-music.md) and
-[CLI announcements](cli-announcements.md) for their respective server setup.
+Beta 28 ships the seven CLI modules together with the announcement service, so
+the local-library music, ringer/call volume, LifeSize and announcement commands
+are included. The announcement service is a separate runtime: install its
+matching backend from the same release before enabling announcement routes, and
+keep private configuration unchanged. This release does **not** replace
+firmware, TFTP, the wake-capable gateway image or Echo device software. Beta 25
+and earlier pins do not contain these commands. See [CLI music](cli-music.md)
+and [CLI announcements](cli-announcements.md) for their respective server setup.
 
 For an existing checkout, inspect `git status` and preserve uncommitted work
 before changing revisions. Use a clean checkout at the selected release's
@@ -534,7 +535,7 @@ syntax error. An accepted call still needs state/audio verification. Full
 The installation above checks out a release tag in **detached HEAD** state.
 Do not use `git pull` there. Select the next release and its recorded full
 source commit, and check compatibility with the installed server before
-updating. The example below reselects Beta 25; substitute both values when
+updating. The example below reselects Beta 28; substitute both values when
 moving to another release.
 
 From the checkout, inspect local changes first. Preserve any uncommitted work
@@ -543,18 +544,18 @@ the selected tag and inspect its commit:
 
 ```bash
 git status --short
-target_release=v0.1.0-beta.25
+target_release=v0.1.0-beta.28
 git fetch --no-tags origin "refs/tags/$target_release:refs/tags/$target_release"
 git rev-parse "$target_release^{commit}"
 ```
 
-For Beta 25, the result must be
-`213454385b7e75057f6b4d5db5a7b6a79922ccdd`. If it differs from the selected
+For Beta 28, the result must be
+`62c763e7ee006e70107e55a78594d9b7828a69bc`. If it differs from the selected
 release's recorded commit, stop and resolve the mismatch. After verification,
 switch explicitly to that commit:
 
 ```bash
-git switch --detach 213454385b7e75057f6b4d5db5a7b6a79922ccdd
+git switch --detach 62c763e7ee006e70107e55a78594d9b7828a69bc
 ```
 
 If you used a separate clone, inspect and repoint your existing `cisco` symlink

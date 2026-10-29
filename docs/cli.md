@@ -74,8 +74,8 @@ Keep all seven CLI scripts together from the same revision:
 `cisco_media_source.py`, `cisco_lifesize.py` and `cisco_announce.py`.
 The symlink follows repository updates. If `cisco`
 already exists, inspect it before changing the link. Add the PATH line to your
-shell startup file if needed. The older Beta 25 installation pin does not
-contain the new music commands.
+shell startup file if needed. The Beta 28 installation pin includes these music
+commands; a Beta 25 or older checkout does not.
 
 The default configuration is `~/.config/cisco-home/cli.json`. Override it with `--config PATH` or `CISCO_CONFIG`. Configuration and token files must be owned by your user, have no group/other permissions, and must not be symlinks. Duplicate JSON field names are rejected, including inside nested objects; each setting must have one unambiguous value. Use a private parent directory as well:
 
@@ -114,8 +114,8 @@ These are synthetic numbers. Generic calling is a **callback**, not a remote
 speakerphone key: the selected endpoint must answer first. Hardware answer,
 volume, music and display commands remain unavailable unless a separate native
 driver implements them. The configured LifeSize driver keeps precedence. The
-older Beta 25 CLI and gateway do not contain this optional endpoint API; install
-both from the same reviewed revision containing these changes. See the
+Beta 25 and earlier CLI and gateway do not contain this optional endpoint API;
+install both from the same reviewed revision containing these changes. See the
 [HA package](endpoint-home-assistant.md) for corresponding dashboard controls.
 
 ## Commands and scope
