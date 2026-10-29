@@ -115,8 +115,15 @@ def parse_calls(rows):
     calls, seen = [], set()
     for row in rows:
         fields = next(csv.reader([row]))
-        require(len(fields) == 7, 'invalid_lifesize_calls')
-        call_id, conference, state, incoming, media_type, number, _name = fields
+        # The original API has seven columns; Phone 4.5.2 appends four.
+        require(len(fields) in (7, 11), 'invalid_lifesize_calls')
+        if len(fields) == 11:
+            require(fields[7] in ('Yes', 'No') and fields[8] in
+                    ('sip', 'h323', 'h323gw', 'isdn', 'pstn')
+                    and fields[9] in ('Yes', 'No') and re.fullmatch(
+                        r'[0-9]{1,6}:[0-5][0-9]:[0-5][0-9]', fields[10]),
+                    'invalid_lifesize_calls')
+        call_id, conference, state, incoming, media_type, number, _name = fields[:7]
         require(re.fullmatch(r'[1-9][0-9]{0,9}', call_id) and call_id not in seen
                 and conference.isdigit() and state in
                 ('Dialing', 'Ringing', 'Connected', 'Terminating', 'Ringback')

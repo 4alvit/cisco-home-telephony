@@ -94,7 +94,7 @@ class LifeSizeTests(unittest.TestCase):
         self.assertFalse(any(c.startswith('control') for c in commands))
 
     def test_hangup_targets_exact_observed_call_never_all(self):
-        call = '12,2,Connected,No,Audio,777,Example'
+        call = '12,2,Connected,No,Audio,sip:777,Example,No,sip,No,0:00:02'
         code, result, commands, _ = self.invoke(['222', 'hangup'], calls=[call])
         self.assertEqual(code, 0)
         self.assertEqual(commands[-1], 'control call hangup 12')
@@ -177,6 +177,11 @@ class LifeSizeTests(unittest.TestCase):
                      ['1,2,Connected,No,Audio,777,'] * 2):
             with self.subTest(rows=rows), self.assertRaises(ls.LifeSizeError):
                 ls.parse_calls(rows)
+
+    def test_phone_452_extended_status_has_same_exact_call_identity(self):
+        calls = ls.parse_calls(['7,1,Connected,No,Audio,sip:600,600,No,sip,No,0:00:02'])
+        self.assertEqual(calls, [{'id': '7', 'state': 'Connected', 'incoming': False,
+                                 'number': 'sip:600'}])
 
     def test_ssh_errors_do_not_leak_remote_output(self):
         phone = ls.Phone(self.devices['222'], 5)
