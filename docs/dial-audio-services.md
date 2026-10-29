@@ -37,6 +37,10 @@ The worker sets `DIALAUDIOSTATUS=ok` after successful playback. Deployments can 
 
 To expose the numbers in the existing Cisco directory and CLI, merge them into the gateway's `dial_allowlist` and `services`, with English labels and kind `automation`. Preserve all existing entries, phone identities, tokens, media settings, and unrelated volume mounts. This is an additive custom route deployment; retain these additions when regenerating configuration.
 
+On deployments with staged voice configuration, the running gateway may read `/run/voice/.local/config/gateway.json` from the `voice-inputs` Secret. Updating only the older `/config` mount will not update the running directory. Inspect the deployment arguments and keep both copies consistent while preserving the other voice-input files.
+
+Add exact `555` and `777` entries with `Timeout="0"` to the existing TFTP `dialplan.xml` for automatic dialing after the third digit. Preserve all other patterns. Cisco phones fetch this file on profile reload or boot; until then, use the **Dial** softkey or the directory entry. Ordinary SIP clients such as LifeSize do not use this Cisco XML file.
+
 ## Behavior and checks
 
 Audio is decoded into mono 16 kHz signed PCM and played as `.sln16`. Asterisk can negotiate G.722 with wideband phones and transcode for narrowband endpoints. Source-file stereo and sample rates above 16 kHz do not change the capabilities of the negotiated telephone codec.
