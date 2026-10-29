@@ -54,11 +54,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 10001 asterisk && useradd -u 10001 -g 10001 -M -s /usr/sbin/nologin asterisk
 COPY --from=build /stage/ /
-COPY radio.py phone_services.py radio-catalog.json /var/lib/asterisk/agi-bin/
+COPY radio.py phone_services.py dial_audio.py radio-catalog.json /var/lib/asterisk/agi-bin/
 COPY phone_gateway.py /usr/local/lib/cisco-phone-gateway.py
 COPY phone_apps.py phone_apps_ha.py phone_camera_preview.py phone_voice_display.py /usr/local/lib/
 COPY phone_player.py media_runtime.py radio.py radio-catalog.json /usr/local/lib/
 RUN chmod 0555 /var/lib/asterisk/agi-bin/radio.py /var/lib/asterisk/agi-bin/phone_services.py \
+    /var/lib/asterisk/agi-bin/dial_audio.py \
     && chmod 0444 /var/lib/asterisk/agi-bin/radio-catalog.json
 RUN mkdir -p /run/asterisk /var/lib/asterisk/db /var/spool/asterisk /var/log/asterisk \
     && chown -R 10001:10001 /run/asterisk /var/lib/asterisk /var/spool/asterisk /var/log/asterisk

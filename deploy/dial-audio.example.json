@@ -1,0 +1,18 @@
+{
+  "credentials_file": "/etc/asterisk/phone-services.conf",
+  "local_lines": ["201", "202", "209"],
+  "services": {
+    "555": {
+      "kind": "clock",
+      "timezone": "America/Los_Angeles",
+      "language": "en",
+      "engine_id": "tts.example",
+      "voice": "example_voice"
+    },
+    "777": {
+      "kind": "media",
+      "path": "/media/music/Example%20Track.mp3",
+      "max_seconds": 600
+    }
+  }
+}
