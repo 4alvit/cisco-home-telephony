@@ -82,8 +82,11 @@ release, use its recorded full source commit and matching server image; the
 latest default branch is not a release pin.
 
 The Beta 25 pin above does **not** include the newer local-library music
-commands or announcements. To use them, select a reviewed newer revision
-containing the seven CLI files listed below. See [CLI music](cli-music.md) and
+commands, ringer/call volume controls or announcements. Select a reviewed newer
+revision instead: Beta 27 carries the five-file CLI with music and volume
+commands, and Beta 28 adds the seven-file CLI plus the announcement service.
+Each release must be paired with its own assets; neither replaces the gateway or
+wake image. See [CLI music](cli-music.md) and
 [CLI announcements](cli-announcements.md) for their respective server setup.
 
 For an existing checkout, inspect `git status` and preserve uncommitted work

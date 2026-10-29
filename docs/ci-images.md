@@ -105,6 +105,26 @@ checks dependencies and synthetic media with networking disabled; it does not
 prove that a live phone or Home Assistant pipeline works. Follow the separate
 [voice pilot runbook](voice-k3s.md) for runtime and device acceptance.
 
+## Optional wake image export
+
+The wake runtime has its own workflow because it layers private-model staging
+over the manual voice image. Dispatch its single `export_image` input:
+
+```sh
+gh workflow run voice-wake.yml --repo 4alvit/cisco-home-telephony \
+  --ref main -f export_image=true
+gh run list --repo 4alvit/cisco-home-telephony --workflow voice-wake.yml --limit 5
+```
+
+Download the `verified-voice-wake-amd64-COMMIT_SHA` artifact into another fresh
+private directory and verify it like the voice export: `SHA256SUMS`,
+`source.json`, the configuration ID in `image.json`, `linux/amd64`, and a receipt
+whose `smoke_passed` is true with `private_models_included` false. The archive is
+`voice-wake-amd64.tar.gz`, and the workflow refuses a total at or above 350 MiB.
+It contains public code only; wake models stay in the private volume described
+in [the wake runtime guide](voice-wake-runtime.md). Exporting a wake image does
+not replace the gateway or TFTP artifacts already installed.
+
 For an internal HTTP registry, avoid changing the Docker daemon by extracting
 the `.tar.gz` and using `skopeo copy --dest-tls-verify=false
 docker-archive:/absolute/path/asterisk-amd64.tar

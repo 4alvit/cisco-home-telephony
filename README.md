@@ -120,8 +120,8 @@ conversion to MPP is not required.
 - [Internet radio, timers and weekday alarms](docs/radio-and-alarms.md), including
   ten station extensions with toddler music and lullabies, and alerts
   that ring until manually stopped.
-- [Cisco command line](docs/cli.md): `cisco 212` shows status; `cisco 212 220`
-  calls from line 212 to 220. `cisco 212 intercom 220` connects two Cisco phones
+- [Cisco command line](docs/cli.md): `cisco 213` shows status; `cisco 213 220`
+  calls from line 213 to 220. `cisco 213 intercom 220` connects two Cisco phones
   with one-time speaker answer. Includes pickup, speaker toggle, DND, auto-answer,
   timers, weekday alarms, messages and photos, with private local configuration.
 - [LifeSize Phone controls](docs/cli-lifesize.md): the same CLI can use native

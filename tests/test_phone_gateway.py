@@ -275,6 +275,33 @@ class GatewayTests(unittest.TestCase):
             self.request('dial', number='600')
         self.assertEqual(self.send.call_count, 1)
 
+    def test_preflight_refusal_releases_the_key_for_a_same_request_retry(self):
+        FakeAMI.endpoints = {'201': 'Unavailable', '202': 'Unavailable'}
+        with self.assertRaisesRegex(gateway.Refused, 'phone_unavailable'):
+            self.request('dial', number='600')
+        FakeAMI.endpoints = {'201': 'Not in use', '202': 'Not in use'}
+        result = self.request('dial', number='600')
+        self.assertEqual(result['status'], 'accepted')
+        self.assertEqual(self.send.call_count, 2)
+
+    def test_ambiguous_transport_failure_still_keeps_the_key_claimed(self):
+        self.send.side_effect = OSError('connection interrupted')
+        with self.assertRaises(OSError):
+            self.request('dial', number='600')
+        with self.assertRaisesRegex(gateway.Refused, 'previous_action_outcome_unknown'):
+            self.request('dial', number='600')
+        self.assertEqual(self.send.call_count, 1)
+
+    def test_motion_admission_reports_unexpected_failures_without_leaking_details(self):
+        stream = io.StringIO()
+        with patch.object(self.server, 'reserve_motion_image',
+                          side_effect=RuntimeError('storage offline')):
+            with patch('sys.stderr', stream):
+                value = self.server.motion_image_admission(self.server.phones['201'])
+        self.assertEqual(value, {'eligible': False, 'reason': 'voice_state_unavailable'})
+        self.assertIn('RuntimeError', stream.getvalue())
+        self.assertNotIn('storage offline', stream.getvalue())
+
     def test_outgoing_ring_is_not_incoming_ringing(self):
         FakeAMI.channels = [{'Channel': 'PJSIP/201-abc', 'Uniqueid': '123.4', 'ChannelStateDesc': 'Ring'}]
         with self.assertRaisesRegex(gateway.Refused, 'phone_not_ringing'):

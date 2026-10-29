@@ -47,8 +47,15 @@ def app_module(name):
 
 
 class Refused(Exception):
-    def __init__(self, reason, status=409):
+    # Proven to be raised before any phone or PBX write, so replaying the same
+    # idempotency key cannot duplicate an externally visible action. Only set as
+    # an instance attribute when it is true, keeping the refusal payload stable.
+    before_mutation = False
+
+    def __init__(self, reason, status=409, *, before_mutation=False):
         self.reason, self.status = reason, status
+        if before_mutation:
+            self.before_mutation = True
 
 
 class PhoneCommandRejected(Refused):
@@ -58,9 +65,9 @@ class PhoneCommandRejected(Refused):
         super().__init__('phone_rejected_action', 502)
 
 
-def require(value, reason, status=409):
+def require(value, reason, status=409, *, before_mutation=False):
     if not value:
-        raise Refused(reason, status)
+        raise Refused(reason, status, before_mutation=before_mutation)
 
 
 def constant(left, right):
@@ -753,7 +760,7 @@ class Gateway:
                     raise Refused(error.reason, error.status) from None
             else:
                 require(not any(p.phone_id == phone['id'] for p in self._voice_profiles),
-                        'voice_state_unavailable', 503)
+                        'voice_state_unavailable', 503, before_mutation=True)
             reservations.enter_context(self.reserve_phone_controls(phone))
             yield
 
@@ -768,7 +775,10 @@ class Gateway:
                 'voice_state_unavailable', 'hands_free_owner_unavailable',
                 'hands_free_state_unavailable', 'voice_control_closed'} else 'voice_state_unavailable'
             return {'eligible': False, 'reason': reason}
-        except Exception:
+        except Exception as error:
+            # Keep the phone-facing answer stable but leave a diagnosable trace:
+            # a storage or OS fault must not look like an ordinary busy phone.
+            print('Motion admission check failed: ' + type(error).__name__, file=sys.stderr)
             return {'eligible': False, 'reason': 'voice_state_unavailable'}
 
     def close_voice(self, *, uncertain=False):
@@ -1559,7 +1569,9 @@ class Gateway:
                 result.update(status='accepted', action_id=key)
             except Refused as error:
                 # Keep ambiguous I/O outcomes claimed; a retry must not dial again.
-                if error.status < 500:
+                # A refusal that happened before every phone and PBX write releases
+                # the key, so a transient preflight result cannot burn it for 30 days.
+                if error.status < 500 or error.before_mutation:
                     self.db.execute('DELETE FROM operations WHERE key=?', (key,))
                     self.db.commit()
                 raise
@@ -1636,7 +1648,7 @@ class Gateway:
                     self.reconcile_alerts(ami, current)
                 return {'alert_id': alert_id, 'state': next(row['state'] for row in self.alerts() if row['id'] == alert_id)}
             require(all(endpoints.get(endpoint) not in (None, 'Unavailable', 'Invalid') for endpoint in phone['lines']),
-                    'phone_unavailable', 503)
+                    'phone_unavailable', 503, before_mutation=True)
             owned = own_channels(phone, channels)
             if action in ('message', 'image', 'motion_image'):
                 require(not owned, 'phone_busy')

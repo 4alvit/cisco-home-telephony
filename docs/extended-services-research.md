@@ -241,7 +241,7 @@ with complete channel cleanup afterward. No physical phone was called and no
 audio was recorded. The local receive-loss estimate (`lp`) increased from 42 to
 91, so connectivity passed but clean audio quality has **not** been established.
 The final RTT was 0.15451 seconds (154.51 ms), a delay measurement rather than a
-loss percentage. See the [pilot evidence and Asterisk source interpretation](external-sip.md#observed-sip2sip-pilot-and-quality-limit)
+loss percentage. See the [pilot evidence and Asterisk source interpretation](external-sip.md#earlier-sip2sip-pilot-and-quality-limit)
 before treating a successful call as media-quality acceptance.
 
 ### France: Linphone / Belledonne Communications
