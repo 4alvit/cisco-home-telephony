@@ -30,6 +30,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Verify documentation links and anchors
+        run: python3 scripts/verify_docs_links.py
       - name: Install public test dependencies
         run: |
           python3 -m venv .venv

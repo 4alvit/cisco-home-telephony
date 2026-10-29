@@ -242,9 +242,13 @@ accepted codec set requires new fixtures and a fresh security review.
 ## Required pull-request checks
 
 The required contexts are `validate` and `Wake gate`, both emitted by GitHub
-Actions. `validate` runs for every pull request. The wake workflow also always
-runs: its lightweight scope job compares the exact event commits with complete
-Git history, then builds the optional image only when an input changed.
+Actions. `validate` runs for every pull request. Before the test suite,
+`scripts/verify_docs_links.py` resolves every repository-local link and heading
+anchor in the tracked Markdown files, so a moved file or reworded heading fails
+without waiting for a build. External URLs are out of scope. The wake workflow
+also always runs: its lightweight scope job compares the exact event commits
+with complete Git history, then builds the optional image only when an input
+changed.
 
 For pull requests, scope uses the unique merge base of the event's exact base
 and head, and verifies that the checked-out test merge contains both. For push
