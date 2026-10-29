@@ -1219,8 +1219,9 @@ def parser():
     msg.add_argument('--text-file'); msg.add_argument('--title', default='Notice')
     say = sub.add_parser('say', aliases=['announce', 'voicemsg'],
         help='Speak with the configured HA voice on one phone, a comma-list or @group.',
-        description='Generate one finite announcement and answer its exact incoming calls once. '
-                    'The server ends playback calls automatically. Persistent phone preferences are preserved.')
+        description='Generate one finite announcement. Cisco and LifeSize use exact incoming SIP calls; '
+                    'configured Assist satellites receive guarded direct audio. '
+                    'Persistent phone preferences are preserved. Unknown outcomes are not retried.')
     say.add_argument('text', nargs='*')
     say.add_argument('--text-file')
     for name in ('say-status', 'say-stop'):

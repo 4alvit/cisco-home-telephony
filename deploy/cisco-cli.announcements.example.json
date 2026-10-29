@@ -11,7 +11,15 @@
     },
     "groups": {
       "downstairs": ["201", "203", "222"],
-      "conference": ["222"]
+      "conference": ["222"],
+      "speakers": ["223", "224", "225", "226"],
+      "all": ["201", "203", "222", "223", "224", "225", "226"]
+    },
+    "targets": {
+      "223": {"driver": "ha_satellite", "phone_id": "223"},
+      "224": {"driver": "ha_satellite", "phone_id": "224"},
+      "225": {"driver": "ha_satellite", "phone_id": "225"},
+      "226": {"driver": "ha_satellite", "phone_id": "226"}
     }
   }
 }

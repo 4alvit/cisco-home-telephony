@@ -1,4 +1,4 @@
-"""Finite HA-voice announcements with one-shot phone answers."""
+"""Finite HA-voice announcements through SIP or guarded Assist satellites."""
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 import hashlib
@@ -15,7 +15,8 @@ COMMANDS = frozenset(('say', 'announce', 'voicemsg', 'say-status', 'say-stop'))
 HELP = ['say TEXT [--text-file FILE]', 'voicemsg TEXT', 'say-status JOB_ID', 'say-stop JOB_ID']
 MAX_LINES, MAX_TEXT, WAIT_SECONDS = 16, 1000, 240
 JOB_STATES = frozenset(('accepted', 'running', 'stopping', 'finished', 'stopped', 'failed', 'dry_run'))
-RECIPIENT_STATES = frozenset(('queued', 'ringing', 'playing', 'completed', 'skipped', 'failed', 'stopping', 'stopped'))
+RECIPIENT_STATES = frozenset(('queued', 'ringing', 'submitting', 'submitted', 'playing',
+                              'completed', 'skipped', 'failed', 'stopping', 'stopped', 'unknown'))
 TERMINAL = frozenset(('finished', 'stopped', 'failed', 'dry_run'))
 
 class AnnouncementError(Exception):
@@ -36,7 +37,7 @@ def validate_lines(lines):
 
 def validate_config(value, path, read_file):
     require(isinstance(value, dict) and set(value) <= {
-        'gateway_url', 'token_file', 'transport', 'kubectl', 'groups'}, 'invalid_announcement_config')
+        'gateway_url', 'token_file', 'transport', 'kubectl', 'groups', 'targets'}, 'invalid_announcement_config')
     result = dict(value)
     result['gateway_url'] = announcement_url(value['gateway_url'])
     require(value.get('transport') == 'kubectl', 'announcements_require_kubectl_transport')
@@ -64,6 +65,14 @@ def validate_config(value, path, read_file):
                 'invalid_announcement_group_name')
         validate_lines(lines)
     result['groups'] = groups
+    targets = value.get('targets', {})
+    require(isinstance(targets, dict) and len(targets) <= 128, 'invalid_announcement_target_config')
+    for line, target in targets.items():
+        require(isinstance(line, str) and re.fullmatch(r'2[0-9]{2}', line)
+                and isinstance(target, dict) and set(target) == {'driver', 'phone_id'}
+                and target['driver'] == 'ha_satellite' and target['phone_id'] == line,
+                'direct_announcement_requires_one_extension_per_device')
+    result['targets'] = targets
     result['api'] = 'announcements'
     return result
 
@@ -79,14 +88,21 @@ def target_lines(target, config):
 
 
 def known_targets(lines, config, data, inventory_validator):
-    phones = inventory_validator(data)
+    phones = inventory_validator(data) if data is not None else []
+    direct = config.get('announcements', {}).get('targets', {})
     selected, physical = {}, set()
     for line in lines:
         phone = next((p for p in phones if line in p['lines']), None)
         native = config.get('lifesize', {}).get(line)
-        require(not (phone and native), 'ambiguous_announcement_target')
-        require(phone is not None or native is not None, 'unknown_announcement_target')
-        identity = ('cisco', phone['id']) if phone else ('lifesize', native['host'])
+        satellite = direct.get(line)
+        require(sum(item is not None for item in (phone, native, satellite)) <= 1,
+                'ambiguous_announcement_target')
+        require(phone is not None or native is not None or satellite is not None,
+                'unknown_announcement_target')
+        if satellite is not None:
+            identity = ('ha_satellite', satellite['phone_id'])
+        else:
+            identity = ('cisco', phone['id']) if phone else ('lifesize', native['host'])
         require(identity not in physical, 'duplicate_announcement_phone')
         physical.add(identity)
         selected[line] = {'driver': identity[0], 'phone_id': phone['id'] if phone else line}
@@ -107,7 +123,7 @@ def job_id(key):
     return hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
-def validate_job(value, identifier, lines):
+def validate_job(value, identifier, lines, expected_routes=None):
     require(isinstance(value, dict) and value.get('id') == identifier
             and value.get('status') in JOB_STATES, 'invalid_announcement_response')
     require(sorted(validate_lines(value.get('lines')), key=int) == lines, 'announcement_targets_changed')
@@ -123,6 +139,10 @@ def validate_job(value, identifier, lines):
         require(isinstance(item, dict) and item.get('line') in lines and item['line'] not in seen
                 and item.get('status') in RECIPIENT_STATES, 'invalid_announcement_recipient')
         line = item['line']; seen.add(line)
+        driver = item.get('driver', 'sip')
+        require(driver in ('sip', 'ha_satellite'), 'invalid_announcement_driver')
+        if expected_routes is not None:
+            require(driver == expected_routes[line], 'announcement_route_changed')
         require(isinstance(item.get('phone_id'), str) and re.fullmatch(r'2[0-9]{2}', item['phone_id']),
                 'invalid_announcement_phone')
         channel, unique = item.get('channel'), item.get('uniqueid')
@@ -130,16 +150,21 @@ def validate_job(value, identifier, lines):
                 and re.fullmatch(r'PJSIP/' + line + r'-[A-Za-z0-9]+', channel)
                 and isinstance(unique, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,160}', unique),
                 'invalid_announcement_call')
+        if driver == 'ha_satellite':
+            require(item['phone_id'] == line and channel is None and unique is None
+                    and item['status'] != 'ringing', 'invalid_direct_announcement_state')
         caller = item.get('caller_id')
         require(isinstance(caller, str) and re.fullmatch(r'[0-9]{3,32}', caller),
                 'invalid_announcement_caller')
         reason = item.get('reason')
         require(reason is None or isinstance(reason, str) and re.fullmatch(r'[a-z][a-z0-9_]{0,95}', reason),
                 'invalid_announcement_reason')
-        if item['status'] in ('ringing', 'playing'):
+        if driver == 'sip' and item['status'] in ('ringing', 'playing'):
             require(channel is not None, 'missing_announcement_call')
-        result.append({key: item.get(key) for key in ('line', 'phone_id', 'status', 'channel',
-                                                     'uniqueid', 'caller_id', 'reason')})
+        public = {key: item.get(key) for key in ('line', 'phone_id', 'status', 'channel',
+                                                'uniqueid', 'caller_id', 'reason')}
+        public['driver'] = driver
+        result.append(public)
     return {'id': identifier, 'status': value['status'], 'lines': lines, 'recipients': result,
             'expires_at': expires, 'duration_seconds': duration}
 
@@ -161,6 +186,8 @@ def answer_once(config, timeout, identifier, lines, recipient, target, gateway_f
                 inventory_validator, cancelled, prepared=None):
     attempted = False
     try:
+        require(target['driver'] in ('cisco', 'lifesize')
+                and recipient.get('driver', 'sip') == 'sip', 'direct_announcement_has_no_sip_answer')
         service = gateway_factory(config['announcements'], timeout)
         line = recipient['line']
         if target['driver'] == 'lifesize':
@@ -250,31 +277,35 @@ def run(args, config, *, gateway_factory, inventory_validator, read_file, clock=
         require('announcements' in config, 'announcement_config_required')
         private = config['announcements']
         lines = target_lines(args.extension, private)
+        routes = {line: 'ha_satellite' if line in private.get('targets', {}) else 'sip' for line in lines}
         service = gateway_factory(private, args.timeout)
         if args.command in ('say-status', 'say-stop'):
             identifier = args.job_id
             require(re.fullmatch(r'[0-9a-f]{32}', identifier), 'invalid_announcement_id')
-            latest = validate_job(service.request('/v1/announcements/' + identifier), identifier, lines)
+            latest = validate_job(service.request('/v1/announcements/' + identifier), identifier, lines, routes)
             if args.command == 'say-status':
-                return latest, int(latest['status'] == 'failed')
+                return latest, int(latest['status'] == 'failed' or any(
+                    p['status'] == 'unknown' for p in latest['recipients']))
             if args.dry_run:
                 return dict(latest, status='dry_run', action='stop'), 0
             if latest['status'] not in TERMINAL:
                 dispatched = True
-                latest = validate_job(service.request('/v1/announcements/' + identifier + '/stop', {}), identifier, lines)
-            return latest, 0
+                latest = validate_job(service.request('/v1/announcements/' + identifier + '/stop', {}), identifier, lines, routes)
+            return latest, int(any(p['status'] == 'unknown' for p in latest['recipients']))
         text = read_text(args, read_file)
-        data = gateway_factory(config, args.timeout).request('/v1/phones')
+        data = (gateway_factory(config, args.timeout).request('/v1/phones')
+                if any(driver == 'sip' for driver in routes.values()) else None)
         targets = known_targets(lines, config, data, inventory_validator)
         key = args.idempotency_key or 'say-' + secrets.token_hex(16)
         require(isinstance(key, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{8,128}', key),
                 'invalid_idempotency_key')
         identifier = job_id(key)
-        body = {'idempotency_key': key, 'lines': lines, 'text': text, 'dry_run': args.dry_run}
+        body = {'idempotency_key': key, 'lines': lines, 'text': text, 'dry_run': args.dry_run,
+                'expected_routes': routes}
         prepared = {} if args.dry_run else prepare_native(config, targets, args.timeout, connections)
         if not args.dry_run:
             dispatched = True
-        latest = validate_job(service.request('/v1/announcements', body), identifier, lines)
+        latest = validate_job(service.request('/v1/announcements', body), identifier, lines, routes)
         if args.dry_run:
             require(latest['status'] == 'dry_run', 'announcement_dry_run_not_confirmed')
             return latest, 0
@@ -286,7 +317,8 @@ def run(args, config, *, gateway_factory, inventory_validator, read_file, clock=
                     require(clock() < deadline, 'announcement_wait_timeout')
                     for recipient in latest['recipients']:
                         line = recipient['line']
-                        if recipient['status'] == 'ringing' and line not in futures:
+                        if (recipient['status'] == 'ringing' and targets[line]['driver'] != 'ha_satellite'
+                                and line not in futures):
                             futures[line] = pool.submit(answer_once, config, args.timeout, identifier, lines,
                                 recipient, targets[line], gateway_factory, inventory_validator, cancelled,
                                 prepared.get(line))
@@ -294,13 +326,14 @@ def run(args, config, *, gateway_factory, inventory_validator, read_file, clock=
                         if future.done():
                             answers[line] = future.result()
                     sleep(.5)
-                    latest = validate_job(service.request('/v1/announcements/' + identifier), identifier, lines)
+                    latest = validate_job(service.request('/v1/announcements/' + identifier), identifier, lines, routes)
             finally:
                 cancelled.set()
             for line, future in futures.items():
                 answers[line] = future.result()
         latest['answers'] = list(answers.values())
-        latest['note'] = 'Playback results come from Asterisk. They do not prove that a person heard the message.'
+        latest['note'] = ('Playback results come from the configured delivery driver. '
+                          'They do not prove that a person heard the message.')
         failure = latest['status'] in ('failed', 'stopped') or any(
             p['status'] != 'completed' for p in latest['recipients'])
         return latest, int(failure)

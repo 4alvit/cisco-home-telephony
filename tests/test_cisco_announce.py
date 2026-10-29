@@ -36,6 +36,21 @@ def job(lines=('212',), status='finished', recipient_status='completed'):
                 'caller_id': '812345678', 'reason': None} for line in lines]}
 
 
+def direct_configuration():
+    config = configuration()
+    config['announcements']['targets'] = {
+        line: {'driver': 'ha_satellite', 'phone_id': line} for line in ('223', '224', '225', '226')}
+    config['announcements']['groups']['speakers'] = ['223', '224', '225', '226']
+    return config
+
+
+def direct_job(lines=('223',), status='finished', recipient_status='completed'):
+    result = job(lines, status, recipient_status)
+    for recipient in result['recipients']:
+        recipient.update(driver='ha_satellite', channel=None, uniqueid=None)
+    return result
+
+
 class AnnouncementCLITests(unittest.TestCase):
     def invoke(self, arguments, *, reply=None, failure=None, config=None):
         cfg = configuration() if config is None else config
@@ -134,6 +149,46 @@ class AnnouncementCLITests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(result['recipients'][0]['reason'], 'busy')
 
+    def test_direct_group_uses_one_number_per_device_and_no_cisco_inventory(self):
+        lines = ('223', '224', '225', '226')
+        with patch.object(announce, 'answer_once') as answer, patch.object(native, 'Phone') as phone:
+            code, result, requests = self.invoke(['@speakers', 'voicemsg', 'Example'],
+                reply=direct_job(lines), config=direct_configuration())
+        self.assertEqual(code, 0)
+        self.assertEqual(result['lines'], list(lines))
+        self.assertFalse(any(path == '/v1/phones' for _, path, _ in requests))
+        self.assertEqual(requests[0][2]['expected_routes'], {line: 'ha_satellite' for line in lines})
+        answer.assert_not_called()
+        phone.assert_not_called()
+
+    def test_direct_dry_run_never_opens_phone_or_answers(self):
+        with patch.object(announce, 'prepare_native') as prepare, patch.object(announce, 'answer_once') as answer:
+            code, result, requests = self.invoke(['223', 'say', 'Example', '--dry-run'],
+                reply=direct_job(status='dry_run', recipient_status='queued'), config=direct_configuration())
+        self.assertEqual(code, 0)
+        self.assertEqual(result['status'], 'dry_run')
+        self.assertEqual(len(requests), 1)
+        self.assertTrue(requests[0][2]['dry_run'])
+        prepare.assert_not_called()
+        answer.assert_not_called()
+
+    def test_client_server_route_mismatch_is_not_accepted(self):
+        with patch.object(announce, 'answer_once') as answer:
+            code, result, _ = self.invoke(['223', 'say', 'Example'], reply=job(('223',)),
+                                         config=direct_configuration())
+        self.assertEqual(code, 1)
+        self.assertEqual(result['reason'], 'announcement_route_changed')
+        answer.assert_not_called()
+
+    def test_unknown_direct_outcome_is_not_success_for_send_status_or_stop(self):
+        for args in (['223', 'say', 'Example'], ['223', 'say-status', IDENTIFIER],
+                     ['223', 'say-stop', IDENTIFIER]):
+            code, result, requests = self.invoke(args, reply=direct_job(recipient_status='unknown'),
+                                                 config=direct_configuration())
+            self.assertEqual(code, 1)
+            self.assertEqual(result['recipients'][0]['status'], 'unknown')
+            self.assertLessEqual(sum(body is not None for _, _, body in requests), 1)
+
 
 class AnnouncementConfigTests(unittest.TestCase):
     def config(self):
@@ -164,6 +219,36 @@ class AnnouncementConfigTests(unittest.TestCase):
             value = self.config(); value['groups'] = {'demo': members}
             with self.assertRaises(announce.AnnouncementError):
                 announce.validate_config(value, '/tmp/config.json', lambda *_a, **_k: b'x'*48)
+
+    def test_direct_targets_require_exactly_one_number_per_device(self):
+        valid = self.config()
+        valid['targets'] = {'223': {'driver': 'ha_satellite', 'phone_id': '223'}}
+        result = announce.validate_config(valid, '/tmp/config.json', lambda *_a, **_k: b'x'*48)
+        self.assertEqual(result['targets'], valid['targets'])
+        for invalid in ([], {'911': {'driver': 'ha_satellite', 'phone_id': '911'}},
+                        {'223': {'driver': 'ha_satellite', 'phone_id': '224'}},
+                        {'223': {'driver': 'cisco', 'phone_id': '223'}},
+                        {'223': {'driver': 'ha_satellite', 'phone_id': '223', 'entity_id': 'hidden'}}):
+            value = self.config(); value['targets'] = invalid
+            with self.assertRaises(announce.AnnouncementError):
+                announce.validate_config(value, '/tmp/config.json', lambda *_a, **_k: b'x'*48)
+
+    def test_direct_target_cannot_shadow_native_or_cisco_phone(self):
+        value = direct_configuration()
+        value['announcements']['targets']['212'] = {'driver': 'ha_satellite', 'phone_id': '212'}
+        value['announcements']['targets']['222'] = {'driver': 'ha_satellite', 'phone_id': '222'}
+        for line in ('212', '222'):
+            with self.assertRaises(announce.AnnouncementError):
+                announce.known_targets([line], value, inventory(), cisco.validate_inventory)
+
+    def test_direct_receipts_never_contain_sip_call_or_alias(self):
+        for mutate in (lambda r: r.update(channel='PJSIP/223-abc', uniqueid='1.223'),
+                       lambda r: r.update(status='ringing'), lambda r: r.update(phone_id='224')):
+            value = direct_job(); mutate(value['recipients'][0])
+            with self.assertRaises(announce.AnnouncementError):
+                announce.validate_job(value, IDENTIFIER, ['223'])
+        value = direct_job(status='running', recipient_status='playing')
+        self.assertEqual(announce.validate_job(value, IDENTIFIER, ['223'])['recipients'][0]['status'], 'playing')
 
     def test_loopback_is_only_for_dedicated_api_and_fixed_paths(self):
         base = {'url': 'http://127.0.0.1:18085', 'token': 'x'*48,
@@ -201,6 +286,14 @@ class AnnouncementConfigTests(unittest.TestCase):
 
 
 class AnnouncementAnswerTests(unittest.TestCase):
+    def test_direct_target_cannot_invoke_native_answer_even_with_forged_ringing(self):
+        result = announce.answer_once(direct_configuration(), 5, IDENTIFIER, ['223'],
+            job(('223',), status='running', recipient_status='ringing')['recipients'][0],
+            {'driver': 'ha_satellite', 'phone_id': '223'},
+            lambda *_: self.fail('gateway must not be opened'), cisco.validate_inventory, threading.Event())
+        self.assertEqual(result['status'], 'refused')
+        self.assertEqual(result['reason'], 'direct_announcement_has_no_sip_answer')
+
     def test_prepared_native_transport_avoids_login_and_identity_reads_while_ringing(self):
         reply = job(('222',), status='running', recipient_status='ringing')
         commands = []
@@ -324,6 +417,31 @@ class AnnouncementAnswerTests(unittest.TestCase):
 
 
 class AnnouncementPollingTests(unittest.TestCase):
+    def test_mixed_group_only_answers_the_sip_recipient(self):
+        args = cisco.parser().parse_args(['--idempotency-key', KEY, '212,223', 'say', 'Example'])
+        running = job(('212',), status='running', recipient_status='ringing')
+        running['lines'].append('223')
+        running['recipients'].extend(direct_job(status='running', recipient_status='playing')['recipients'])
+        finished = copy.deepcopy(running); finished['status'] = 'finished'
+        for recipient in finished['recipients']: recipient['status'] = 'completed'
+        bodies = []
+        class Gateway:
+            def __init__(self, *_): pass
+            def request(self, path, body=None):
+                if path == '/v1/phones': return inventory()
+                if body is not None:
+                    bodies.append(body)
+                    return running
+                return finished
+        with patch.object(announce, 'answer_once', return_value={'line': '212', 'status': 'acknowledged'}) as answer:
+            result, code = announce.run(args, direct_configuration(), gateway_factory=Gateway,
+                inventory_validator=cisco.validate_inventory, read_file=cisco.read_file, sleep=lambda _: None)
+        self.assertEqual(code, 0)
+        self.assertEqual(answer.call_count, 1)
+        self.assertEqual(answer.call_args.args[4]['line'], '212')
+        self.assertEqual(bodies[0]['expected_routes'], {'212': 'sip', '223': 'ha_satellite'})
+        self.assertEqual(result['recipients'][1]['driver'], 'ha_satellite')
+
     def test_native_connection_and_identity_are_ready_before_submission_and_closed_afterward(self):
         args = cisco.parser().parse_args(['--idempotency-key', KEY, '222', 'say', 'Example'])
         events = []

@@ -114,9 +114,11 @@ For a LifeSize Phone, follow the optional
 [native LifeSize configuration](cli-lifesize.md). SIP registration alone does
 not make a non-Cisco phone controllable through the Cisco gateway.
 
-Spoken `say` calls additionally require the bounded announcement service beside
-Asterisk and its private CLI configuration; see [the announcement guide](cli-announcements.md).
-Updating the CLI alone does not install that service.
+Spoken `say` commands additionally require the bounded announcement service
+beside Asterisk and its private CLI configuration; see
+[the announcement guide](cli-announcements.md). Direct Echo announcements also
+need the matching guarded HA adapter; each Echo keeps only one SIP extension.
+Updating the CLI alone does not install either server component.
 
 For other configured SIP clients, follow [generic endpoint setup](existing-endpoints.md).
 Both client and gateway must include the endpoint API. No additional CLI module

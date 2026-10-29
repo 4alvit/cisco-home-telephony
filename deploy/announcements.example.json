@@ -13,7 +13,17 @@
     "202": "201",
     "203": "203",
     "204": "203",
-    "222": "222"
+    "222": "222",
+    "223": "223",
+    "224": "224",
+    "225": "225",
+    "226": "226"
+  },
+  "satellites": {
+    "223": {"entity_id": "assist_satellite.example_dot_one", "domain": "echomuse_home"},
+    "224": {"entity_id": "assist_satellite.example_dot_two", "domain": "echomuse_home"},
+    "225": {"entity_id": "assist_satellite.example_show_one", "domain": "vaca"},
+    "226": {"entity_id": "assist_satellite.example_show_two", "domain": "vaca"}
   },
   "dial_audio_config": "/etc/asterisk/dial-audio.json",
   "voice_service": "555",

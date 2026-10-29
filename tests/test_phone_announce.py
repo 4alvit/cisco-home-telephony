@@ -41,6 +41,25 @@ class FakeAMI:
         return [{'Response': 'Success'}]
 
 
+class FakeSatellite:
+    def __init__(self):
+        self.calls = []
+        self.capabilities = {'protocol': m.SATELLITE_PROTOCOL,
+                             **{key: True for key in m.SATELLITE_GUARDS}}
+        self.fail_submit = False
+        self.fail_stop = False
+        self.status = 'completed'
+
+    def call(self, satellite, operation, **values):
+        self.calls.append((satellite, operation, values))
+        if operation == 'capabilities':
+            return self.capabilities
+        if operation == 'submit' and self.fail_submit or operation == 'stop' and self.fail_stop:
+            raise TimeoutError('private error must not be exposed')
+        return {'request_id': values['request_id'],
+                'status': 'accepted' if operation == 'submit' else 'stopped' if operation == 'stop' else self.status}
+
+
 class AnnouncementTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -298,6 +317,223 @@ class AnnouncementTests(unittest.TestCase):
         self.assertIn('Dial(PJSIP/${EXTEN},30,ib(', text)
         self.assertEqual(text.count('Set(TIMEOUT(absolute)='), 2)
         self.assertNotIn('include =>', text)
+
+    def enable_satellite(self):
+        self.config['lines']['223'] = '223'
+        self.config['satellites'] = {'223': {'entity_id': 'assist_satellite.fixture', 'domain': 'fixture'}}
+        self.satellite = FakeSatellite()
+        self.manager.satellite_factory = lambda _config: self.satellite
+        self.satellite_ami = FakeAMI()
+        self.manager.ami_factory = lambda _config: self.satellite_ami
+        self.request.update(lines=['223'], expected_routes={'223': 'ha_satellite'})
+
+    def test_legacy_sip_journal_survives_upgrade_and_keeps_idempotency(self):
+        job, recipient = self.job()
+        recipient.update(status='completed', channel=None, uniqueid=None)
+        recipient.pop('driver')
+        recipient.pop('stop_attempted')
+        job.update(status='finished')
+        with patch.object(m.Announcer, 'start_worker') as worker:
+            upgraded = m.Announcer(self.config, clock=lambda: self.now)
+        worker.assert_not_called()
+        result = upgraded.get(job.data['id'])
+        self.assertEqual(result['recipients'][0]['driver'], 'sip')
+        self.assertEqual(result['recipients'][0]['status'], 'completed')
+        # A new client adds route assertions; this must still recover the old
+        # request rather than create or replay an announcement.
+        duplicate = upgraded.submit({**self.request, 'expected_routes': {'222': 'sip'}})
+        self.assertEqual(duplicate, result)
+        self.assertEqual(len(upgraded.jobs), 1)
+
+    def test_satellite_requires_one_number_and_unique_entity(self):
+        self.enable_satellite()
+        self.assertEqual(m.validate_config(self.config), self.config)
+        bad = copy.deepcopy(self.config)
+        bad['lines']['224'] = '223'
+        with self.assertRaisesRegex(m.AnnounceError, 'one_line_per_satellite_required'):
+            m.validate_config(bad)
+        bad['lines']['224'] = '224'
+        bad['satellites']['224'] = copy.deepcopy(bad['satellites']['223'])
+        with self.assertRaisesRegex(m.AnnounceError, 'duplicate_satellite'):
+            m.validate_config(bad)
+
+    def test_satellite_routes_are_asserted_before_workers_or_synthesis(self):
+        self.enable_satellite()
+        for routes in (None, {'223': 'sip'}, {'223': 'ha_satellite', '222': 'sip'}):
+            data = {k: v for k, v in self.request.items() if k != 'expected_routes'}
+            if routes is not None:
+                data['expected_routes'] = routes
+            with self.subTest(routes=routes), self.assertRaises(m.AnnounceError):
+                self.manager.submit(data)
+        self.assertFalse(self.manager.jobs)
+        self.worker.assert_not_called()
+        response = self.manager.submit({**self.request, 'dry_run': True})
+        self.assertEqual(response['recipients'][0]['driver'], 'ha_satellite')
+        self.assertFalse(self.satellite.calls)
+
+    def test_direct_worker_only_reads_pbx_dnd_and_keeps_url_private(self):
+        self.enable_satellite()
+        job, recipient = self.job()
+        self.manager.synth = Mock(return_value={'duration_seconds': 2.0,
+                                               'media_id': 'http://192.168.50.10/api/tts_proxy/fixture.wav'})
+        self.manager.run(job, self.request['text'])
+        self.assertEqual(recipient['status'], 'completed')
+        self.assertEqual(job.data['status'], 'finished')
+        self.assertEqual([action for action, _ in self.satellite_ami.actions], ['DBGet'])
+        self.manager.synth.assert_called_once()
+        submit = next(values for _, operation, values in self.satellite.calls if operation == 'submit')
+        self.assertEqual(submit, {'request_id': recipient['root'],
+                                 'media_id': 'http://192.168.50.10/api/tts_proxy/fixture.wav',
+                                 'expires_at': job.data['expires_at'], 'preannounce': False, 'busy_policy': 'skip'})
+        self.assertNotIn('media_id', json.dumps(job.public()))
+        self.assertIsNone(recipient['channel'])
+        self.assertIsNone(recipient['uniqueid'])
+
+    def test_direct_skips_pbx_dnd_and_unavailable_dnd_state(self):
+        self.enable_satellite()
+        job, recipient = self.job()
+        self.satellite_ami.dnd.add('223')
+        self.manager.dispatch_satellite(job, recipient)
+        self.assertEqual((recipient['status'], recipient['reason']), ('skipped', 'dnd'))
+        self.assertFalse(self.satellite.calls)
+        recipient.update(status='queued', reason=None)
+        self.manager.ami_factory = Mock(side_effect=TimeoutError())
+        self.manager.dispatch_satellite(job, recipient)
+        self.assertEqual((recipient['status'], recipient['reason']), ('skipped', 'state_unavailable'))
+        self.assertFalse(self.satellite.calls)
+
+    def test_missing_any_guard_prevents_satellite_submission(self):
+        self.enable_satellite()
+        job, recipient = self.job()
+        job.data['media_id'] = 'http://192.168.50.10/api/tts_proxy/fixture.wav'
+        for key in m.SATELLITE_GUARDS:
+            with self.subTest(key=key):
+                recipient.update(status='queued', reason=None)
+                self.satellite.capabilities[key] = False
+                self.manager.dispatch_satellite(job, recipient)
+                self.assertEqual(recipient['status'], 'skipped')
+                self.assertEqual(recipient['reason'], 'satellite_guards_unavailable')
+                self.satellite.capabilities[key] = True
+        self.assertFalse(any(operation == 'submit' for _, operation, _ in self.satellite.calls))
+
+    def test_unknown_satellite_submission_is_polled_never_replayed(self):
+        self.enable_satellite()
+        job, recipient = self.job()
+        job.data['media_id'] = 'http://192.168.50.10/api/tts_proxy/fixture.wav'
+        self.satellite.fail_submit = True
+        self.manager.dispatch_satellite(job, recipient)
+        self.manager.dispatch_satellite(job, recipient)
+        self.assertEqual(recipient['status'], 'submitted')
+        self.assertEqual(recipient['reason'], 'submission_unknown')
+        self.manager.observe_satellite(job, recipient)
+        self.assertEqual(recipient['status'], 'completed')
+        self.assertEqual(sum(operation == 'submit' for _, operation, _ in self.satellite.calls), 1)
+
+    def test_satellite_receipt_requires_identity_and_does_not_leak_reason(self):
+        self.enable_satellite()
+        job, recipient = self.job()
+        with self.assertRaisesRegex(m.AnnounceError, 'uncorrelated_satellite_response'):
+            self.manager.satellite_result(job, recipient, {'request_id': 'other', 'status': 'completed'})
+        self.assertEqual(recipient['status'], 'queued')
+        self.manager.satellite_result(job, recipient, {'request_id': recipient['root'], 'status': 'failed',
+                                                       'reason': 'private URL http://192.168.50.10/token'})
+        self.assertEqual(recipient['reason'], 'satellite_reported_error')
+
+    def test_satellite_stop_is_exact_once_and_timeout_is_not_success(self):
+        self.enable_satellite()
+        job, recipient = self.job()
+        recipient.update(dispatched_at=self.now, status='playing')
+        self.satellite.fail_stop = True
+        self.satellite.status = 'playing'
+        self.manager.stop(job.data['id'])
+        self.manager.observe_satellite(job, recipient)
+        self.manager.observe_satellite(job, recipient)
+        stops = [values for _, operation, values in self.satellite.calls if operation == 'stop']
+        self.assertEqual(stops, [{'request_id': recipient['root']}])
+        self.now += 191
+        self.manager.observe_satellite(job, recipient)
+        self.assertEqual(recipient['status'], 'unknown')
+        self.assertEqual(recipient['reason'], 'completion_unconfirmed')
+
+    def test_satellite_get_does_not_query_ami_or_mutate_device(self):
+        self.enable_satellite()
+        job, recipient = self.job()
+        recipient.update(status='submitted', dispatched_at=self.now)
+        self.manager.ami_factory = Mock(side_effect=AssertionError('no SIP status needed'))
+        result = self.manager.get(job.data['id'])
+        self.assertEqual(result['recipients'][0]['status'], 'submitted')
+        self.manager.ami_factory.assert_not_called()
+        self.assertFalse(self.satellite.calls)
+
+    def test_satellite_recovery_only_cancels_owned_job(self):
+        self.enable_satellite()
+        job, recipient = self.job()
+        job.update(recipient, status='submitted', dispatched_at=self.now)
+        with patch.object(m.Announcer, 'start_worker'):
+            manager = m.Announcer(self.config, clock=lambda: self.now,
+                                  satellite_factory=lambda _config: self.satellite)
+        recovered = manager.jobs[job.data['id']]
+        manager.run(recovered, None)
+        self.assertEqual(recovered.data['status'], 'stopped')
+        self.assertEqual(recovered.data['recipients'][0]['status'], 'stopped')
+        self.assertEqual([operation for _, operation, _ in self.satellite.calls], ['stop'])
+
+    def test_mixed_group_uses_one_synthesis_for_both_transports(self):
+        self.enable_satellite()
+        self.request.update(lines=['222', '223'], expected_routes={'222': 'sip', '223': 'ha_satellite'})
+        job, recipient = self.job()
+        ami = FakeAMI()
+        self.manager.ami_factory = lambda _config: ami
+        self.manager.synth = Mock(return_value={'duration_seconds': 2,
+                                               'media_id': 'http://192.168.50.10/api/tts_proxy/fixture.wav'})
+        def snapshot():
+            if any(operation == 'Originate' for operation, _ in ami.actions):
+                agi.receipt(job.directory, job.data['id'], '222', recipient['root'], 'completed')
+            return ami.endpoints, ami.channels
+        ami.snapshot = snapshot
+        self.manager.run(job, self.request['text'])
+        self.manager.synth.assert_called_once()
+        self.assertEqual([r['status'] for r in job.data['recipients']], ['completed', 'completed'])
+        self.assertEqual(sum(operation == 'Originate' for operation, _ in ami.actions), 1)
+        self.assertEqual(sum(operation == 'submit' for _, operation, _ in self.satellite.calls), 1)
+
+    def test_shared_synthesis_preserves_original_ha_asset(self):
+        self.enable_satellite()
+        job, _ = self.job()
+        service = {'kind': 'clock', 'engine_id': 'tts.fixture', 'language': 'en', 'voice': 'fixture-voice'}
+        settings = {'services': {'555': service}, 'credentials_file': '/private/credentials'}
+        ha = Mock(base='http://192.168.50.10')
+        ha.fetch.return_value = (b'{"path":"/api/tts_proxy/fixture.flac"}', 'application/json')
+        ha.audio.return_value = b'original-audio'
+        def encode(args, **_kwargs):
+            self.assertEqual((job.directory / 'source.audio').read_bytes(), b'original-audio')
+            Path(args[-1]).write_bytes(b'\x01\x02' * 1600)
+        Path(self.config['dial_audio_config']).write_text('{}')
+        with patch.object(m.dial_audio, 'validate', return_value=settings), patch.object(
+                m.dial_audio, 'credentials', return_value=('origin', 'private')), patch.object(
+                m.dial_audio, 'HomeAssistant', return_value=ha), patch.object(m.subprocess, 'run', side_effect=encode):
+            result = m.synthesize(self.config, self.request['text'], job.directory)
+        self.assertEqual(result, {'duration_seconds': 0.5, 'media_id': 'http://192.168.50.10/api/tts_proxy/fixture.flac'})
+        ha.fetch.assert_called_once()
+        ha.audio.assert_called_once_with('/api/tts_proxy/fixture.flac')
+        ha.speech.assert_not_called()
+
+    def test_satellite_http_requires_response_envelope_and_never_retries(self):
+        api = object.__new__(m.SatelliteAPI)
+        api.base, api.token, api.opener = 'http://192.168.50.10', 'fixture-token', Mock()
+        response = Mock(status=200)
+        response.read.return_value = b'{"service_response":{"request_id":"fixture","status":"accepted"}}'
+        api.opener.open.return_value.__enter__ = Mock(return_value=response)
+        api.opener.open.return_value.__exit__ = Mock(return_value=False)
+        result = api.call({'entity_id': 'assist_satellite.fixture', 'domain': 'fixture'}, 'submit', request_id='fixture')
+        self.assertEqual(result['status'], 'accepted')
+        req = api.opener.open.call_args.args[0]
+        self.assertEqual(req.full_url, 'http://192.168.50.10/api/services/fixture/announcement_submit?return_response')
+        self.assertEqual(json.loads(req.data), {'entity_id': 'assist_satellite.fixture', 'request_id': 'fixture'})
+        self.assertEqual(api.opener.open.call_args.kwargs['timeout'], 6)
+        response.read.return_value = b'[]'
+        with self.assertRaises((AttributeError, m.AnnounceError)):
+            api.call({'entity_id': 'assist_satellite.fixture', 'domain': 'fixture'}, 'status', request_id='fixture')
 
 
 if __name__ == '__main__':

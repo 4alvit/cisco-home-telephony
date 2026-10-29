@@ -15,17 +15,20 @@ import stat
 import subprocess
 import threading
 import time
+from urllib import request
 
 import dial_audio
 from phone_gateway import AMI
 
 ID = re.compile(r'[0-9a-f]{32}')
 LINE = re.compile(r'2[0-9]{2}')
-TERMINAL = frozenset(('completed', 'skipped', 'failed', 'stopped'))
+TERMINAL = frozenset(('completed', 'skipped', 'failed', 'stopped', 'unknown'))
 JOB_TERMINAL = frozenset(('finished', 'failed', 'stopped'))
 MAX_JOBS, MAX_HISTORY, HISTORY_SECONDS = 4, 512, 86400
 MAX_AUDIO = 120 * 32000
-PUBLIC_RECIPIENT = ('line', 'phone_id', 'status', 'channel', 'uniqueid', 'caller_id', 'reason')
+PUBLIC_RECIPIENT = ('line', 'phone_id', 'driver', 'status', 'channel', 'uniqueid', 'caller_id', 'reason')
+SATELLITE_PROTOCOL = 'cisco-announcement-v1'
+SATELLITE_GUARDS = ('atomic_idle_guard', 'dedup', 'owned_cancel', 'honest_completion', 'deadline_enforced')
 
 
 class AnnounceError(Exception):
@@ -39,8 +42,8 @@ def require(value, reason, status=400):
 
 
 def validate_config(value):
-    require(isinstance(value, dict) and set(value) == {
-        'bind', 'port', 'token', 'ami', 'lines', 'dial_audio_config', 'voice_service', 'spool', 'agi'},
+    required = {'bind', 'port', 'token', 'ami', 'lines', 'dial_audio_config', 'voice_service', 'spool', 'agi'}
+    require(isinstance(value, dict) and required <= set(value) <= required | {'satellites'},
         'invalid_config')
     require(value['bind'] == '127.0.0.1' and type(value['port']) is int
             and 1024 <= value['port'] <= 65535, 'loopback_listener_required')
@@ -61,11 +64,25 @@ def validate_config(value):
         path = value[name]
         require(isinstance(path, str) and re.fullmatch(r'/[A-Za-z0-9_./-]{1,1023}', path)
                 and '..' not in Path(path).parts and str(Path(path)) == path, 'invalid_path')
+    satellites = value.get('satellites', {})
+    require(isinstance(satellites, dict) and len(satellites) <= 16, 'invalid_satellites')
+    identities = set()
+    for line, satellite in satellites.items():
+        require(isinstance(line, str) and value['lines'].get(line) == line
+                and sum(physical == line for physical in value['lines'].values()) == 1,
+                'one_line_per_satellite_required')
+        require(isinstance(satellite, dict) and set(satellite) == {'entity_id', 'domain'}
+                and isinstance(satellite['entity_id'], str)
+                and re.fullmatch(r'assist_satellite\.[a-z0-9_]{1,128}', satellite['entity_id'])
+                and isinstance(satellite['domain'], str)
+                and re.fullmatch(r'[a-z][a-z0-9_]{0,63}', satellite['domain']), 'invalid_satellite')
+        require(satellite['entity_id'] not in identities, 'duplicate_satellite')
+        identities.add(satellite['entity_id'])
     return value
 
 
 def request_data(value, config):
-    require(isinstance(value, dict) and not set(value) - {'idempotency_key', 'lines', 'text', 'dry_run'}
+    require(isinstance(value, dict) and not set(value) - {'idempotency_key', 'lines', 'text', 'dry_run', 'expected_routes'}
             and {'idempotency_key', 'lines', 'text'} <= set(value), 'invalid_request')
     key, lines, text = value['idempotency_key'], value['lines'], value['text']
     require(isinstance(key, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{8,128}', key), 'invalid_idempotency_key')
@@ -73,11 +90,18 @@ def request_data(value, config):
         isinstance(n, str) and n in config['lines'] for n in lines), 'invalid_targets')
     physical = [config['lines'][n] for n in lines]
     require(len(set(physical)) == len(physical), 'duplicate_physical_target')
+    routes = {line: 'ha_satellite' if config['lines'][line] in config.get('satellites', {}) else 'sip'
+              for line in lines}
+    require('ha_satellite' not in routes.values() or 'expected_routes' in value, 'expected_routes_required')
+    require('expected_routes' not in value or value['expected_routes'] == routes, 'route_mismatch')
     require(isinstance(text, str) and 1 <= len(text) <= 1000 and text.strip()
             and not any(ord(c) < 32 and c not in '\n\t' for c in text)
             and not any(0xD800 <= ord(c) <= 0xDFFF for c in text), 'invalid_text')
     require(type(value.get('dry_run', False)) is bool, 'invalid_dry_run')
-    payload = json.dumps({'lines': lines, 'text': text}, ensure_ascii=True, sort_keys=True)
+    payload_data = {'lines': lines, 'text': text}
+    if 'ha_satellite' in routes.values():
+        payload_data['routes'] = routes
+    payload = json.dumps(payload_data, ensure_ascii=True, sort_keys=True)
     return hashlib.sha256(key.encode()).hexdigest()[:32], hashlib.sha256(payload.encode()).hexdigest()
 
 
@@ -119,7 +143,19 @@ def synthesize(config, text, directory):
     service = settings['services'][config['voice_service']]
     require(service['kind'] == 'clock', 'configured_voice_required')
     ha = dial_audio.HomeAssistant(*dial_audio.credentials(settings['credentials_file']))
-    raw = ha.speech(service, text)
+    media_id = None
+    if config.get('satellites'):
+        # Preserve the original asset: direct playback must not inherit SIP's
+        # sample rate. Both transports still use exactly one TTS request.
+        body, _ = ha.fetch('/api/tts_get_url', payload={
+            'engine_id': service['engine_id'], 'language': service['language'],
+            'options': {'voice': service['voice']}, 'message': text, 'cache': False,
+        }, limit=65536)
+        path = dial_audio.check_path(json.loads(body)['path'], '/api/tts_proxy/')
+        media_id = ha.base + path
+        raw = ha.audio(path)
+    else:
+        raw = ha.speech(service, text)
     require(len(raw) <= 8 * 1024 * 1024, 'speech_too_large')
     source, decoded, target = directory / 'source.audio', directory / 'decoded.pcm', directory / 'speech.sln16'
     try:
@@ -134,10 +170,36 @@ def synthesize(config, text, directory):
                 'speech_duration_rejected')
         target.write_bytes(b'\0' * 12800 + pcm)  # Allow the speaker path to settle.
         target.chmod(0o600)
-        return target.stat().st_size / 32000
+        duration = target.stat().st_size / 32000
+        return {'duration_seconds': duration, 'media_id': media_id} if media_id else duration
     finally:
         source.unlink(missing_ok=True)
         decoded.unlink(missing_ok=True)
+
+
+class SatelliteAPI:
+    """Guarded HA contract only; standard announce cannot safely cancel owned jobs."""
+
+    def __init__(self, config):
+        settings = dial_audio.validate(json.loads(Path(config['dial_audio_config']).read_text()))
+        self.base, self.token = dial_audio.credentials(settings['credentials_file'])
+        self.opener = request.build_opener(request.ProxyHandler({}), dial_audio.NoRedirect())
+
+    def call(self, satellite, operation, **values):
+        require(operation in ('capabilities', 'submit', 'status', 'stop'), 'invalid_satellite_operation')
+        path = '/api/services/' + satellite['domain'] + '/announcement_' + operation + '?return_response'
+        payload = json.dumps({'entity_id': satellite['entity_id'], **values}).encode()
+        req = request.Request(self.base + path, data=payload, headers={
+            'Authorization': 'Bearer ' + self.token, 'Content-Type': 'application/json',
+            'Accept-Encoding': 'identity'})
+        # Services enqueue/observe device jobs; none waits for playback here.
+        with self.opener.open(req, timeout=6) as response:
+            require(response.status == 200, 'satellite_service_failed', 503)
+            body = response.read(65537)
+            require(len(body) <= 65536, 'invalid_satellite_response', 503)
+        result = json.loads(body).get('service_response')
+        require(isinstance(result, dict), 'invalid_satellite_response', 503)
+        return result
 
 
 class Job:
@@ -165,8 +227,10 @@ class Job:
 
 
 class Announcer:
-    def __init__(self, config, *, ami_factory=AMI, synth=synthesize, clock=time.time, recover=True):
+    def __init__(self, config, *, ami_factory=AMI, synth=synthesize, clock=time.time, recover=True,
+                 satellite_factory=SatelliteAPI):
         self.config, self.ami_factory, self.synth, self.clock = validate_config(config), ami_factory, synth, clock
+        self.satellite_factory = satellite_factory
         self.spool = Path(config['spool'])
         private_directory(self.spool)
         self.jobs, self.lock = {}, threading.RLock()
@@ -188,6 +252,9 @@ class Announcer:
             for r in data['recipients']:
                 require(LINE.fullmatch(r['line']) and r['root'] == root_id(data['id'], r['line']),
                         'invalid_journal', 503)
+                r.setdefault('driver', 'sip')
+                require(r['driver'] in ('sip', 'ha_satellite'), 'invalid_journal', 503)
+                r.setdefault('stop_attempted', False)
             job = Job(data, directory)
             self.jobs[data['id']] = job
             if data['status'] not in JOB_TERMINAL:
@@ -244,9 +311,10 @@ class Announcer:
                 return job.public(dry_run=request.get('dry_run', False))
             now = self.clock()
             recipients = [{'line': line, 'phone_id': self.config['lines'][line], 'status': 'queued',
+                           'driver': 'ha_satellite' if self.config['lines'][line] in self.config.get('satellites', {}) else 'sip',
                            'channel': None, 'uniqueid': None, 'caller_id': caller_id(key, line), 'reason': None,
                            'root': root_id(key, line), 'dispatched_at': None, 'seen': False, 'answered': False,
-                           'hangup_attempted': [], 'cancel': False} for line in request['lines']]
+                           'hangup_attempted': [], 'stop_attempted': False, 'cancel': False} for line in request['lines']]
             data = {'id': key, 'payload_hash': payload_hash, 'status': 'accepted', 'lines': request['lines'],
                     'created_at': now, 'expires_at': now + 180, 'duration_seconds': None, 'recipients': recipients}
             job = Job(data, self.spool / key)
@@ -276,6 +344,8 @@ class Announcer:
         result = job.public()
         if result['status'] in JOB_TERMINAL:
             return result
+        if all(r['driver'] == 'ha_satellite' or r['status'] in TERMINAL for r in job.data['recipients']):
+            return result
         try:
             with self.ami_factory(self.config['ami']) as ami:
                 _, channels = ami.snapshot()
@@ -286,6 +356,8 @@ class Announcer:
         with job.lock:
             result = job.public()
             for item, recipient in zip(result['recipients'], job.data['recipients']):
+                if recipient['driver'] == 'ha_satellite':
+                    continue
                 if item['status'] in TERMINAL:
                     continue
                 item.update(channel=None, uniqueid=None)
@@ -326,7 +398,99 @@ class Announcer:
         require(len(values) == 1 and values[0] in ('0', '1'), 'invalid_dnd_state', 503)
         return values[0] == '1'
 
+    def satellite_result(self, job, recipient, result):
+        require(isinstance(result, dict) and result.get('request_id') == recipient['root'],
+                'uncorrelated_satellite_response', 503)
+        state = result.get('status')
+        require(state in {'accepted', 'playing', 'completed', 'skipped', 'failed', 'stopped', 'unknown'},
+                'invalid_satellite_status', 503)
+        reason = result.get('reason')
+        # Responses are private integration input. Never leak arbitrary HA text,
+        # URLs or credentials through a public job receipt.
+        if reason is not None and (not isinstance(reason, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,95}', reason)):
+            reason = 'satellite_reported_error'
+        job.update(recipient, status='submitted' if state == 'accepted' else state,
+                   reason=reason, channel=None, uniqueid=None)
+
+    def dispatch_satellite(self, job, recipient):
+        require(recipient['driver'] == 'ha_satellite', 'wrong_announcement_driver', 503)
+        if recipient['dispatched_at'] is not None or recipient['status'] in TERMINAL:
+            return  # A timed-out submit is never replayed.
+        if job.stop.is_set():
+            job.update(recipient, status='stopped', reason='stopped')
+            return
+        satellite = self.config.get('satellites', {}).get(recipient['phone_id'])
+        if satellite is None:
+            job.update(recipient, status='skipped', reason='satellite_not_configured')
+            return
+        # The CLI's existing DND switch lives in AstDB. Native guards also check
+        # device quiet mode, but must not silently bypass a PBX DND preference.
+        try:
+            with self.ami_factory(self.config['ami']) as ami:
+                if self.dnd(ami, recipient['line']):
+                    job.update(recipient, status='skipped', reason='dnd')
+                    return
+        except Exception:
+            job.update(recipient, status='skipped', reason='state_unavailable')
+            return
+        try:
+            api = self.satellite_factory(self.config)
+            capabilities = api.call(satellite, 'capabilities')
+            require(capabilities.get('protocol') == SATELLITE_PROTOCOL
+                    and all(capabilities.get(key) is True for key in SATELLITE_GUARDS),
+                    'satellite_guards_unavailable', 503)
+        except Exception:
+            job.update(recipient, status='skipped', reason='satellite_guards_unavailable')
+            return
+        if job.stop.is_set():
+            job.update(recipient, status='stopped', reason='stopped')
+            return
+        if self.clock() + (job.data['duration_seconds'] or 120) + 8 >= job.data['expires_at']:
+            job.update(recipient, status='skipped', reason='preparation_budget_exhausted')
+            return
+        if not isinstance(job.data.get('media_id'), str):
+            job.update(recipient, status='failed', reason='prepared_media_missing')
+            return
+        job.update(recipient, status='submitting', dispatched_at=self.clock())
+        try:
+            result = api.call(satellite, 'submit', request_id=recipient['root'],
+                              media_id=job.data['media_id'], expires_at=job.data['expires_at'],
+                              preannounce=False, busy_policy='skip')
+            self.satellite_result(job, recipient, result)
+        except Exception:
+            job.update(recipient, status='submitted', reason='submission_unknown')
+
+    def observe_satellite(self, job, recipient):
+        if recipient['status'] in TERMINAL:
+            return
+        if recipient['dispatched_at'] is None:
+            job.update(recipient, status='stopped', reason='stopped')
+            return
+        # Persist the outcome once native deadline enforcement must have run.
+        # A deadline is never evidence that the person heard the message.
+        if self.clock() > job.data['expires_at'] + 10:
+            job.update(recipient, status='unknown', reason='completion_unconfirmed',
+                       channel=None, uniqueid=None)
+            return
+        satellite = self.config.get('satellites', {}).get(recipient['phone_id'])
+        if satellite is None:
+            job.update(recipient, status='unknown', reason='satellite_configuration_changed')
+            return
+        stopping = job.stop.is_set() or self.clock() >= job.data['expires_at']
+        operation = 'status'
+        if stopping and not recipient['stop_attempted']:
+            # Journal before the write: retries must not stop a later job.
+            job.update(recipient, status='stopping', stop_attempted=True)
+            operation = 'stop'
+        try:
+            api = self.satellite_factory(self.config)
+            result = api.call(satellite, operation, request_id=recipient['root'])
+            self.satellite_result(job, recipient, result)
+        except Exception:
+            job.update(recipient, reason='stop_unconfirmed' if operation == 'stop' else 'state_unavailable')
+
     def dispatch(self, job, recipient, ami):
+        require(recipient['driver'] == 'sip', 'wrong_announcement_driver', 503)
         endpoints, channels = ami.snapshot()
         siblings = {line for line, physical in self.config['lines'].items() if physical == recipient['phone_id']}
         state = endpoints.get(recipient['line'])
@@ -387,6 +551,7 @@ class Announcer:
                 pass  # Never replay an uncertain hangup; native deadlines remain armed.
 
     def observe(self, job, recipient, ami, channels):
+        require(recipient['driver'] == 'sip', 'wrong_announcement_driver', 503)
         if recipient['status'] in TERMINAL:
             return
         owned = related(recipient, channels)
@@ -427,12 +592,14 @@ class Announcer:
             if text is not None and not job.stop.is_set() and any(
                     r['status'] == 'queued' for r in job.data['recipients']):
                 try:
-                    duration = self.synth(self.config, text, job.directory)
+                    prepared = self.synth(self.config, text, job.directory)
+                    duration = prepared['duration_seconds'] if isinstance(prepared, dict) else prepared
                     require(type(duration) in (float, int) and 0 < duration <= 120,
                             'preparation_failed')
                     require(self.clock() + duration + 35 < job.data['expires_at'],
                             'preparation_budget_exhausted')
-                    job.update(duration_seconds=duration, status='running')
+                    job.update(duration_seconds=duration, status='running',
+                               media_id=prepared.get('media_id') if isinstance(prepared, dict) else None)
                 except Exception as error:
                     reason = 'preparation_budget_exhausted' if getattr(error, 'reason', None) == (
                         'preparation_budget_exhausted') else 'preparation_failed'
@@ -445,6 +612,9 @@ class Announcer:
                     text = None  # Do not retain the transcript during call polling.
                 for recipient in job.data['recipients']:
                     if recipient['status'] == 'queued':
+                        if recipient['driver'] == 'ha_satellite':
+                            self.dispatch_satellite(job, recipient)
+                            continue
                         try:
                             with self.ami_factory(self.config['ami']) as ami:
                                 self.dispatch(job, recipient, ami)
@@ -454,17 +624,23 @@ class Announcer:
                             else:
                                 job.update(recipient, status='stopping', cancel=True, reason='originate_unknown')
             while any(r['status'] not in TERMINAL for r in job.data['recipients']):
-                try:
-                    with self.ami_factory(self.config['ami']) as ami:
-                        _, channels = ami.snapshot()
-                        for recipient in job.data['recipients']:
-                            self.observe(job, recipient, ami, channels)
-                except Exception:
-                    # Calls have a PBX-side absolute timeout even if this process
-                    # or AMI becomes unavailable. Preserve uncertainty in status.
-                    if self.clock() > job.data['expires_at'] + 45:
-                        job.update(status='stopping')
-                        return
+                for recipient in job.data['recipients']:
+                    if recipient['driver'] == 'ha_satellite':
+                        self.observe_satellite(job, recipient)
+                pending_sip = [r for r in job.data['recipients']
+                               if r['driver'] == 'sip' and r['status'] not in TERMINAL]
+                if pending_sip:
+                    try:
+                        with self.ami_factory(self.config['ami']) as ami:
+                            _, channels = ami.snapshot()
+                            for recipient in pending_sip:
+                                self.observe(job, recipient, ami, channels)
+                    except Exception:
+                        # Calls have a PBX-side absolute timeout even if this process
+                        # or AMI becomes unavailable. Preserve uncertainty in status.
+                        if self.clock() > job.data['expires_at'] + 45:
+                            job.update(status='stopping')
+                            return
                 if any(r['status'] not in TERMINAL for r in job.data['recipients']):
                     time.sleep(0.35)
             job.update(status='stopped' if job.stop.is_set() else 'finished')

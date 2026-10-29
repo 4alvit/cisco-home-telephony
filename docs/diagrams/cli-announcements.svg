@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="660" viewBox="0 0 1280 660" role="img" aria-labelledby="title description">
   <title id="title">Spoken announcements from the Cisco CLI</title>
-  <desc id="description">The CLI sends text and explicit recipients through authenticated Kubernetes execution to a loopback announcement service beside Asterisk. Home Assistant produces speech once. Asterisk places a finite call to each eligible phone and ends playback calls. The CLI requests one-shot answers through the existing phone drivers. Persistent auto-answer preferences are unchanged.</desc>
+  <desc id="description">The CLI sends text and explicit recipients to a private announcement service. Home Assistant produces speech once. Cisco and LifeSize receive a finite SIP announcement; Echo receives direct media through a guarded Home Assistant adapter. Ordinary Echo calls keep one SIP extension per physical device. Each recipient has its own outcome and no uncertain delivery is repeated automatically.</desc>
   <rect width="1280" height="660" rx="24" fill="#0f172a"/>
   <g font-family="system-ui, -apple-system, Segoe UI, sans-serif">
-    <text x="48" y="60" fill="#f8fafc" font-size="30" font-weight="700">One message. Explicit recipients. Finite calls.</text>
-    <text x="48" y="94" fill="#cbd5e1" font-size="17">Home Assistant speech · existing phone drivers · Asterisk owns playback and hangup</text>
+    <text x="48" y="60" fill="#f8fafc" font-size="30" font-weight="700">One message. Explicit recipients. Two delivery paths.</text>
+    <text x="48" y="94" fill="#cbd5e1" font-size="17">Home Assistant speech · finite SIP calls or guarded direct Echo announcements</text>
 
     <rect x="360" y="146" width="556" height="342" rx="20" fill="#172b49" stroke="#475569" stroke-width="2"/>
     <text x="384" y="176" fill="#cbd5e1" font-size="15" font-weight="700">ASTERISK POD · private loopback service and shared audio spool</text>
@@ -17,7 +17,7 @@
 
     <rect x="388" y="205" width="500" height="94" rx="14" fill="#14532d" stroke="#4ade80" stroke-width="2"/>
     <text x="410" y="241" fill="#f0fdf4" font-size="23" font-weight="700">Announcement service</text>
-    <text x="410" y="272" fill="#dcfce7" font-size="17">Validate recipients · synthesize once · track each call</text>
+    <text x="410" y="272" fill="#dcfce7" font-size="17">Validate recipients · synthesize once · track each outcome</text>
 
     <rect x="388" y="340" width="234" height="112" rx="14" fill="#3b0764" stroke="#c084fc" stroke-width="2"/>
     <text x="410" y="375" fill="#faf5ff" font-size="21" font-weight="700">Fetch HA speech</text>
@@ -25,15 +25,15 @@
     <text x="410" y="430" fill="#e9d5ff" font-size="14">No new cloud speech provider</text>
 
     <rect x="654" y="340" width="234" height="112" rx="14" fill="#78350f" stroke="#fbbf24" stroke-width="2"/>
-    <text x="676" y="375" fill="#fffbeb" font-size="21" font-weight="700">Asterisk playback</text>
-    <text x="676" y="405" fill="#fef3c7" font-size="16">One finite call per recipient</text>
-    <text x="676" y="430" fill="#fde68a" font-size="14">Audio ends → call ends</text>
+    <text x="676" y="375" fill="#fffbeb" font-size="21" font-weight="700">Route speech</text>
+    <text x="676" y="405" fill="#fef3c7" font-size="16">SIP or guarded HA media</text>
+    <text x="676" y="430" fill="#fde68a" font-size="14">Exact job ID · deadline · cleanup</text>
 
     <rect x="976" y="226" width="256" height="172" rx="16" fill="#1e3a8a" stroke="#60a5fa" stroke-width="2"/>
     <text x="998" y="263" fill="#eff6ff" font-size="23" font-weight="700">Phone or group</text>
-    <text x="998" y="299" fill="#dbeafe" font-size="17">Cisco + native LifeSize</text>
-    <text x="998" y="329" fill="#dbeafe" font-size="17">Speak once · disconnect</text>
-    <text x="998" y="369" fill="#bfdbfe" font-size="14">Busy/offline results stay explicit</text>
+    <text x="998" y="299" fill="#dbeafe" font-size="17">Cisco / LifeSize → SIP</text>
+    <text x="998" y="329" fill="#dbeafe" font-size="17">Echo → direct HA media</text>
+    <text x="998" y="369" fill="#bfdbfe" font-size="14">Busy / DND → skip · no fallback</text>
 
     <g fill="#94a3b8">
       <rect x="306" y="259" width="67" height="3"/>
@@ -53,8 +53,8 @@
       <polygon points="968,310 958,304 958,316"/>
       <polygon points="1104,407 1098,417 1110,417"/>
     </g>
-    <text x="365" y="522" fill="#bae6fd" font-size="17">One-shot answer through existing drivers · persistent preferences stay unchanged</text>
+    <text x="365" y="522" fill="#bae6fd" font-size="17">SIP: one-shot answer · Echo: no ringing or ASR · ordinary calls keep one SIP number per Echo</text>
     <rect x="48" y="570" width="1184" height="50" rx="12" fill="#0f172a"/>
-    <text x="70" y="602" fill="#cbd5e1" font-size="17">No implicit whole-home broadcast. Group delivery is reported per phone; playback is not sample-synchronized.</text>
+    <text x="70" y="602" fill="#cbd5e1" font-size="17">No implicit broadcast. Unknown is not completed. Mixed-group playback is not sample-synchronized.</text>
   </g>
 </svg>
