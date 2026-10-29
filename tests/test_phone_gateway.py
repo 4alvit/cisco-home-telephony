@@ -342,6 +342,25 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(self.server.resources, resources)
         self.assertEqual(FakeAMI.calls, [])
 
+    def test_notification_titles_fit_handset_schema_at_api_boundaries(self):
+        for action in ('message', 'image'):
+            for length in (32, 33, 48):
+                with self.subTest(action=action, length=length):
+                    title = 'A' * (length - 1) + '&'
+                    body = ({'title': title, 'text': 'Body remains complete.'}
+                            if action == 'message' else
+                            self.image_request_body('title-test', title, (0, 0, 0)))
+                    self.server.resources.clear()
+                    self.server.notify(self.server.phones['201'], action, body)
+                    pages = [value[1] for value in self.server.resources.values()
+                             if value[2].startswith('text/xml')]
+                    self.assertEqual(len(pages), 1)
+                    document = ET.fromstring(pages[0])
+                    self.assertEqual(document.findtext('Title'), title[:32])
+                    self.assertLessEqual(len(document.findtext('Prompt')), 32)
+                    if action == 'message':
+                        self.assertEqual(document.findtext('Text'), body['text'])
+
     def test_foreground_message_still_rejects_a_call_on_either_line(self):
         for line in ('201', '202'):
             with self.subTest(line=line):

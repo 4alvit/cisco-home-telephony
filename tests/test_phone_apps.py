@@ -524,6 +524,60 @@ class PhoneAppsTests(unittest.TestCase):
         root = ET.fromstring(value[0])
         self.assertEqual(root.find('Text').text, 'First & second')
 
+    def assert_display_bounds(self, rendered):
+        root = ET.fromstring(rendered[0])
+        for tag in ('Title', 'Prompt'):
+            self.assertIsNotNone(root.find(tag))
+            self.assertLessEqual(len(root.findtext(tag) or ''), 32)
+        return root
+
+    def test_display_heading_boundaries_apply_to_menu_text_and_form(self):
+        for length in (31, 32, 33):
+            # Limits apply to decoded characters after invalid XML is removed,
+            # not UTF-8 bytes or the serialized &amp; entity.
+            heading = '\x00' + '\u00e9' * (length - 1) + '&'
+            expected = heading[1:][:32]
+            with self.subTest(length=length):
+                menu = self.assert_display_bounds(self.app.menu(
+                    '201', '201', heading, [('Example', 'SoftKey:Exit')], heading))
+                self.assertEqual(menu.findtext('Title'), expected)
+                self.assertEqual(menu.findtext('Prompt'), expected)
+                text = self.assert_display_bounds(self.app.text('201', '201', heading, 'Body ' * 20))
+                self.assertEqual(text.findtext('Title'), expected)
+                self.assertEqual(text.findtext('Text'), 'Body ' * 20)
+                form = self.assert_display_bounds(self.app.form(
+                    '201', '201', heading, 'timer_start', [('Minutes', 'minutes', '5', 'N')]))
+                self.assertEqual(form.findtext('Title'), expected)
+                self.assertIn('op=timer_start', form.findtext('URL'))
+
+    def test_camera_and_error_pages_obey_display_heading_limits(self):
+        with patch.object(self.backend, 'cameras', return_value=[{'id': 'door', 'label': 'Camera ' * 7}]):
+            camera = self.assert_display_bounds(self.app.handle('201', '/camera', 'id=door'))
+        self.assertEqual(camera.findtext('Title'), ('Camera ' * 7)[:32])
+        self.assertEqual(camera.findtext('URL'), 'http://192.168.50.10:18080/content/opaque')
+        for reason in ('voice_phone_busy', 'voice_response_invalid', 'voice_request_failed', 'unknown'):
+            with self.subTest(reason=reason):
+                error = self.assert_display_bounds(self.app.error(reason))
+                self.assertEqual(error.findtext('Title'), 'Action not completed')
+                self.assertGreater(len(error.findtext('Text')), 32)
+
+    def test_voice_pages_keep_timeout_and_stop_within_prompt_limit_in_every_state(self):
+        states = ('idle', 'starting', 'running', 'stopping', 'stopped', 'cancelled',
+                  'failed', 'recovery_required', 'external_owner')
+        for state in states:
+            for budget in (30, 300, 0.000123456):
+                with self.subTest(state=state, budget=budget):
+                    value = {'state': state, 'line': '202', 'session_seconds': budget,
+                             'session_id': None if state == 'idle' else 'a' * 32,
+                             'remaining_seconds': budget, 'error': None,
+                             'active': state in ('starting', 'running', 'stopping'),
+                             'stop_requested': state == 'stopping', 'stop_confirmed': state == 'stopped'}
+                    root = self.assert_display_bounds(self.app.voice_page('201', '202', value))
+                    self.assertEqual(root.findtext('Prompt'), f'Mic up to {budget:g}s; Stop')
+                    self.assertIn('State: ' + state.replace('_', ' '), root.findtext('Text'))
+                    self.assertIn('Session line: 202', root.findtext('Text'))
+        self.assertFalse(self.gateway.calls)
+
 
 class PhoneAppsHTTPTests(unittest.TestCase):
     """Exercise the real gateway handler and its phone/source boundary."""

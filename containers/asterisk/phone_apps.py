@@ -54,7 +54,9 @@ def xml(root):
 
 
 def child(root, name, value):
-    ET.SubElement(root, name).text = safe(value, 2048)
+    # CiscoIPPhoneDisplayableType limits both fields to 32 characters.
+    # Enforce this for every page, including dynamic form/camera titles.
+    ET.SubElement(root, name).text = safe(value, 32 if name in ('Title', 'Prompt') else 2048)
 
 
 class PhoneApps:
@@ -87,8 +89,8 @@ class PhoneApps:
     def menu(self, phone_id, line, title, entries, prompt='Select an item'):
         require(len(entries) <= 32, 'menu_too_large', 503)
         root = ET.Element('CiscoIPPhoneMenu')
-        child(root, 'Title', safe(title, 32))
-        child(root, 'Prompt', safe(prompt, 80))
+        child(root, 'Title', title)
+        child(root, 'Prompt', prompt)
         for name, url in entries:
             item = ET.SubElement(root, 'MenuItem')
             child(item, 'Name', safe(name, 64))
@@ -98,7 +100,7 @@ class PhoneApps:
 
     def text(self, phone_id, line, title, value, *, refresh=None):
         root = ET.Element('CiscoIPPhoneText')
-        child(root, 'Title', safe(title, 32))
+        child(root, 'Title', title)
         child(root, 'Prompt', 'Refresh to check current status' if refresh else 'Press Home or Exit')
         child(root, 'Text', safe(value, 1900))
         if refresh:
@@ -274,7 +276,7 @@ class PhoneApps:
         root = ET.Element('CiscoIPPhoneText')
         child(root, 'Title', 'Voice Assistant')
         budget = value.get('session_seconds', self.voice_budget(phone_id))
-        child(root, 'Prompt', f'Microphone up to {budget:g}s; Stop ends session')
+        child(root, 'Prompt', f'Mic up to {budget:g}s; Stop')
         # A reserved journal from another process is not a locally stoppable
         # session. Local recovery_required sessions still retain their Stop path.
         external_owner = (value['state'] == 'external_owner'

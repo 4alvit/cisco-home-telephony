@@ -249,7 +249,10 @@ class DisplayFixture(unittest.TestCase):
     def xml(self, response):
         self.assertEqual(response.status, 200)
         self.assertIn('xml', response.content_type)
-        return ET.fromstring(response.body)
+        root = ET.fromstring(response.body)
+        for field in ('Title', 'Prompt'):
+            self.assertLessEqual(len(root.findtext(field, '')), 32, field)
+        return root
 
     def headers(self, response):
         return {name.lower(): value for name, value in response.headers.items()}
@@ -700,6 +703,14 @@ class VoiceDisplayTests(DisplayFixture):
 
 
 class CameraDisplayTests(DisplayFixture):
+    def test_stale_camera_prompt_fits_schema_and_details_keep_full_capture_date(self):
+        captured = self.clock.wall - 30
+        ref = self.start(mode='camera', image=picture(), captured_at=captured)
+        root = self.xml(self.request(ref.page_url))
+        self.assertEqual(root.findtext('Prompt'), 'Stale frame: 22:12:50 UTC')
+        details = self.xml(self.request(ref.page_url + '/text'))
+        self.assertIn('Stale frame: 2023-11-14 22:12:50 UTC', details.findtext('Text'))
+
     def test_camera_requires_timestamp_and_exposes_capture_time(self):
         with self.assertRaises(display.DisplayError):
             self.start(mode='camera', image=picture())

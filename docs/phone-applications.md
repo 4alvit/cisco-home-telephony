@@ -255,9 +255,16 @@ deployed without deliberate replacement and physical device verification.
   current DHCP address, exact-source firewall mapping and per-phone port. A
   request from a laptop or even the node can be rejected deliberately; do not
   widen the ACL merely to make a laptop test work.
-- **XML parse error:** use the paired gateway/profile version, a fresh menu
-  request, and the phone's status log. A login HTML page, proxy redirect or
-  modern web dashboard is not a Cisco XML response.
+- **XML Error[4] on the display:** this is an invalid XML object, distinct from
+  the authentication failure returned as `<CiscoIPPhoneError Number="4"/>` by
+  a management request. Check the exact page response and the phone's status
+  log. A login HTML page, JSON refusal or proxy redirect is not a Cisco XML
+  response. Cisco's [XML schema](https://www.cisco.com/c/en/us/td/docs/voice_ip_comm/cuipph/all_models/xsi/7_0/english/programming/guide/70xsi/xsi70sch.html)
+  limits both `Title` and `Prompt` to 32 characters. The gateway applies that
+  limit to every app page; the voice prompt keeps the timeout and Stop hint
+  within it. Update the gateway app code and reopen the page if an older voice
+  page exceeds this limit. A parser error alone does not justify rotating
+  credentials or reloading the phone profile.
 - **Home Assistant unavailable:** check its private URL, gateway-to-HA routing,
   token and correct Cisco Phone Control entry ID. Directory/radio/phone control
   do not depend on the optional HA backend.

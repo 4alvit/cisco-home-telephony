@@ -1350,7 +1350,9 @@ class Gateway:
         return f'http://{self.config["bind_ipv4"]}:{phone["port"]}{path}'
 
     def notify(self, phone, action, body):
-        title = text(body.get('title', 'Home phone'), 48)
+        # Keep the API's existing input limit, but honor the handset XML schema.
+        # A longer Title makes 7945G reject the entire page with XML Error [4].
+        title = text(body.get('title', 'Home phone'), 48)[:32]
         if action == 'message':
             root = ET.Element('CiscoIPPhoneText')
             ET.SubElement(root, 'Title').text = title
