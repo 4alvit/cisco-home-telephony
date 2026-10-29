@@ -7,7 +7,7 @@ driver, selecting its number returns `line_not_in_cisco_gateway_inventory`.
 
 ## Private configuration
 
-Install all six CLI modules from the same revision, using the instructions below.
+Install all seven CLI modules from the same revision, using the instructions below.
 Merge the `lifesize` object from
 [`cisco-cli.lifesize.example.json`](../deploy/cisco-cli.lifesize.example.json) into
 your existing private `~/.config/cisco-home/cli.json`; this example is a fragment,
@@ -159,9 +159,11 @@ push support.
 
 Cisco image/XML screen pushes, timers, alarms, one-call intercom, voice sessions, arbitrary
 speaker-key toggles and controlled `play` queues are not exposed for LifeSize.
-Music service numbers can still be dialed normally. Installing this local driver
-does not create a Home Assistant device or add LifeSize support to the gateway
-server.
+Music service numbers can still be dialed normally. For finite spoken calls,
+use the separate [announcement service and `say` command](cli-announcements.md).
+It can include a configured LifeSize phone without changing its persistent
+auto-answer preference. Installing the local native driver alone does not create
+a Home Assistant device or install the announcement service.
 
 ## Verified behavior
 
@@ -175,7 +177,7 @@ is a native-value readback; it is not a calibrated loudness measurement.
 This firmware reports a pending call as `Ring Incoming`, with ten status fields
 before the elapsed-time field appears. The driver also handles interleaved
 incoming-call and mute notifications. If an older CLI returns
-`invalid_lifesize_calls` during setup, update the complete six-module bundle.
+`invalid_lifesize_calls` during setup, update the complete seven-module bundle.
 
 ## Install or update the local CLI
 
@@ -201,7 +203,7 @@ import tempfile
 
 names = (
     'cisco.py', 'cisco_http.py', 'cisco_library.py',
-    'cisco_lifesize.py', 'cisco_media_source.py', 'cisco_player.py',
+    'cisco_lifesize.py', 'cisco_media_source.py', 'cisco_player.py', 'cisco_announce.py',
 )
 revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
 contents = {name: subprocess.check_output(
@@ -252,7 +254,7 @@ cisco --help
 cisco 222
 ```
 
-Keep the printed previous target for rollback. Each release contains all six
+Keep the printed previous target for rollback. Each release contains all seven
 modules; the atomic symlink change selects the complete bundle for subsequent
 commands without overwriting the previous release. The procedure leaves
 `~/.config/cisco-home/cli.json`, SSH keys and known-hosts files
@@ -266,7 +268,7 @@ Asterisk, Home Assistant or the phone.
 
 ## Troubleshooting
 
-- `lifesize_client_not_installed`: install the full six-module bundle from one
+- `lifesize_client_not_installed`: install the full seven-module bundle from one
   revision, including `cisco_lifesize.py`.
 - `line_not_in_cisco_gateway_inventory`: check that the native `lifesize` map in
   the private configuration contains the selected registered extension.

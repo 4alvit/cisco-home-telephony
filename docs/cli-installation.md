@@ -82,8 +82,9 @@ release, use its recorded full source commit and matching server image; the
 latest default branch is not a release pin.
 
 The Beta 25 pin above does **not** include the newer local-library music
-commands. To use them, select a reviewed newer revision containing the five
-CLI files described in [CLI music](cli-music.md).
+commands or announcements. To use them, select a reviewed newer revision
+containing the seven CLI files listed below. See [CLI music](cli-music.md) and
+[CLI announcements](cli-announcements.md) for their respective server setup.
 
 For an existing checkout, inspect `git status` and preserve uncommitted work
 before changing revisions. Use a clean checkout at the selected release's
@@ -104,13 +105,18 @@ cisco 212 volume --help
 The link command intentionally refuses to replace an existing `cisco`. If that
 happens, inspect `command -v cisco` and `ls -l "$HOME/.local/bin/cisco"` before
 choosing which installation to keep. Keep the scripts together in the checkout.
-Music-capable revisions require all five: `cisco.py`, `cisco_http.py`,
-`cisco_player.py`, `cisco_library.py` and `cisco_media_source.py`, from the same
-revision. Copying only `cisco.py` breaks its imports and workers.
+The complete CLI bundle contains seven files: `cisco.py`, `cisco_http.py`,
+`cisco_player.py`, `cisco_library.py`, `cisco_media_source.py`,
+`cisco_lifesize.py` and `cisco_announce.py`, from the same revision.
+Copying only `cisco.py` breaks its imports and workers.
 
-For a LifeSize Phone, also install `cisco_lifesize.py` and follow the optional
+For a LifeSize Phone, follow the optional
 [native LifeSize configuration](cli-lifesize.md). SIP registration alone does
 not make a non-Cisco phone controllable through the Cisco gateway.
+
+Spoken `say` calls additionally require the bounded announcement service beside
+Asterisk and its private CLI configuration; see [the announcement guide](cli-announcements.md).
+Updating the CLI alone does not install that service.
 
 For other configured SIP clients, follow [generic endpoint setup](existing-endpoints.md).
 Both client and gateway must include the endpoint API. No additional CLI module
@@ -417,7 +423,7 @@ before replacing an existing schedule.
   run `python3 /path/to/cisco-home-telephony/scripts/cisco.py --help`. Check the
   symlink still points at an existing checkout.
 - **`No module named cisco_http`:** restore the scripts from the same revision
-  together (all five for the music-capable CLI); do not
+  together (all seven for the complete CLI); do not
   install a similarly named package from a package index.
 - **Wrong Python or syntax error:** inspect `python3 --version` and
   `command -v python3`; the executable uses `/usr/bin/env python3`.

@@ -127,6 +127,9 @@ conversion to MPP is not required.
 - [LifeSize Phone controls](docs/cli-lifesize.md): the same CLI can use native
   authenticated SSH for calls, separate ringer/speaker volume, microphone mute,
   and persistent auto-answer. Includes model-specific limits and installation.
+- [Spoken announcements](docs/cli-announcements.md): use the configured Home
+  Assistant voice to call one phone or a private group, answer the announcement,
+  play it once and finish the call. Screen `message` and spoken `say` stay separate.
 - [Room directory](docs/phone-directory.md): a fictional ten-room demonstration
   plus an example Mac client, with stable numbers, room caller ID and read-only
   `cisco directory` lookup. Actual room assignments stay in private inventory.

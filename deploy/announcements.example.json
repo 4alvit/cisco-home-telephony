@@ -1,0 +1,22 @@
+{
+  "bind": "127.0.0.1",
+  "port": 18085,
+  "token": "replace_with_a_random_private_token_00000001",
+  "ami": {
+    "host": "192.168.50.10",
+    "port": 5038,
+    "username": "announcement-example",
+    "secret": "replace-with-the-private-AMI-secret"
+  },
+  "lines": {
+    "201": "201",
+    "202": "201",
+    "203": "203",
+    "204": "203",
+    "222": "222"
+  },
+  "dial_audio_config": "/etc/asterisk/dial-audio.json",
+  "voice_service": "555",
+  "spool": "/var/spool/asterisk/announcements",
+  "agi": "/opt/cisco-announcements/phone_announce_agi.py"
+}

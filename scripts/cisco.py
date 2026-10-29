@@ -58,6 +58,8 @@ MUSIC_COMMANDS = frozenset(('play', 'search', 'music', 'queue', 'pause', 'resume
 MUSIC_HELP = ['play FILE_OR_QUERY_OR_URL [--enqueue MODE]', 'search QUERY',
               'music', 'queue', 'pause', 'resume', 'stop', 'next', 'previous',
               'clear-queue', 'seek SECONDS', 'gain PERCENT', 'mute', 'unmute']
+ANNOUNCEMENT_COMMANDS = frozenset(('say', 'announce', 'voicemsg', 'say-status', 'say-stop'))
+ANNOUNCEMENT_HELP = ['say TEXT [--text-file FILE]', 'voicemsg TEXT', 'say-status JOB_ID', 'say-stop JOB_ID']
 
 
 class Refused(Exception):
@@ -90,7 +92,7 @@ def load_config(path):
     try:
         config = json_loads_unique(read_file(path, 16384, private=True))
         require(isinstance(config, dict), 'config_requires_object')
-        allowed = {'gateway_url', 'token', 'token_file', 'transport', 'kubectl', 'home_assistant', 'music', 'lifesize'}
+        allowed = {'gateway_url', 'token', 'token_file', 'transport', 'kubectl', 'home_assistant', 'music', 'lifesize', 'announcements'}
         require(set(config) <= allowed, 'unknown_config_field')
         config['gateway_url'] = gateway_url(config['gateway_url'])
         require(('token' in config) != ('token_file' in config), 'choose_token_or_token_file')
@@ -120,6 +122,8 @@ def load_config(path):
             config['home_assistant'] = load_ha_config(config['home_assistant'], path)
         if 'lifesize' in config:
             config['lifesize'] = lifesize_operation('validate_config', config['lifesize'], path)
+        if 'announcements' in config:
+            config['announcements'] = announcement_operation('validate_config', config['announcements'], path, read_file)
         if 'music' in config:
             try:
                 from cisco_library import LibraryError, validate_config
@@ -132,6 +136,17 @@ def load_config(path):
         return config
     except (ValueError, KeyError, TypeError, UnicodeError):
         raise Refused('invalid_private_config') from None
+
+
+def announcement_operation(operation, *args, **kwargs):
+    try:
+        import cisco_announce
+    except ImportError:
+        raise Refused('announcement_client_not_installed') from None
+    try:
+        return getattr(cisco_announce, operation)(*args, **kwargs)
+    except cisco_announce.AnnouncementError as error:
+        raise Refused(error.reason) from None
 
 
 def lifesize_operation(operation, *args):
@@ -1202,6 +1217,14 @@ def parser():
             'enabled', nargs='?', choices=['on', 'off', 'status'] if name == 'dnd' else ['on', 'off'])
     msg = sub.add_parser('message'); msg.add_argument('text', nargs='?')
     msg.add_argument('--text-file'); msg.add_argument('--title', default='Notice')
+    say = sub.add_parser('say', aliases=['announce', 'voicemsg'],
+        help='Speak with the configured HA voice on one phone, a comma-list or @group.',
+        description='Generate one finite announcement and answer its exact incoming calls once. '
+                    'The server ends playback calls automatically. Persistent phone preferences are preserved.')
+    say.add_argument('text', nargs='*')
+    say.add_argument('--text-file')
+    for name in ('say-status', 'say-stop'):
+        sub.add_parser(name, help='Inspect or stop one exact announcement job.').add_argument('job_id')
     img = sub.add_parser('image'); img.add_argument('file'); img.add_argument('--title', default='Notice')
     play = sub.add_parser('play', help='Play all matching library tracks, a file or direct HTTP audio URL.',
         description='Queue every match on the selected SIP line, in sorted order (at most 50). '
@@ -1399,14 +1422,14 @@ def main(argv=None):
     p = parser()
     if not argv or argv in (['--json'], ['-j']):
         if argv:
-            print(json.dumps({'status': 'help', 'commands': ['status', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS, *MUSIC_HELP]}))
+            print(json.dumps({'status': 'help', 'commands': ['status', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS, *MUSIC_HELP, *ANNOUNCEMENT_HELP]}))
         else:
             p.print_help()
         return 0
     args = p.parse_args(normalize_shorthand(argv))
     if args.command == 'help':
         if args.json:
-            print(json.dumps({'status': 'help', 'commands': ['status', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS, *MUSIC_HELP]}))
+            print(json.dumps({'status': 'help', 'commands': ['status', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS, *MUSIC_HELP, *ANNOUNCEMENT_HELP]}))
         else:
             p.print_help()
             print('\nDevice commands: ' + '; '.join(COMMANDS.values()))
@@ -1414,6 +1437,7 @@ def main(argv=None):
             print('Schedules (optional Home Assistant config): ' + '; '.join(SCHEDULE_COMMANDS))
             print('Voice (requires configured gateway supervisor): ' + '; '.join(VOICE_COMMANDS))
             print('Music (requires controlled player): ' + '; '.join(MUSIC_HELP))
+            print('Announcements (requires private configuration): ' + '; '.join(ANNOUNCEMENT_HELP))
             print('LifeSize (requires native SSH configuration): volume ringer|call status; '
                   'volume ringer|call set VALUE; mic [mute|unmute|status]; automute [on|off]; reject. '
                   'Run cisco LINE for the actual device command list and settings.')
@@ -1431,16 +1455,26 @@ def main(argv=None):
         if args.extension == 'directory':
             require(args.command is None, 'global_directory_takes_no_subcommand')
             args.extension, args.command = None, 'directory'
-        else:
+        elif args.command not in ANNOUNCEMENT_COMMANDS:
             require(re.fullmatch(r'2[0-9]{2}', args.extension), 'extension_requires_three_digit_cisco_line')
         require(1 <= args.timeout <= 60, 'timeout_requires_1_to_60_seconds')
         config = load_config(args.config)
+        if args.command in ANNOUNCEMENT_COMMANDS:
+            result, code = announcement_operation('run', args, config, gateway_factory=Gateway,
+                inventory_validator=validate_inventory, read_file=read_file)
+            if args.json:
+                print(json.dumps(result, ensure_ascii=True))
+            else:
+                announcement_operation('display', result)
+            return code
         lifesize = config.get('lifesize', {})
         if args.extension in lifesize and args.command != 'directory':
             native_lifesize = True
             data = Gateway(config, args.timeout).request('/v1/phones')
             validate_inventory(data)
             result = lifesize_operation('run', args, lifesize, data, remember_voice_dispatch)
+            if 'announcements' in config and 'available_commands' in result:
+                result['available_commands'].extend(ANNOUNCEMENT_HELP)
             if args.json:
                 print(json.dumps(result, ensure_ascii=True))
             else:
@@ -1555,6 +1589,8 @@ def main(argv=None):
                 args.command in ('dnd', 'autoanswer') and args.enabled is None) or (
                 args.command == 'dnd' and args.enabled == 'status'):
             result = status_result(data, phone, args.extension)
+            if 'announcements' in config:
+                result['available_commands'].extend(ANNOUNCEMENT_HELP)
             if 'home_assistant' in config:
                 result['available_commands'].extend(SCHEDULE_COMMANDS)
                 if args.command in (None, 'status'):
@@ -1657,7 +1693,7 @@ def main(argv=None):
                 result['offline_commands'] = (['status', 'help', 'directory', 'destinations',
                 'call NUMBER', 'dial NUMBER', 'hangup', 'dnd [on|off|status]'] if generic_endpoint else
                 ['status', 'help', 'directory', 'destinations', 'pickup', *COMMANDS.values(),
-                 *SCHEDULE_COMMANDS, *VOICE_COMMANDS, *MUSIC_HELP])
+                 *SCHEDULE_COMMANDS, *VOICE_COMMANDS, *MUSIC_HELP, *ANNOUNCEMENT_HELP])
         print(json.dumps(result), file=sys.stdout if args.json else sys.stderr)
         if not args.json and args.command is None:
             print('Offline command help (live availability unknown):', file=sys.stderr)

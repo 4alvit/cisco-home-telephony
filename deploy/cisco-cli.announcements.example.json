@@ -1,0 +1,17 @@
+{
+  "announcements": {
+    "gateway_url": "http://127.0.0.1:18085",
+    "token_file": "announcement-token.txt",
+    "transport": "kubectl",
+    "kubectl": {
+      "context": "example-cluster",
+      "namespace": "telephony",
+      "selector": "app=asterisk",
+      "container": "announcer"
+    },
+    "groups": {
+      "downstairs": ["201", "203", "222"],
+      "conference": ["222"]
+    }
+  }
+}

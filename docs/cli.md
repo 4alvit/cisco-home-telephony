@@ -11,6 +11,10 @@ plain text and quoted `*` / `?` filename masks are supported. Local names map to
 the existing HA/NAS copy;
 the Mac does not upload or serve audio.
 
+For a spoken message using the configured Home Assistant voice, see
+[CLI announcements](cli-announcements.md). `say` creates a finite announcement
+call to one phone or a private group; `message` displays text on a phone screen.
+
 `cisco LINE` reads live status and shows commands and concrete examples. When HA scheduling is configured, it also shows the current timer/alarm slots, their owning lines and HA timezone. A second numeric argument places a call **from the selected line**:
 
 ```bash
@@ -65,9 +69,10 @@ export PATH="$HOME/.local/bin:$PATH"
 cisco --help
 ```
 
-Keep all five music-capable scripts together from the same revision:
-`cisco.py`, `cisco_http.py`, `cisco_player.py`, `cisco_library.py` and
-`cisco_media_source.py`. The symlink follows repository updates. If `cisco`
+Keep all seven CLI scripts together from the same revision:
+`cisco.py`, `cisco_http.py`, `cisco_player.py`, `cisco_library.py`,
+`cisco_media_source.py`, `cisco_lifesize.py` and `cisco_announce.py`.
+The symlink follows repository updates. If `cisco`
 already exists, inspect it before changing the link. Add the PATH line to your
 shell startup file if needed. The older Beta 25 installation pin does not
 contain the new music commands.
