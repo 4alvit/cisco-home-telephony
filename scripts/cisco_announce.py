@@ -1,5 +1,6 @@
 """Finite HA-voice announcements with one-shot phone answers."""
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 import hashlib
 import math
 from pathlib import Path
@@ -157,7 +158,7 @@ def marker_matches(number, marker):
 
 
 def answer_once(config, timeout, identifier, lines, recipient, target, gateway_factory,
-                inventory_validator, cancelled):
+                inventory_validator, cancelled, prepared=None):
     attempted = False
     try:
         service = gateway_factory(config['announcements'], timeout)
@@ -166,8 +167,13 @@ def answer_once(config, timeout, identifier, lines, recipient, target, gateway_f
             import cisco_lifesize as native
             device = config['lifesize'][line]
             with native.device_lock(device['host']):
-                phone = native.Phone(device, timeout)
-                calls = phone.snapshot(line)['calls']
+                if prepared is None:
+                    phone = native.Phone(device, timeout)
+                    calls = phone.snapshot(line)['calls']
+                else:
+                    require(prepared['phone'] is not None, prepared['reason'])
+                    phone = prepared['phone']
+                    calls = native.parse_calls(phone.request('status call active'))
                 require(len(calls) == 1 and calls[0]['incoming'] and
                         calls[0]['state'] in ('Ringing', 'Ringback', 'Ring Incoming')
                         and marker_matches(calls[0]['number'], recipient['caller_id']),
@@ -206,6 +212,29 @@ def answer_once(config, timeout, identifier, lines, recipient, target, gateway_f
         return {'line': recipient['line'], 'status': 'not_confirmed' if attempted else 'refused', 'reason': reason}
 
 
+def prepare_native(config, targets, timeout, connections):
+    """Authenticate and verify native line identity before any phone starts ringing."""
+    import cisco_lifesize as native
+    prepared = {}
+    for line, target in targets.items():
+        if target['driver'] != 'lifesize':
+            continue
+        session = ExitStack()
+        try:
+            phone = session.enter_context(native.Phone(config['lifesize'][line], timeout).connection())
+            require(phone.snapshot(line)['registered'], 'lifesize_not_registered')
+        except Exception as error:
+            session.close()
+            reason = getattr(error, 'reason', 'announcement_native_preparation_failed')
+            if not isinstance(reason, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,95}', reason):
+                reason = 'announcement_native_preparation_failed'
+            prepared[line] = {'phone': None, 'reason': reason}
+        else:
+            connections.callback(session.close)
+            prepared[line] = {'phone': phone, 'reason': None}
+    return prepared
+
+
 def recovery(args, identifier):
     return shlex.join(['cisco', '--config', args.config, '--timeout', str(args.timeout),
                       args.extension, 'say-status', identifier])
@@ -216,6 +245,7 @@ def run(args, config, *, gateway_factory, inventory_validator, read_file, clock=
     identifier, dispatched, lines = None, False, []
     latest, answers = None, {}
     cancelled = threading.Event()
+    connections = ExitStack()
     try:
         require('announcements' in config, 'announcement_config_required')
         private = config['announcements']
@@ -241,6 +271,7 @@ def run(args, config, *, gateway_factory, inventory_validator, read_file, clock=
                 'invalid_idempotency_key')
         identifier = job_id(key)
         body = {'idempotency_key': key, 'lines': lines, 'text': text, 'dry_run': args.dry_run}
+        prepared = {} if args.dry_run else prepare_native(config, targets, args.timeout, connections)
         if not args.dry_run:
             dispatched = True
         latest = validate_job(service.request('/v1/announcements', body), identifier, lines)
@@ -257,7 +288,8 @@ def run(args, config, *, gateway_factory, inventory_validator, read_file, clock=
                         line = recipient['line']
                         if recipient['status'] == 'ringing' and line not in futures:
                             futures[line] = pool.submit(answer_once, config, args.timeout, identifier, lines,
-                                recipient, targets[line], gateway_factory, inventory_validator, cancelled)
+                                recipient, targets[line], gateway_factory, inventory_validator, cancelled,
+                                prepared.get(line))
                     for line, future in futures.items():
                         if future.done():
                             answers[line] = future.result()
@@ -284,6 +316,8 @@ def run(args, config, *, gateway_factory, inventory_validator, read_file, clock=
         if dispatched:
             result['note'] = 'Do not repeat the announcement blindly. Inspect this job; the server owns bounded cleanup.'
         return result, 1
+    finally:
+        connections.close()
 
 
 def display(value):

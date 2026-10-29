@@ -35,6 +35,62 @@ class LifeSizeTests(unittest.TestCase):
                        'label': 'Conference Phone'}
         self.devices = ls.validate_config({'222': self.device}, self.root / 'cli.json')
 
+    def test_prepared_ssh_reuses_one_private_transport_and_closes_it(self):
+        masters, commands = [], []
+        class Master:
+            def __init__(self, argv, **_):
+                masters.append(argv)
+                self.socket = Path(argv[argv.index('-S') + 1])
+                self.socket.touch()
+                self.closed = False
+            def poll(self): return 0 if self.closed else None
+            def terminate(self): self.closed = True
+            def wait(self, **_): return 0
+        def request(argv, **_):
+            commands.append(argv)
+            return subprocess.CompletedProcess(argv, 0, b'ok,00\n', b'')
+        phone = ls.Phone(self.devices['222'], 5)
+        with patch.object(ls.subprocess, 'Popen', Master), patch.object(ls.subprocess, 'run', request):
+            with phone.connection():
+                socket = Path(phone.control_socket)
+                self.assertEqual(socket.parent.stat().st_mode & 0o777, 0o700)
+                phone.request('status call active')
+                phone.request('control call answer -t audio 12')
+                for argv in commands:
+                    self.assertEqual(argv[argv.index('-S') + 1], str(socket))
+                    self.assertIn('ProxyCommand=false', argv)
+                    self.assertIn('StrictHostKeyChecking=yes', argv)
+                    self.assertIn('ControlMaster=no', argv)
+            self.assertFalse(socket.parent.exists())
+        self.assertEqual(len(masters), 1)
+        self.assertIsNone(phone.control_socket)
+
+    def test_prepared_ssh_failure_does_not_dispatch_a_command(self):
+        class Master:
+            def __init__(self, *_a, **_k): pass
+            def poll(self): return 255
+        phone = ls.Phone(self.devices['222'], 5)
+        with patch.object(ls.subprocess, 'Popen', Master), patch.object(ls.subprocess, 'run') as request:
+            with self.assertRaises(ls.LifeSizeError) as error:
+                with phone.connection(): self.fail('failed transport entered')
+        self.assertEqual(error.exception.reason, 'lifesize_connection_unavailable')
+        request.assert_not_called()
+        self.assertIsNone(phone.control_socket)
+
+    def test_prepared_ssh_closes_on_operation_exception(self):
+        stopped = []
+        class Master:
+            def __init__(self, argv, **_): Path(argv[argv.index('-S') + 1]).touch()
+            def poll(self): return None
+            def terminate(self): stopped.append(True)
+            def wait(self, **_): return 0
+        phone = ls.Phone(self.devices['222'], 5)
+        with patch.object(ls.subprocess, 'Popen', Master):
+            with self.assertRaisesRegex(ValueError, 'test'):
+                with phone.connection(): raise ValueError('test')
+        self.assertEqual(stopped, [True])
+        self.assertIsNone(phone.control_socket)
+
     def invoke(self, args, *, data=None, calls=(), fail=None, username='222',
                settings=None, responses=None, persist=True):
         commands, gateway_requests = [], []

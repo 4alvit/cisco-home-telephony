@@ -201,6 +201,37 @@ class AnnouncementConfigTests(unittest.TestCase):
 
 
 class AnnouncementAnswerTests(unittest.TestCase):
+    def test_prepared_native_transport_avoids_login_and_identity_reads_while_ringing(self):
+        reply = job(('222',), status='running', recipient_status='ringing')
+        commands = []
+        class PreparedPhone:
+            def snapshot(self, _):
+                raise AssertionError('identity reads must finish before ringing')
+            def request(self, command):
+                commands.append(command)
+                return ['12,2,Ringing,Yes,Audio,812345678,']
+        class Gateway:
+            def __init__(self, *_): pass
+            def request(self, *_): return reply
+        with patch.object(native, 'Phone', side_effect=AssertionError('unexpected new connection')), \
+                patch.object(native, 'device_lock', lambda _: contextlib.nullcontext()):
+            result = announce.answer_once(configuration(), 5, IDENTIFIER, ['222'], reply['recipients'][0],
+                {'driver': 'lifesize', 'phone_id': '222'}, Gateway, cisco.validate_inventory,
+                threading.Event(), {'phone': PreparedPhone(), 'reason': None})
+        self.assertEqual(result['status'], 'acknowledged')
+        self.assertEqual(commands, ['status call active', 'status call active',
+                                    'control call answer -t audio 12'])
+
+    def test_failed_native_preparation_never_reconnects_or_answers(self):
+        reply = job(('222',), status='running', recipient_status='ringing')
+        with patch.object(native, 'Phone', side_effect=AssertionError('unexpected reconnect')), \
+                patch.object(native, 'device_lock', lambda _: contextlib.nullcontext()):
+            result = announce.answer_once(configuration(), 5, IDENTIFIER, ['222'], reply['recipients'][0],
+                {'driver': 'lifesize', 'phone_id': '222'}, lambda *_: None, cisco.validate_inventory,
+                threading.Event(), {'phone': None, 'reason': 'lifesize_connection_unavailable'})
+        self.assertEqual(result['status'], 'refused')
+        self.assertEqual(result['reason'], 'lifesize_connection_unavailable')
+
     def cisco_answer(self, *, mutate_phone=None, mutate_server=None, cancelled=False, failure=False):
         reply = job(status='running', recipient_status='ringing')
         recipient = copy.deepcopy(reply['recipients'][0])
@@ -293,6 +324,31 @@ class AnnouncementAnswerTests(unittest.TestCase):
 
 
 class AnnouncementPollingTests(unittest.TestCase):
+    def test_native_connection_and_identity_are_ready_before_submission_and_closed_afterward(self):
+        args = cisco.parser().parse_args(['--idempotency-key', KEY, '222', 'say', 'Example'])
+        events = []
+        class Phone:
+            def __init__(self, *_): pass
+            @contextlib.contextmanager
+            def connection(self):
+                events.append('connect')
+                try: yield self
+                finally: events.append('close')
+            def snapshot(self, line):
+                events.append('verify-' + line)
+                return {'registered': True, 'calls': []}
+        class Gateway:
+            def __init__(self, *_): pass
+            def request(self, path, body=None):
+                if path == '/v1/phones': return inventory()
+                events.append('submit')
+                return job(('222',))
+        with patch.object(native, 'Phone', Phone):
+            result, code = announce.run(args, configuration(), gateway_factory=Gateway,
+                inventory_validator=cisco.validate_inventory, read_file=cisco.read_file)
+        self.assertEqual(code, 0)
+        self.assertEqual(events, ['connect', 'verify-222', 'submit', 'close'])
+
     def test_group_answers_run_in_parallel_and_uncertain_answers_are_never_retried(self):
         args = cisco.parser().parse_args(['--idempotency-key', KEY, '212,222', 'say', 'Example'])
         attempts, polls = [], []

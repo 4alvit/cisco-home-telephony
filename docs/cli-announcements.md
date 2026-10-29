@@ -87,6 +87,15 @@ Answering uses the ordinary Cisco or LifeSize control path only for the
 announcement's incoming call. Playback completion is managed by Asterisk, not
 by a timer in the terminal that originally submitted the text.
 
+For LifeSize, the CLI opens a private authenticated SSH connection and checks
+the configured SIP identity before submitting the announcement. It reuses that
+connection for the two fresh incoming-call checks and the answer command.
+This avoids repeated SSH handshakes while the phone is ringing. The temporary
+connection closes when the CLI operation finishes; a lost prepared connection
+does not silently reconnect or repeat an answer. Some ringing can still occur
+while the exact incoming call is verified. This is not persistent auto-answer
+for ordinary incoming calls.
+
 ## Private client configuration
 
 Install the complete seven-file CLI bundle from one reviewed revision:

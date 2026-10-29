@@ -10,6 +10,8 @@ import re
 import secrets
 import stat
 import subprocess
+import tempfile
+import time
 
 
 # Values are native LifeSize settings, not Cisco volume-key presses or music gain.
@@ -84,8 +86,9 @@ def validate_config(value, config_path):
 class Phone:
     def __init__(self, config, timeout):
         self.config, self.timeout = config, timeout
+        self.control_socket = None
 
-    def request(self, command):
+    def ssh_arguments(self):
         c = self.config
         for field in ('identity_file', 'known_hosts_file'):
             try:
@@ -105,6 +108,46 @@ class Phone:
                 '-i', c['identity_file']]
         if c['legacy_rsa']:
             argv += ['-o', 'HostKeyAlgorithms=+ssh-rsa', '-o', 'PubkeyAcceptedAlgorithms=+ssh-rsa']
+        return argv
+
+    @contextmanager
+    def connection(self):
+        """Keep one authenticated transport for a bounded foreground operation."""
+        require(self.control_socket is None, 'lifesize_connection_already_open')
+        # A short private path also fits macOS's Unix socket path limit.
+        with tempfile.TemporaryDirectory(prefix='cisco-ssh-', dir='/tmp') as directory:
+            socket = str(Path(directory) / 'control')
+            master = None
+            try:
+                master = subprocess.Popen(self.ssh_arguments() + [
+                    '-M', '-S', socket, '-N', 'auto@' + self.config['host']],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                deadline = time.monotonic() + self.timeout
+                while not Path(socket).exists() and master.poll() is None and time.monotonic() < deadline:
+                    time.sleep(.025)
+                require(master.poll() is None and Path(socket).exists(), 'lifesize_connection_unavailable')
+                self.control_socket = socket
+                yield self
+            except OSError:
+                raise LifeSizeError('lifesize_connection_unavailable') from None
+            finally:
+                self.control_socket = None
+                if master is not None and master.poll() is None:
+                    master.terminate()
+                    try:
+                        master.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        master.kill()
+                        master.wait()
+
+    def request(self, command):
+        c = self.config
+        argv = self.ssh_arguments()
+        if self.control_socket is not None:
+            # If the prepared transport disappears, fail instead of silently
+            # reconnecting and delaying a call-scoped action.
+            argv += ['-S', self.control_socket, '-o', 'ControlMaster=no',
+                     '-o', 'ProxyCommand=false']
         argv += ['auto@' + c['host'], command]
         try:
             response = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True,
