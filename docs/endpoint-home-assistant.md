@@ -120,6 +120,25 @@ The reviewed [Cast implementation](https://github.com/home-assistant/core/blob/2
 does not advertise `MEDIA_ANNOUNCE`; the package does not pretend it does. This
 is one-way audio output, not a SIP call or a two-way microphone session.
 
+## Slow Cast discovery after HA starts
+
+A reachable Cast device can appear unavailable until discovery reaches it.
+The reviewed `pychromecast` host browser polls configured known hosts serially,
+with a 30-second device-info timeout for each. Several offline addresses before
+an online display can therefore delay its discovery by minutes.
+
+Confirm the device identity and connectivity first. In Google Cast integration
+options, put confirmed reachable hosts first and retain temporarily offline
+owned devices after them. Remove an address only when it is confirmed obsolete.
+This preserves future discovery for powered-off displays. Saving options updates
+the configured host list without restarting HA; already-known hosts may retain
+their current in-memory order until the next discovery start. Avoid repeatedly
+restarting HA while waiting for an initial discovery pass.
+
+The local pilot subsequently observed a short generated TTS announcement enter
+Cast `playing` and return to `idle`. This verifies playback state, not what a
+person heard in the room.
+
 ## Verify without disturbing other endpoints
 
 First render and review the candidate files. Check a disabled endpoint and a
