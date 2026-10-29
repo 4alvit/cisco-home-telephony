@@ -8,11 +8,13 @@ playback can continue after the CLI exits.
 
 ![Local library selection, Home Assistant resolution and exact-line playback](diagrams/cli-music.svg)
 
-These commands require a newer source revision containing all five CLI files
-listed below. The **Beta 25 installation pin in the main installation guide does
-not include these music commands**. The following source pin includes the CLI
-with default all-match playback, filename masks and the cover-art playback fix;
-it is a source revision, not a release tag:
+These commands ship with the current installation pin (Beta 28). A host still on
+the Beta 25 baseline needs a newer revision: music itself needs five modules, and
+a revision that also ships announcements and LifeSize controls contains [seven
+CLI files](cli.md#install-and-private-configuration), all from that one revision.
+The following source pin adds the CLI with default all-match playback, filename
+masks and the cover-art playback fix without changing the gateway; it is a
+source revision, not a release tag:
 
 ```bash
 git clone --no-checkout https://github.com/4alvit/cisco-home-telephony.git cisco-home-telephony-music
@@ -207,8 +209,10 @@ audible playback.
   longer than the gateway's two-hour session ceiling. Other providers may issue
   shorter-lived URLs. Do not store resolved URLs as a permanent music catalog;
   resolve the media-source identifier for a new playback request.
-- **`music_client_not_installed`:** use a newer revision and keep all five files
-  together. Do not mix a new `cisco.py` with older helper files.
+- **`music_client_not_installed`:** use a newer revision and keep every CLI file
+  from that revision together (five for the music-only pin above, seven once
+  announcements and LifeSize are included). Do not mix a new `cisco.py` with
+  older helper files.
 - **`media_source_dependency_required`:** use the virtual environment above for
   direct HA resolution, or the already configured HA container transport.
 - **No match or missing NAS copy:** verify the local relative path, configured

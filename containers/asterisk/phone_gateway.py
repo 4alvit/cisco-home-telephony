@@ -47,8 +47,15 @@ def app_module(name):
 
 
 class Refused(Exception):
-    def __init__(self, reason, status=409):
+    # Proven to be raised before any phone or PBX write, so replaying the same
+    # idempotency key cannot duplicate an externally visible action. Only set as
+    # an instance attribute when it is true, keeping the refusal payload stable.
+    before_mutation = False
+
+    def __init__(self, reason, status=409, *, before_mutation=False):
         self.reason, self.status = reason, status
+        if before_mutation:
+            self.before_mutation = True
 
 
 class PhoneCommandRejected(Refused):
@@ -58,9 +65,9 @@ class PhoneCommandRejected(Refused):
         super().__init__('phone_rejected_action', 502)
 
 
-def require(value, reason, status=409):
+def require(value, reason, status=409, *, before_mutation=False):
     if not value:
-        raise Refused(reason, status)
+        raise Refused(reason, status, before_mutation=before_mutation)
 
 
 def constant(left, right):
@@ -139,7 +146,9 @@ def validate(config):
     require(isinstance(softphones, list) and len(softphones) <= 50, 'bad_softphones', 400)
     for client in softphones:
         require(isinstance(client, dict) and 'extension' in client
-                and set(client) <= {'extension', 'room'}, 'bad_softphone_metadata', 400)
+                and set(client) <= {'extension', 'room', 'controls_enabled'}, 'bad_softphone_metadata', 400)
+        require(type(client.get('controls_enabled', False)) is bool,
+                'bad_softphone_controls_enabled', 400)
         extension = client['extension']
         require(isinstance(extension, str) and re.fullmatch(r'2[0-9]{2}', extension)
                 and extension not in lines, 'duplicate_or_bad_softphone_extension', 400)
@@ -209,6 +218,10 @@ class AMI:
         return self
 
     def __exit__(self, *_):
+        if not getattr(self, '_deferred_close', False):
+            self.close()
+
+    def close(self):
         try:
             if self.file is not None:
                 self.file.close()
@@ -233,7 +246,7 @@ class AMI:
                 self._read_buffer = self._read_buffer[end:]
                 return line
 
-            self.sock.settimeout(min(5, remaining))
+            self.sock.settimeout(remaining if getattr(self, '_event_waiting', False) else min(5, remaining))
             try:
                 # read1 performs at most one raw read. Buffered readline can
                 # keep receiving trickled bytes past an absolute deadline.
@@ -247,8 +260,51 @@ class AMI:
                 return line
             self._read_buffer += chunk
 
-    def action(self, name, complete=None, **headers):
-        action_id = secrets.token_hex(12)
+    def _frame(self, deadline, total):
+        fields = {}
+        while True:
+            line = self._readline(16385, deadline)
+            total += len(line)
+            require(line and len(line) <= 16384 and total <= 1024 * 1024, 'invalid_ami_response', 503)
+            if line in (b'\r\n', b'\n'):
+                return fields, total
+            key, separator, value = line.decode('utf-8', 'replace').partition(':')
+            if separator:
+                fields[key] = value.strip()
+
+    def _callback_event(self, fields):
+        handler = getattr(self, '_event_handler', None)
+        if fields.get('Event') and handler is not None and handler(fields):
+            self._callback_done = True
+
+    def prepare_callback_watch(self, handler):
+        self._event_handler, self._callback_done = handler, False
+        self.action('Events', EventMask='call')
+
+    def finish_callback_watch(self):
+        """Keep the originating session for bounded terminal-event correlation."""
+        if self._callback_done:
+            return
+        self._deferred_close = True
+        def observe():
+            try:
+                self._event_waiting = True
+                deadline, total = time.monotonic() + 30, 0
+                while not self._callback_done:
+                    fields, total = self._frame(deadline, total)
+                    self._callback_event(fields)
+            except Exception:
+                pass  # Lost event evidence never releases the persisted guard.
+            finally:
+                self.close()
+        try:
+            threading.Thread(target=observe, name='sip-callback-events', daemon=True).start()
+        except Exception:
+            self._deferred_close = False
+            raise
+
+    def action(self, name, complete=None, action_id=None, **headers):
+        action_id = action_id or secrets.token_hex(12)
         data = {'Action': name, 'ActionID': action_id, **headers}
         require(all(not re.search(r'[\r\n\x00]', str(value)) for value in data.values()), 'invalid_ami_header', 400)
         # An optional operation budget also bounds multi-step physical controls.
@@ -259,16 +315,8 @@ class AMI:
         self.sock.sendall(('\r\n'.join(f'{key}: {value}' for key, value in data.items()) + '\r\n\r\n').encode())
         results, total = [], 0
         while True:
-            fields = {}
-            while True:
-                line = self._readline(16385, deadline)
-                total += len(line)
-                require(line and len(line) <= 16384 and total <= 1024 * 1024, 'invalid_ami_response', 503)
-                if line in (b'\r\n', b'\n'):
-                    break
-                key, separator, value = line.decode('utf-8', 'replace').partition(':')
-                if separator:
-                    fields[key] = value.strip()
+            fields, total = self._frame(deadline, total)
+            self._callback_event(fields)
             if fields.get('ActionID') != action_id:
                 continue
             if fields.get('Response') == 'Error':
@@ -356,17 +404,25 @@ class Gateway:
     def __init__(self, config, state_directory):
         self.config = validate(config)
         self.phones = {phone['id']: phone for phone in config['phones']}
+        self.endpoints = {client['extension']: client for client in config.get('softphones', [])
+                          if client.get('controls_enabled') is True}
         self.lock = threading.RLock()
         self.resources = {}
         self.stopped = threading.Event()
         self.auto_attempts = set()
         self.last_pbx_start = None
-        self.dnd_pending = set(self.phones)
+        self.dnd_pending = set(self.phones) | set(self.endpoints)
         directory = Path(state_directory)
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.db = sqlite3.connect(directory / 'gateway.sqlite3', check_same_thread=False)
         self.db.execute('CREATE TABLE IF NOT EXISTS preferences (phone TEXT PRIMARY KEY, dnd INTEGER, autoanswer INTEGER)')
         self.db.execute('CREATE TABLE IF NOT EXISTS operations (key TEXT PRIMARY KEY, digest TEXT, response TEXT, created REAL)')
+        self.db.execute('''CREATE TABLE IF NOT EXISTS endpoint_callbacks (
+            extension TEXT PRIMARY KEY, pending_until REAL, seen INTEGER, channel_id TEXT)''')
+        if 'channel_id' not in {row[1] for row in self.db.execute('PRAGMA table_info(endpoint_callbacks)')}:
+            # Retain older unowned attempts as unknown; migration must not
+            # silently authorize another originate.
+            self.db.execute('ALTER TABLE endpoint_callbacks ADD COLUMN channel_id TEXT')
         self.db.execute('''CREATE TABLE IF NOT EXISTS alerts (
             id TEXT PRIMARY KEY, phone TEXT, line TEXT, kind TEXT, state TEXT,
             reason TEXT, created REAL, seen INTEGER, stop_requested INTEGER)''')
@@ -374,7 +430,7 @@ class Gateway:
             root TEXT PRIMARY KEY, state TEXT, created REAL)''')
         # Never resume answering a partially established intercom after restart.
         self.db.execute("UPDATE intercoms SET state='stopping' WHERE state='starting'")
-        for phone in self.phones:
+        for phone in (*self.phones, *self.endpoints):
             self.db.execute('INSERT OR IGNORE INTO preferences VALUES (?, 0, 0)', (phone,))
         self.db.commit()
 
@@ -704,7 +760,7 @@ class Gateway:
                     raise Refused(error.reason, error.status) from None
             else:
                 require(not any(p.phone_id == phone['id'] for p in self._voice_profiles),
-                        'voice_state_unavailable', 503)
+                        'voice_state_unavailable', 503, before_mutation=True)
             reservations.enter_context(self.reserve_phone_controls(phone))
             yield
 
@@ -719,7 +775,10 @@ class Gateway:
                 'voice_state_unavailable', 'hands_free_owner_unavailable',
                 'hands_free_state_unavailable', 'voice_control_closed'} else 'voice_state_unavailable'
             return {'eligible': False, 'reason': reason}
-        except Exception:
+        except Exception as error:
+            # Keep the phone-facing answer stable but leave a diagnosable trace:
+            # a storage or OS fault must not look like an ordinary busy phone.
+            print('Motion admission check failed: ' + type(error).__name__, file=sys.stderr)
             return {'eligible': False, 'reason': 'voice_state_unavailable'}
 
     def close_voice(self, *, uncertain=False):
@@ -779,6 +838,9 @@ class Gateway:
             value = '1' if self.preference(phone['id'])['dnd'] else '0'
             for line in phone['lines']:
                 ami.action('DBPut', Family='cisco-dnd', Key=line, Val=value)
+        for extension in self.endpoints:
+            ami.action('DBPut', Family='cisco-dnd', Key=extension,
+                       Val='1' if self.preference(extension)['dnd'] else '0')
 
     def alerts(self):
         columns = ('id', 'phone', 'line', 'kind', 'state', 'reason', 'created', 'seen', 'stop_requested')
@@ -965,6 +1027,146 @@ class Gateway:
             return self.media_state('playing', channel=channel, source=source)
         return self.media_state('unknown', 'ambiguous')
 
+    @staticmethod
+    def endpoint_available(state):
+        return state in ('Not in use', 'In use', 'Busy', 'Ringing', 'Ring+Inuse', 'On Hold')
+
+    def endpoint_callback_state(self, extension, channels):
+        """Only a previously observed exact originate identity can be retired."""
+        row = self.db.execute('SELECT pending_until,seen,channel_id FROM endpoint_callbacks WHERE extension=?',
+                              (extension,)).fetchone()
+        if not row:
+            return 'idle'
+        if not row[2]:
+            return 'unknown'
+        matching = [item for item in channels if item.get('Uniqueid') == row[2]]
+        if len(matching) == 1 and own_channels({'lines': [extension]}, matching):
+            self.db.execute('UPDATE endpoint_callbacks SET seen=1 WHERE extension=?', (extension,))
+            self.db.commit()
+            return 'active'
+        if row[1] and not matching:
+            self.db.execute('DELETE FROM endpoint_callbacks WHERE extension=?', (extension,))
+            self.db.commit()
+            return 'idle'
+        # The window changes the displayed certainty, never admission. An
+        # unobserved async request may still be queued after its HTTP timeout.
+        return 'starting' if not matching and time.time() < row[0] else 'unknown'
+
+    def endpoint_callback_event(self, extension, channel_id, action_id, event):
+        """Correlate terminal evidence even for calls shorter than a poll interval."""
+        terminal = ((event.get('Event') == 'OriginateResponse'
+                     and event.get('ActionID') == action_id and event.get('Response') == 'Failure')
+                    or (event.get('Event') == 'Hangup' and event.get('Uniqueid') == channel_id))
+        if not terminal:
+            return False
+        with self.lock:
+            self.db.execute('DELETE FROM endpoint_callbacks WHERE extension=? AND channel_id=?',
+                            (extension, channel_id))
+            self.db.commit()
+        return True
+
+    def endpoint_listing(self, extension):
+        require(extension in self.endpoints, 'unknown_endpoint', 404)
+        with self.lock, AMI(self.config['ami']) as ami:
+            endpoints, channels = ami.snapshot()
+            owned = own_channels({'lines': [extension]}, channels)
+            callback_state = self.endpoint_callback_state(extension, channels)
+            state = endpoints.get(extension)
+            available = self.endpoint_available(state)
+            ringing = any(item.get('ChannelStateDesc') == 'Ringing' for item in owned)
+            in_call = any(item.get('ChannelStateDesc') == 'Up' for item in owned)
+            calling = callback_state == 'starting' or any(item.get('ChannelStateDesc') in (
+                'Down', 'Reserved', 'Dialing', 'Dialing Offhook', 'Pre-ring', 'Ring') for item in owned)
+            call_state = ('ambiguous' if len(owned) > 1 else 'in_call' if in_call
+                          else 'ringing' if ringing else 'calling' if calling
+                          else 'unavailable' if not available else 'unknown' if owned or callback_state == 'unknown'
+                          else 'idle' if state == 'Not in use' else 'unknown')
+            return {'extension': extension, 'room': self.endpoints[extension].get('room'),
+                    'ami_fresh': True, 'observed_at': time.time(),
+                    'configured': extension in endpoints, 'available': available,
+                    'call_state': call_state, 'calling': calling, 'ringing': ringing, 'in_call': in_call,
+                    'callback_state': callback_state,
+                    'dnd': self.preference(extension)['dnd'], 'dnd_pending': extension in self.dnd_pending,
+                    'dial_allowlist': self.config['dial_allowlist'],
+                    'calls': [{'channel': item['Channel'], 'uniqueid': item.get('Uniqueid'),
+                               'state': item.get('ChannelStateDesc')} for item in owned],
+                    'capabilities': {'call': True, 'hangup': True, 'dnd': True,
+                                     'answer': False, 'auto_answer': False, 'media': False}}
+
+    def endpoint_mutate(self, extension, action, body):
+        require(extension in self.endpoints, 'unknown_endpoint', 404)
+        require(action in ('call', 'hangup', 'dnd'), 'unknown_action', 404)
+        require(isinstance(body, dict), 'json_object_required', 400)
+        fields = {'call': {'number'}, 'hangup': {'channel', 'uniqueid'}, 'dnd': {'enabled'}}[action]
+        require(set(body) == fields | {'idempotency_key'}, 'invalid_endpoint_request', 400)
+        if action == 'call':
+            require(isinstance(body['number'], str) and body['number'] in self.config['dial_allowlist'],
+                    'number_not_allowed', 400)
+            require(body['number'] != extension, 'self_call_not_supported', 400)
+        elif action == 'dnd':
+            require(type(body['enabled']) is bool, 'enabled_boolean_required', 400)
+        else:
+            require(isinstance(body['channel'], str) and re.fullmatch(
+                r'PJSIP/' + re.escape(extension) + r'-[0-9a-f]+', body['channel'])
+                and isinstance(body['uniqueid'], str)
+                and re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', body['uniqueid']), 'invalid_channel_identity', 400)
+        return self.durable_operation('endpoint:' + extension, action, body,
+                                      lambda: self._endpoint_mutate(extension, action, body))
+
+    def _endpoint_mutate(self, extension, action, body):
+        with AMI(self.config['ami']) as ami:
+            endpoints, channels = ami.snapshot()
+            require(extension in endpoints, 'endpoint_not_configured')
+            owned = own_channels({'lines': [extension]}, channels)
+            callback_state = self.endpoint_callback_state(extension, channels)
+            if action == 'dnd':
+                self.db.execute('UPDATE preferences SET dnd=? WHERE phone=?',
+                                (int(body['enabled']), extension))
+                self.db.commit()
+                self.dnd_pending.add(extension)
+                ami.action('DBPut', Family='cisco-dnd', Key=extension, Val='1' if body['enabled'] else '0')
+                self.dnd_pending.discard(extension)
+                return {'extension': extension, 'dnd': body['enabled']}
+            if action == 'call':
+                require(not self.preference(extension)['dnd'] and extension not in self.dnd_pending,
+                        'do_not_disturb')
+                require(self.endpoint_available(endpoints[extension]), 'endpoint_unavailable')
+                require(not owned and endpoints[extension] == 'Not in use', 'endpoint_busy')
+                require(callback_state == 'idle', 'callback_pending')
+                # Persist before dispatch. Unknown AMI outcomes retain this
+                # guard and the durable operation claim, including on restart.
+                channel_id = 'cisco-callback-' + secrets.token_hex(16)
+                action_id = secrets.token_hex(12)
+                ami.prepare_callback_watch(lambda event: self.endpoint_callback_event(
+                    extension, channel_id, action_id, event))
+                self.db.execute('INSERT INTO endpoint_callbacks (extension,pending_until,seen,channel_id) VALUES (?, ?, 0, ?)',
+                                (extension, time.time() + 35, channel_id))
+                self.db.commit()
+                try:
+                    ami.action('Originate', action_id=action_id, Channel='PJSIP/' + extension, Context='home',
+                               Exten=body['number'], Priority='1', Timeout='20000', Async='true',
+                               ChannelId=channel_id, CallerID='Home callback <' + body['number'] + '>')
+                except Refused as error:
+                    if (error.reason == 'ami_action_rejected'
+                            and getattr(error, 'ami_action', None) == 'Originate'):
+                        # A received negative acknowledgement is terminal;
+                        # a transport exception or timeout is not.
+                        self.db.execute('DELETE FROM endpoint_callbacks WHERE extension=? AND channel_id=?',
+                                        (extension, channel_id))
+                        self.db.commit()
+                    raise
+                ami.finish_callback_watch()
+                return {'extension': extension, 'number': body['number'],
+                        'mode': 'callback', 'ring_timeout_seconds': 20}
+            require(len(owned) == 1, 'exactly_one_endpoint_channel_required')
+            channel = owned[0]
+            require(channel.get('Uniqueid') and body['channel'] == channel['Channel']
+                    and body['uniqueid'] == channel['Uniqueid'], 'channel_identity_changed')
+            # Asterisk resolves a Uniqueid here. A reused channel name can
+            # never redirect this request to a replacement call.
+            ami.action('Hangup', Channel=channel['Uniqueid'], Cause='16')
+            return {'extension': extension, 'channel': channel['Channel'], 'uniqueid': channel['Uniqueid']}
+
     def listing(self):
         with self.lock, AMI(self.config['ami']) as ami:
             endpoints, channels = ami.snapshot()
@@ -985,7 +1187,10 @@ class Gateway:
                                  for entry in self.config.get('services', [])],
                     'softphones': [
                         {'extension': client['extension'], 'room': client.get('room'),
-                         'online': endpoints.get(client['extension']) not in (None, 'Unavailable', 'Invalid')}
+                         'online': (self.endpoint_available(endpoints.get(client['extension']))
+                                    if client.get('controls_enabled') is True else
+                                    endpoints.get(client['extension']) not in (None, 'Unavailable', 'Invalid')),
+                         **({'controls_enabled': True} if client.get('controls_enabled') is True else {})}
                         for client in self.config.get('softphones', [])],
                     'phones': [
                 {'id': phone['id'], 'lines': phone['lines'], 'room': phone.get('room'),
@@ -1155,7 +1360,9 @@ class Gateway:
         return f'http://{self.config["bind_ipv4"]}:{phone["port"]}{path}'
 
     def notify(self, phone, action, body):
-        title = text(body.get('title', 'Home phone'), 48)
+        # Keep the API's existing input limit, but honor the handset XML schema.
+        # A longer Title makes 7945G reject the entire page with XML Error [4].
+        title = text(body.get('title', 'Home phone'), 48)[:32]
         if action == 'message':
             root = ET.Element('CiscoIPPhoneText')
             ET.SubElement(root, 'Title').text = title
@@ -1336,11 +1543,19 @@ class Gateway:
             require(type(body['idle_close_seconds']) is int
                     and 10 <= body['idle_close_seconds'] <= 120,
                     'bad_idle_close_seconds', 400)
+        admission = self._hardware_volume_admission(volume_deadline) if volume_deadline is not None else self.lock
+        def operation():
+            if volume_deadline is not None:
+                return self._mutate(self.phones[phone_id], action, body, hardware_deadline=volume_deadline)
+            return self._mutate(self.phones[phone_id], action, body)
+        return self.durable_operation(phone_id, action, body, operation, admission=admission)
+
+    def durable_operation(self, target, action, body, operation, *, admission=None):
+        """Share the persisted, globally keyed mutation journal across API families."""
         key = body.get('idempotency_key')
         require(isinstance(key, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{8,128}', key), 'idempotency_key_required', 400)
-        digest = hashlib.sha256(json.dumps([phone_id, action, body], sort_keys=True).encode()).hexdigest()
-        admission = self._hardware_volume_admission(volume_deadline) if volume_deadline is not None else self.lock
-        with admission:
+        digest = hashlib.sha256(json.dumps([target, action, body], sort_keys=True).encode()).hexdigest()
+        with admission if admission is not None else self.lock:
             previous = self.db.execute('SELECT digest,response FROM operations WHERE key=?', (key,)).fetchone()
             if previous:
                 require(previous[0] == digest, 'idempotency_key_conflict')
@@ -1350,14 +1565,13 @@ class Gateway:
             self.db.execute('INSERT INTO operations VALUES (?, ?, NULL, ?)', (key, digest, time.time()))
             self.db.commit()  # Persist intent BEFORE any phone or AMI mutation.
             try:
-                if volume_deadline is not None:
-                    result = self._mutate(self.phones[phone_id], action, body, hardware_deadline=volume_deadline)
-                else:
-                    result = self._mutate(self.phones[phone_id], action, body)
+                result = operation()
                 result.update(status='accepted', action_id=key)
             except Refused as error:
                 # Keep ambiguous I/O outcomes claimed; a retry must not dial again.
-                if error.status < 500:
+                # A refusal that happened before every phone and PBX write releases
+                # the key, so a transient preflight result cannot burn it for 30 days.
+                if error.status < 500 or error.before_mutation:
                     self.db.execute('DELETE FROM operations WHERE key=?', (key,))
                     self.db.commit()
                 raise
@@ -1434,7 +1648,7 @@ class Gateway:
                     self.reconcile_alerts(ami, current)
                 return {'alert_id': alert_id, 'state': next(row['state'] for row in self.alerts() if row['id'] == alert_id)}
             require(all(endpoints.get(endpoint) not in (None, 'Unavailable', 'Invalid') for endpoint in phone['lines']),
-                    'phone_unavailable', 503)
+                    'phone_unavailable', 503, before_mutation=True)
             owned = own_channels(phone, channels)
             if action in ('message', 'image', 'motion_image'):
                 require(not owned, 'phone_busy')
@@ -1536,6 +1750,8 @@ class Gateway:
                         self.dnd_pending.clear()
                         self.last_pbx_start = started
                     endpoints, channels = ami.snapshot()
+                    for extension in self.endpoints:
+                        self.endpoint_callback_state(extension, channels)
                     self.reconcile_alerts(ami, channels)
                     self.reconcile_intercoms(ami, channels)
                     if self.player is not None:
@@ -1691,6 +1907,19 @@ class Handler(BaseHTTPRequestHandler):
         require(source in gateway.config['api_clients'], 'forbidden', 403)
         require(len(self.headers.get_all('Authorization', [])) == 1
                 and constant(self.headers.get('Authorization', ''), 'Bearer ' + gateway.config['api_token']), 'forbidden', 403)
+        endpoint_match = re.fullmatch(r'/v1/endpoints/(2[0-9]{2})(?:/(call|hangup|dnd))?', self.path)
+        if endpoint_match:
+            extension, action = endpoint_match.groups()
+            if self.command == 'GET':
+                require(action is None and not self.body(0), 'not_found', 404)
+                return self.reply(200, gateway.endpoint_listing(extension))
+            require(self.command == 'POST' and action is not None, 'not_found', 404)
+            require(self.headers.get('Content-Type', '').split(';')[0] == 'application/json', 'json_required', 400)
+            try:
+                data = json.loads(self.body(8192), object_pairs_hook=voice_object)
+            except (ValueError, UnicodeError):
+                raise Refused('invalid_json', 400) from None
+            return self.reply(200, gateway.endpoint_mutate(extension, action, data))
         voice_match = re.fullmatch(
             r'/v1/phones/(2[0-9]{2})/voice_(status|start|stop|recovery_status|recover|hands_free_status|hands_free_enable|hands_free_disable)(\?include_playback=1)?', self.path)
         if voice_match:

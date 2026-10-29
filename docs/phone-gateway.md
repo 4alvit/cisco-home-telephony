@@ -55,6 +55,28 @@ does not overwrite an existing gateway file. Preserve its bearer token and state
 across upgrades. Add only reviewed internal radio extensions to `dial_allowlist`
 and, if wanted, `ring_allowlist`; neither is an unrestricted dialplan.
 
+### Schema limits
+
+`Gateway.validate()` checks the complete file before any listener starts, so a
+bound that is exceeded refuses the whole deployment rather than one request.
+These are contract limits, not tuning advice:
+
+| Setting | Accepted range | Refusal reason |
+| --- | --- | --- |
+| `persistent_enabled` | must be exactly `true` | `explicit_persistent_mode_required` |
+| `phones` | 1 to 32 physical phones | `bad_phone_count` |
+| Lines per phone | 1 or 2 unique extensions, `200`–`299`, primary line first | `bad_line_mapping`, `duplicate_or_bad_line` |
+| `softphones` | up to 50 entries, unique `200`–`299` extensions | `bad_softphones`, `duplicate_or_bad_softphone_extension` |
+| `api_clients` | 1 to 8 private IPv4 addresses | `bad_api_clients`, `private_ipv4_required` |
+| `services` | up to 128 entries, each number already in `dial_allowlist` | `bad_services`, `duplicate_or_bad_service_number`, `bad_service_label`, `bad_service_kind` |
+| `api_port` | 1024 to 65535, distinct from every callback port | `bad_port`, `duplicate_or_bad_port` |
+| `api_token` | 32 to 128 characters, `A-Za-z0-9_-` only | `bad_api_token` |
+| Phone credentials | 24 to 96 characters each; `username:password` at most 64 | `bad_phone_credentials`, `phone_credentials_too_long` |
+| `device` / `auth_path` | `SEP` plus 12 uppercase hex; `/auth/` plus 64 lowercase hex | `bad_device`, `bad_auth_path` |
+
+A refused start is diagnosable from the reason code alone; it does not mean the
+phones, the AMI account or the host firewall were wrong.
+
 ## Deploy and hand over the listeners
 
 Build the Asterisk image containing `phone_gateway.py` and Pillow and use its

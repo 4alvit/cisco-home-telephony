@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "id": "example_phone",
+  "namespaces": {"en": "example phone", "ru": "телефон пример"},
+  "target": {
+    "state_entity": "sensor.example_dot_phone",
+    "peer_entity": "sensor.example_dot_phone_call",
+    "actions": {
+      "call": {"action": "esphome.example_dot_phone_call", "destination_field": "number"},
+      "answer": {"action": "esphome.example_dot_phone_answer"},
+      "hangup": {"action": "esphome.example_dot_phone_hangup"}
+    }
+  },
+  "destinations": [
+    {"number": "555", "names": {"en": ["time service"], "ru": ["службе времени"]}},
+    {"number": "201", "names": {"en": ["test phone"], "ru": ["тестовому телефону"]}}
+  ]
+}

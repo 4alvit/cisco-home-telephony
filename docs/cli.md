@@ -11,6 +11,10 @@ plain text and quoted `*` / `?` filename masks are supported. Local names map to
 the existing HA/NAS copy;
 the Mac does not upload or serve audio.
 
+For a spoken message using the configured Home Assistant voice, see
+[CLI announcements](cli-announcements.md). `say` creates a finite announcement
+call to one phone or a private group; `message` displays text on a phone screen.
+
 `cisco LINE` reads live status and shows commands and concrete examples. When HA scheduling is configured, it also shows the current timer/alarm slots, their owning lines and HA timezone. A second numeric argument places a call **from the selected line**:
 
 ```bash
@@ -65,12 +69,13 @@ export PATH="$HOME/.local/bin:$PATH"
 cisco --help
 ```
 
-Keep all five music-capable scripts together from the same revision:
-`cisco.py`, `cisco_http.py`, `cisco_player.py`, `cisco_library.py` and
-`cisco_media_source.py`. The symlink follows repository updates. If `cisco`
+Keep all seven CLI scripts together from the same revision:
+`cisco.py`, `cisco_http.py`, `cisco_player.py`, `cisco_library.py`,
+`cisco_media_source.py`, `cisco_lifesize.py` and `cisco_announce.py`.
+The symlink follows repository updates. If `cisco`
 already exists, inspect it before changing the link. Add the PATH line to your
-shell startup file if needed. The older Beta 25 installation pin does not
-contain the new music commands.
+shell startup file if needed. The Beta 28 installation pin includes these music
+commands; a Beta 25 or older checkout does not.
 
 The default configuration is `~/.config/cisco-home/cli.json`. Override it with `--config PATH` or `CISCO_CONFIG`. Configuration and token files must be owned by your user, have no group/other permissions, and must not be symlinks. Duplicate JSON field names are rejected, including inside nested objects; each setting must have one unambiguous value. Use a private parent directory as well:
 
@@ -90,6 +95,28 @@ Choose the transport explicitly:
 - **Kubernetes:** start from [cisco-cli.kubectl.example.json](../deploy/cisco-cli.kubectl.example.json). The configured context, namespace, label selector and container must identify exactly one Running, Ready pod whose source is already allowed by the gateway, such as an existing Home Assistant pod. The CLI requires existing pod-list and `pods/exec` permissions and Python 3 in that container. It does not create RBAC, modify a pod, install software, or widen firewall rules. It sends the fixed HTTP worker to `python3 -c` and sends the token and request body on stdin. A rollout with two matching Ready pods is refused; try status again after the rollout finishes.
 
 Both transports require an explicit RFC1918 IPv4 gateway literal and disable HTTP proxies and redirects. HTTPS uses normal certificate verification. HTTP is for the existing trusted private network. There is no automatic transport fallback and no direct AMI, CGI, SSH or phone-reboot fallback.
+
+## Existing non-Cisco SIP clients
+
+The optional [generic endpoint setup](existing-endpoints.md) adds a second control
+path for configured softphones with `controls_enabled: true`. The same private
+CLI connection is used; no SIP password is required on the CLI host.
+
+```sh
+cisco 290                 # Fresh PBX status and supported examples
+cisco 290 600             # Ring 290 first; after answer connect to echo test
+cisco 290 hangup          # End its single, freshly identified call
+cisco 290 dnd on          # Reject incoming calls through the managed dialplan
+cisco 290 dnd off
+```
+
+These are synthetic numbers. Generic calling is a **callback**, not a remote
+speakerphone key: the selected endpoint must answer first. Hardware answer,
+volume, music and display commands remain unavailable unless a separate native
+driver implements them. The configured LifeSize driver keeps precedence. The
+Beta 25 and earlier CLI and gateway do not contain this optional endpoint API;
+install both from the same reviewed revision containing these changes. See the
+[HA package](endpoint-home-assistant.md) for corresponding dashboard controls.
 
 ## Commands and scope
 
@@ -186,6 +213,13 @@ and Cisco's [Speaker key URI](https://www.cisco.com/c/en/us/td/docs/voice_ip_com
 For idle speaker/dial-tone use, explicitly run `cisco 213 speaker toggle`. The gateway requires no active phone channel and sends the handset's speaker toggle key. It cannot reliably observe the resulting speaker state, so there are intentionally no misleading `speaker on`, `speaker off` or idempotent `offhook` commands. A repeated toggle may reverse the previous state.
 
 `cisco 213 autoanswer on` opts the whole hosting phone into gateway auto-answer; `autoanswer off` disables it, and `autoanswer` alone reads status. Incoming calls must pass the gateway's fresh isolated-call checks. Timer and alarm alerts remain manual regardless of this preference. Neither auto-answer nor pickup guarantees that a particular audio output device or volume is selected on the physical handset.
+
+These gateway guarantees apply to Cisco phones. An explicitly configured
+[LifeSize Phone](cli-lifesize.md) uses its own authenticated automation driver:
+native persistent auto-answer, separate numeric ringer and speaker volumes,
+and microphone controls. Native auto-answer affects incoming calls on the
+device and has no gateway timer/alarm exemption. Read that model's command
+matrix before assuming a Cisco feature is available on it.
 
 `alert timer` and `alert alarm` start an alert immediately; they do not schedule it. Alerts ring until manual answer/reject or Stop, with no audio after answering. For countdowns and recurring weekday schedules, use the [Home Assistant integration](https://github.com/ha-homelab/asterisk-telephony) and [radio/alarms guide](radio-and-alarms.md). `ring 640` keeps the legacy 20-second ringing timeout and finite destination behavior.
 
@@ -344,7 +378,7 @@ reservation. It keeps automatic listening disabled and preserves the failed
 historical Stop. Follow the [administrative recovery procedure](voice-orphan-recovery.md);
 this command has no mutating dry run and does not terminate active calls.
 
-No failed action is retried automatically. An action may have executed even when its HTTP response times out. Preserve the returned `action_id`, inspect status, and do not blindly issue a new command. An explicit `--idempotency-key` is for the same logical operation with the same exact request; the gateway refuses conflicting reuse and unknown partial outcomes. Re-running Hangup/Answer may capture a different channel identity and therefore is not a transparent retry. Never build an unbounded retry loop around a dialing or alert command.
+No failed action is retried automatically. An action may have executed even when its HTTP response times out. Preserve the returned `action_id`, inspect status, and do not blindly issue a new command. An explicit `--idempotency-key` is for the same logical operation with the same exact request; the gateway refuses conflicting reuse and unknown partial outcomes. Re-running Hangup/Answer may capture a different channel identity and therefore is not a transparent retry. Never build an unbounded retry loop around a dialing or alert command. A refusal that provably happened before any phone or PBX write, such as `phone_unavailable` or `line_does_not_belong_to_phone`, releases the key, so the same request may be retried unchanged; a transport failure or timeout keeps it claimed and requires inspection first.
 
 The same option becomes a durable HA `request_id` for schedule mutations, limited to 8–80 safe characters. Reusing the same ID and payload cannot restart a countdown. For a new intentional operation use a new ID. After an uncertain cancellation, inspect both the pending slot and active alert; a local schedule cancellation and stopping an already ringing phone are distinct outcomes.
 

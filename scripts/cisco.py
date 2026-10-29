@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Control one phone line through the private gateway or a configured LifeSize SSH driver."""
+"""Control one phone line through the private gateway, SIP callbacks or a configured LifeSize SSH driver."""
 import argparse
 import base64
 import json
@@ -58,6 +58,8 @@ MUSIC_COMMANDS = frozenset(('play', 'search', 'music', 'queue', 'pause', 'resume
 MUSIC_HELP = ['play FILE_OR_QUERY_OR_URL [--enqueue MODE]', 'search QUERY',
               'music', 'queue', 'pause', 'resume', 'stop', 'next', 'previous',
               'clear-queue', 'seek SECONDS', 'gain PERCENT', 'mute', 'unmute']
+ANNOUNCEMENT_COMMANDS = frozenset(('say', 'announce', 'voicemsg', 'say-status', 'say-stop'))
+ANNOUNCEMENT_HELP = ['say TEXT [--text-file FILE]', 'voicemsg TEXT', 'say-status JOB_ID', 'say-stop JOB_ID']
 
 
 class Refused(Exception):
@@ -90,7 +92,7 @@ def load_config(path):
     try:
         config = json_loads_unique(read_file(path, 16384, private=True))
         require(isinstance(config, dict), 'config_requires_object')
-        allowed = {'gateway_url', 'token', 'token_file', 'transport', 'kubectl', 'home_assistant', 'music', 'lifesize'}
+        allowed = {'gateway_url', 'token', 'token_file', 'transport', 'kubectl', 'home_assistant', 'music', 'lifesize', 'announcements'}
         require(set(config) <= allowed, 'unknown_config_field')
         config['gateway_url'] = gateway_url(config['gateway_url'])
         require(('token' in config) != ('token_file' in config), 'choose_token_or_token_file')
@@ -120,6 +122,8 @@ def load_config(path):
             config['home_assistant'] = load_ha_config(config['home_assistant'], path)
         if 'lifesize' in config:
             config['lifesize'] = lifesize_operation('validate_config', config['lifesize'], path)
+        if 'announcements' in config:
+            config['announcements'] = announcement_operation('validate_config', config['announcements'], path, read_file)
         if 'music' in config:
             try:
                 from cisco_library import LibraryError, validate_config
@@ -132,6 +136,17 @@ def load_config(path):
         return config
     except (ValueError, KeyError, TypeError, UnicodeError):
         raise Refused('invalid_private_config') from None
+
+
+def announcement_operation(operation, *args, **kwargs):
+    try:
+        import cisco_announce
+    except ImportError:
+        raise Refused('announcement_client_not_installed') from None
+    try:
+        return getattr(cisco_announce, operation)(*args, **kwargs)
+    except cisco_announce.AnnouncementError as error:
+        raise Refused(error.reason) from None
 
 
 def lifesize_operation(operation, *args):
@@ -331,7 +346,157 @@ def validate_softphones(data, used_lines):
         seen.add(line)
         require(phone.get('room') is None or valid_room(phone['room']), 'invalid_phone_room')
         require(type(phone.get('online')) is bool, 'invalid_phone_status')
+        require(type(phone.get('controls_enabled', False)) is bool, 'invalid_softphone_controls')
     return softphones
+
+
+def selected_endpoint(data, line):
+    """Keep Cisco line validation separate from explicitly opted-in SIP clients."""
+    validate_inventory(data)
+    return next((phone for phone in data.get('softphones', [])
+                 if phone['extension'] == line and phone.get('controls_enabled') is True), None)
+
+
+def validate_endpoint_status(value, line):
+    require(isinstance(value, dict) and value.get('extension') == line, 'invalid_endpoint_identity')
+    require(value.get('ami_fresh') is True, 'gateway_ami_not_fresh')
+    observed = value.get('observed_at')
+    try:
+        fresh = (type(observed) in (int, float) and math.isfinite(observed)
+                 and -5 <= time.time() - observed <= 90)
+    except OverflowError:
+        fresh = False
+    require(fresh, 'gateway_endpoint_status_stale')
+    require(value.get('room') is None or valid_room(value['room']), 'invalid_phone_room')
+    for field in ('configured', 'available', 'calling', 'ringing', 'in_call', 'dnd', 'dnd_pending'):
+        require(type(value.get(field)) is bool, 'invalid_endpoint_status')
+    require(value.get('call_state') in ('idle', 'calling', 'ringing', 'in_call', 'ambiguous',
+                                       'unavailable', 'unknown'), 'invalid_endpoint_status')
+    if 'callback_state' in value:
+        require(isinstance(value['callback_state'], str)
+                and value['callback_state'] in ('idle', 'starting', 'active', 'unknown'),
+                'invalid_callback_state')
+    require(not value['available'] or value['configured'], 'invalid_endpoint_status')
+    calls = value.get('calls')
+    require(isinstance(calls, list) and len(calls) <= 32, 'invalid_channel_inventory')
+    channels, identities = set(), set()
+    for call in calls:
+        require(isinstance(call, dict) and isinstance(call.get('channel'), str)
+                and re.fullmatch(r'PJSIP/' + re.escape(line) + r'-[0-9a-f]+', call['channel'])
+                and isinstance(call.get('uniqueid'), str)
+                and re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', call['uniqueid'])
+                and isinstance(call.get('state'), str)
+                and re.fullmatch(r'[A-Za-z ]{1,40}', call['state']), 'invalid_channel_identity')
+        require(call['channel'] not in channels and call['uniqueid'] not in identities,
+                'ambiguous_channel_identity')
+        channels.add(call['channel']); identities.add(call['uniqueid'])
+    capabilities = value.get('capabilities')
+    require(isinstance(capabilities, dict) and all(type(capabilities.get(key)) is bool
+            for key in ('call', 'hangup', 'dnd', 'answer', 'auto_answer', 'media')),
+            'invalid_endpoint_capabilities')
+    require(not any(capabilities[key] for key in ('answer', 'auto_answer', 'media')),
+            'unsupported_endpoint_capabilities')
+    numbers = value.get('dial_allowlist')
+    require(isinstance(numbers, list) and all(isinstance(number, str)
+            and re.fullmatch(r'[0-9]{3,8}', number) for number in numbers), 'invalid_destination_inventory')
+    return value
+
+
+def endpoint_status_result(value, line):
+    fields = ('extension', 'room', 'configured', 'available', 'call_state', 'calling',
+              'ringing', 'in_call', 'dnd', 'dnd_pending')
+    endpoint = {field: value.get(field) for field in fields}
+    if 'callback_state' in value:
+        endpoint['callback_state'] = value['callback_state']
+    endpoint['calls'] = [{key: call[key] for key in ('channel', 'uniqueid', 'state')} for call in value['calls']]
+    endpoint['capabilities'] = {key: value['capabilities'][key]
+                               for key in ('call', 'hangup', 'dnd', 'answer', 'auto_answer', 'media')}
+    available = ['status', 'help', 'directory', 'destinations']
+    if value['capabilities']['call']:
+        available.extend(['call NUMBER', 'dial NUMBER'])
+    if value['capabilities']['hangup']:
+        available.append('hangup')
+    if value['capabilities']['dnd']:
+        available.append('dnd [on|off|status]')
+    examples = [f'cisco {line} status', f'cisco {line} directory']
+    destinations = [number for number in value['dial_allowlist'] if number != line]
+    if value['capabilities']['call'] and destinations:
+        examples.append(f'cisco {line} {"600" if "600" in destinations else destinations[0]}')
+    if value['capabilities']['hangup']:
+        examples.append(f'cisco {line} hangup')
+    if value['capabilities']['dnd']:
+        examples.extend([f'cisco {line} dnd on', f'cisco {line} dnd off', f'cisco {line} dnd status'])
+    note = 'Calls ring this endpoint first. Answer on the device to connect the destination.'
+    if value.get('callback_state') == 'unknown':
+        note += (' Callback outcome is unknown. Inspect the endpoint and reconcile the pending callback '
+                 'before placing another call; do not retry blindly.')
+    return {'status': 'ok', 'driver': 'sip_endpoint', 'selected_line': line, 'endpoint': endpoint,
+            'observed_at': value['observed_at'], 'ami_fresh': True, 'available_commands': available,
+            'dial_allowlist': list(value['dial_allowlist']), 'examples': examples,
+            'note': note}
+
+
+def endpoint_command(args, gateway, on_dispatch):
+    line = args.extension
+    value = validate_endpoint_status(gateway.request(f'/v1/endpoints/{line}'), line)
+    if args.command in (None, 'status', 'destinations') or (
+            args.command == 'dnd' and args.enabled in (None, 'status')):
+        return endpoint_status_result(value, line)
+    action = 'call' if args.command in ('call', 'dial') else args.command
+    require(action in ('call', 'hangup', 'dnd'), 'command_not_supported_by_endpoint')
+    require(value['capabilities'][action], 'command_not_supported_by_endpoint')
+    require(value['configured'], 'endpoint_not_configured')
+    body = {}
+    if action == 'call':
+        require(args.number in value['dial_allowlist'], 'destination_not_allowlisted')
+        require(args.number != line, 'self_call_not_supported')
+        require(value['available'], 'endpoint_unavailable')
+        require(value.get('callback_state', 'idle') == 'idle', 'callback_pending')
+        require(value['call_state'] == 'idle' and not value['calls']
+                and not any(value[key] for key in ('calling', 'ringing', 'in_call')), 'endpoint_busy')
+        require(not value['dnd'] and not value['dnd_pending'], 'do_not_disturb')
+        body['number'] = args.number
+    elif action == 'hangup':
+        require(len(value['calls']) == 1, 'exactly_one_endpoint_channel_required')
+        body.update({key: value['calls'][0][key] for key in ('channel', 'uniqueid')})
+    else:
+        body['enabled'] = args.enabled == 'on'
+    key = args.idempotency_key or 'cli-' + secrets.token_hex(16)
+    require(re.fullmatch(r'[A-Za-z0-9_.:-]{8,128}', key), 'invalid_idempotency_key')
+    body['idempotency_key'] = key
+    result = {'status': 'dry_run', 'driver': 'sip_endpoint', 'selected_line': line,
+              'action': action, 'request': body}
+    if action == 'call':
+        result['note'] = 'Calls ring this endpoint first. Answer on the device to connect the destination.'
+    if args.dry_run:
+        return result
+    previous_dispatch = getattr(gateway, 'on_dispatch', None)
+    gateway.on_dispatch = lambda: on_dispatch(key)
+    try:
+        response = gateway.request(f'/v1/endpoints/{line}/{action}', body)
+        on_dispatch(key)  # A returned receipt proves the request reached the server.
+    finally:
+        gateway.on_dispatch = previous_dispatch
+    require(response.get('status') == 'accepted' and response.get('action_id') == key
+            and response.get('extension') == line, 'unconfirmed_endpoint_response')
+    result = {'status': 'accepted', 'driver': 'sip_endpoint', 'selected_line': line,
+              'action': action, 'action_id': key,
+              'note': 'Request accepted; inspect status to observe the effect. No automatic retry.'}
+    if action == 'call':
+        require(response.get('number') == body['number'] and response.get('mode') == 'callback'
+                and type(response.get('ring_timeout_seconds')) is int
+                and response['ring_timeout_seconds'] == 20, 'unconfirmed_endpoint_response')
+        result.update(number=body['number'], mode='callback', ring_timeout_seconds=20,
+                      note='Callback accepted: this endpoint rings first. Answer on the device to connect '
+                           'the destination. Connection is not confirmed; inspect status. No automatic retry.')
+    elif action == 'hangup':
+        require(all(response.get(field) == body[field] for field in ('channel', 'uniqueid')),
+                'unconfirmed_endpoint_response')
+        result.update({field: body[field] for field in ('channel', 'uniqueid')})
+    else:
+        require(response.get('dnd') is body['enabled'], 'unconfirmed_endpoint_response')
+        result['dnd'] = body['enabled']
+    return result
 
 
 def validate_services(data, used_lines):
@@ -399,7 +564,8 @@ def directory_result(data, selected_line=None):
     for phone in softphones:
         entries.append({'type': 'softphone', 'id': phone['extension'], 'lines': [phone['extension']],
                         'room': phone.get('room'), 'online': phone['online'],
-                        'selected': selected_line == phone['extension']})
+                        'selected': selected_line == phone['extension'],
+                        **({'controls_enabled': True} if phone.get('controls_enabled') is True else {})})
     entries.sort(key=lambda phone: int(phone['id']))
     return {'status': 'ok', 'directory': entries, 'selected_line': selected_line,
             'services': sorted(({key: entry[key] for key in ('number', 'label', 'kind')}
@@ -428,6 +594,8 @@ def make_action(args, data, phone):
                 require(not item['dnd'], 'do_not_disturb')
                 require(not item.get('alert') or item['alert']['state'] == 'ended', 'alert_already_active')
     elif action == 'hardware_volume':
+        require(args.direction in ('up', 'down') and args.value is None,
+                'absolute_volume_and_readback_require_lifesize')
         require(phone['online'], 'phone_unavailable')
         require(not phone.get('alert') or phone['alert']['state'] == 'ended', 'alert_already_active')
         body.update(context=args.context, direction=args.direction, steps=args.steps)
@@ -1006,11 +1174,13 @@ def parser():
         'help': 'Show local commands without accessing private configuration or the network.',
         'destinations': 'Read allowed dial and finite-ring destinations.',
         'directory': 'List Cisco phones, softphones and configured services, highlighting this selected line.',
-        'answer': 'Answer one exact ringing call on this line; never answer a timer/alarm alert.',
+        'answer': 'Answer one exact incoming ringing call. Cisco excludes timer/alarm alerts; '
+                  'LifeSize uses its native incoming-call control.',
         'pickup': 'Alias for Answer of one ringing call. Idle use requires explicit speaker toggle.',
         'hangup': 'Hang up one exact observed call; refuse multiple channels or a sibling call.',
+        'reject': 'Reject one exact incoming ringing call on a configured LifeSize Phone.',
     }
-    for name in ('status', 'help', 'directory', 'destinations', 'answer', 'pickup', 'hangup'):
+    for name in ('status', 'help', 'directory', 'destinations', 'answer', 'pickup', 'hangup', 'reject'):
         sub.add_parser(name, help=descriptions[name], description=descriptions[name])
     sub.add_parser('dial', aliases=['call'], help='Call a number; the destination rings normally.').add_argument('number')
     sub.add_parser('intercom', aliases=['drop-in'], help='Connect two idle Cisco phones with automatic speaker answer.',
@@ -1019,21 +1189,43 @@ def parser():
     sub.add_parser('ring').add_argument('number', nargs='?', default='640')
     sub.add_parser('speaker', description='Explicit idle speaker-key toggle for the whole phone. '
                    'Final speaker state is unknown; this is not an idempotent on/off command.').add_argument('mode', choices=['toggle'])
-    volume = sub.add_parser('volume', help='Step physical ringer or current call volume.',
-        description='Send hardware volume-key steps. Ringer requires an idle, physically on-hook phone; '
+    volume = sub.add_parser('volume', help='Control physical ringer or current call volume.',
+        description='Cisco: send hardware volume-key steps. Ringer requires an idle, physically on-hook phone; '
                     'call requires one active call on the selected line. The phone chooses the current '
                     'handset, headset or speaker output. Absolute level and local audio path are unknown. '
+                    'LifeSize: status reads the native level; set VALUE writes an absolute native level '
+                    '(ringer 0..10, call speaker 0..100). Up/down changes native units, not key presses. '
                     'This is separate from digital music gain. No automatic output switching or retry.')
     volume.add_argument('context', choices=['ringer', 'call'])
-    volume.add_argument('direction', choices=['up', 'down'])
+    volume.add_argument('direction', choices=['up', 'down', 'status', 'set'])
+    volume.add_argument('value', nargs='?', type=int, help='Absolute native level for LifeSize set only')
     volume.add_argument('--steps', type=int, choices=range(1, 6), default=1,
-                        help='Number of key presses (default: 1; maximum: 5)')
+                        help='Key presses on Cisco, native units on LifeSize (default: 1; maximum: 5)')
+    sub.add_parser('mic', help='Read or mute the microphone of a configured LifeSize Phone.',
+        description='LifeSize microphone control, separate from music mute/unmute. '
+                    'Mute/unmute requires one connected call.').add_argument(
+                        'mode', nargs='?', choices=['mute', 'unmute', 'status'], default='status')
+    sub.add_parser('automute', help='Read or set native microphone muting on LifeSize incoming answer.',
+        description='LifeSize native auto-mute preference. This is separate from native auto-answer '
+                    'and from the microphone mute state of a current call.').add_argument(
+                        'enabled', nargs='?', choices=['on', 'off'])
     for name in ('dnd', 'autoanswer'):
         description = ('Set or read whole-phone Do Not Disturb.' if name == 'dnd' else
-                       'Set or read whole-phone gateway auto-answer. Timer/alarm alerts always remain manual.')
-        sub.add_parser(name, description=description).add_argument('enabled', nargs='?', choices=['on', 'off'])
+                       'Set or read whole-phone auto-answer. Cisco uses the gateway policy and keeps alerts '
+                       'manual. LifeSize uses its native preference for all incoming calls.')
+        sub.add_parser(name, description=description).add_argument(
+            'enabled', nargs='?', choices=['on', 'off', 'status'] if name == 'dnd' else ['on', 'off'])
     msg = sub.add_parser('message'); msg.add_argument('text', nargs='?')
     msg.add_argument('--text-file'); msg.add_argument('--title', default='Notice')
+    say = sub.add_parser('say', aliases=['announce', 'voicemsg'],
+        help='Speak with the configured HA voice on one phone, a comma-list or @group.',
+        description='Generate one finite announcement. Cisco and LifeSize use exact incoming SIP calls; '
+                    'configured Assist satellites receive guarded direct audio. '
+                    'Persistent phone preferences are preserved. Unknown outcomes are not retried.')
+    say.add_argument('text', nargs='*')
+    say.add_argument('--text-file')
+    for name in ('say-status', 'say-stop'):
+        sub.add_parser(name, help='Inspect or stop one exact announcement job.').add_argument('job_id')
     img = sub.add_parser('image'); img.add_argument('file'); img.add_argument('--title', default='Notice')
     play = sub.add_parser('play', help='Play all matching library tracks, a file or direct HTTP audio URL.',
         description='Queue every match on the selected SIP line, in sorted order (at most 50). '
@@ -1105,7 +1297,23 @@ def display_schedule(schedule):
 
 
 def display(result):
-    if result.get('driver') == 'lifesize_ssh' and result['status'] == 'ok':
+    if result.get('driver') == 'sip_endpoint' and result['status'] == 'ok':
+        endpoint, line = result['endpoint'], result['selected_line']
+        print(f"Line {line} — {endpoint.get('room') or 'SIP endpoint'}")
+        print(f"Configured: {endpoint['configured']}; available: {endpoint['available']}; "
+              f"call state: {endpoint['call_state']}; DND: {endpoint['dnd']}; pending DND: {endpoint['dnd_pending']}")
+        if 'callback_state' in endpoint:
+            print('Callback state: ' + endpoint['callback_state'])
+        for call in endpoint['calls']:
+            print(f"Call: {call['state']} — {call['channel']} / {call['uniqueid']}")
+        print(result['note'])
+        print('Commands: ' + '; '.join(result['available_commands']))
+        print('Allowed dial numbers: ' + ', '.join(result['dial_allowlist']))
+        print('Examples (actions run only when you execute them):')
+        for example in result['examples']:
+            print('  ' + example)
+        return
+    if result.get('driver') == 'lifesize_ssh' and result['status'] == 'ok' and 'registration' in result:
         line = result['selected_line']
         print(f"Line {line} — {result['label']} (LifeSize SSH)")
         print('SIP registration: ' + result['registration'])
@@ -1113,6 +1321,18 @@ def display(result):
             print(f"Call {call['id']}: {call['state']} — {call['number']}")
         if not result['calls']:
             print('No active phone calls observed.')
+        settings = result.get('settings', {})
+        for key, label in (('ringer_volume', 'Ringer volume'), ('call_volume', 'Call speaker volume')):
+            if key in settings:
+                level = settings[key]
+                print(f"{label}: {level['value']} ({level['min']}..{level['max']}, native units)")
+        for key, label in (('autoanswer', 'Native auto-answer'), ('dnd', 'Do Not Disturb'),
+                           ('autoanswer_mic_muted', 'Mute microphone on incoming answer'),
+                           ('mic_muted', 'Microphone muted')):
+            if key in settings:
+                print(f"{label}: {'on' if settings[key] else 'off'}")
+        if result.get('note'):
+            print(result['note'])
         print('Commands:')
         for command in result['available_commands']:
             print(f'  cisco {line} {command}')
@@ -1133,6 +1353,8 @@ def display(result):
                 text += f"; DND {phone['dnd']}; auto-answer {phone['autoanswer']}; channels {phone['channel_count']}"
             elif phone['type'] == 'lifesize':
                 text += f"; LifeSize SSH (run cisco {phone['id']} for live status)"
+            elif phone.get('controls_enabled') is True:
+                text += f"; SIP callback, hangup and DND (run cisco {phone['id']} for live status)"
             else:
                 text += '; softphone (directory only; no Cisco controls)'
             print(text)
@@ -1201,14 +1423,14 @@ def main(argv=None):
     p = parser()
     if not argv or argv in (['--json'], ['-j']):
         if argv:
-            print(json.dumps({'status': 'help', 'commands': ['status', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS, *MUSIC_HELP]}))
+            print(json.dumps({'status': 'help', 'commands': ['status', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS, *MUSIC_HELP, *ANNOUNCEMENT_HELP]}))
         else:
             p.print_help()
         return 0
     args = p.parse_args(normalize_shorthand(argv))
     if args.command == 'help':
         if args.json:
-            print(json.dumps({'status': 'help', 'commands': ['status', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS, *MUSIC_HELP]}))
+            print(json.dumps({'status': 'help', 'commands': ['status', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS, *MUSIC_HELP, *ANNOUNCEMENT_HELP]}))
         else:
             p.print_help()
             print('\nDevice commands: ' + '; '.join(COMMANDS.values()))
@@ -1216,8 +1438,14 @@ def main(argv=None):
             print('Schedules (optional Home Assistant config): ' + '; '.join(SCHEDULE_COMMANDS))
             print('Voice (requires configured gateway supervisor): ' + '; '.join(VOICE_COMMANDS))
             print('Music (requires controlled player): ' + '; '.join(MUSIC_HELP))
+            print('Announcements (requires private configuration): ' + '; '.join(ANNOUNCEMENT_HELP))
+            print('LifeSize (requires native SSH configuration): volume ringer|call status; '
+                  'volume ringer|call set VALUE; mic [mute|unmute|status]; automute [on|off]; reject. '
+                  'Run cisco LINE for the actual device command list and settings.')
         return 0
     action_key = None
+    generic_endpoint = False
+    native_lifesize = False
     exit_code = 0
 
     def remember_voice_dispatch(key):
@@ -1228,15 +1456,26 @@ def main(argv=None):
         if args.extension == 'directory':
             require(args.command is None, 'global_directory_takes_no_subcommand')
             args.extension, args.command = None, 'directory'
-        else:
+        elif args.command not in ANNOUNCEMENT_COMMANDS:
             require(re.fullmatch(r'2[0-9]{2}', args.extension), 'extension_requires_three_digit_cisco_line')
         require(1 <= args.timeout <= 60, 'timeout_requires_1_to_60_seconds')
         config = load_config(args.config)
+        if args.command in ANNOUNCEMENT_COMMANDS:
+            result, code = announcement_operation('run', args, config, gateway_factory=Gateway,
+                inventory_validator=validate_inventory, read_file=read_file)
+            if args.json:
+                print(json.dumps(result, ensure_ascii=True))
+            else:
+                announcement_operation('display', result)
+            return code
         lifesize = config.get('lifesize', {})
         if args.extension in lifesize and args.command != 'directory':
+            native_lifesize = True
             data = Gateway(config, args.timeout).request('/v1/phones')
             validate_inventory(data)
             result = lifesize_operation('run', args, lifesize, data, remember_voice_dispatch)
+            if 'announcements' in config and 'available_commands' in result:
+                result['available_commands'].extend(ANNOUNCEMENT_HELP)
             if args.json:
                 print(json.dumps(result, ensure_ascii=True))
             else:
@@ -1276,9 +1515,17 @@ def main(argv=None):
                 gateway = Gateway(config, args.timeout)
                 data = gateway.request('/v1/phones')
                 if args.command != 'directory':
+                    if selected_endpoint(data, args.extension) is not None:
+                        generic_endpoint = True
+                        result = endpoint_command(args, gateway, remember_voice_dispatch)
+                        if args.json:
+                            print(json.dumps(result, ensure_ascii=True))
+                        else:
+                            display(result)
+                        return 0
                     phone = validate_inventory(data, args.extension)
             except (Refused, OSError, ValueError, UnicodeError, TypeError, KeyError, AttributeError, RecursionError) as exc:
-                if args.command not in (None, 'status') or 'home_assistant' not in config:
+                if generic_endpoint or args.command not in (None, 'status') or 'home_assistant' not in config:
                     raise
                 ha_config = config['home_assistant']
                 value = Gateway(ha_config, args.timeout).request(SCHEDULE_PATH, {
@@ -1340,8 +1587,11 @@ def main(argv=None):
                     result.update(status='not_confirmed', reason='ha_schedule_outcome_unknown',
                                   note='Local schedule state is shown; ringing outcome is unknown. Do not retry blindly.')
         elif args.command in (None, 'status', 'destinations') or (
-                args.command in ('dnd', 'autoanswer') and args.enabled is None):
+                args.command in ('dnd', 'autoanswer') and args.enabled is None) or (
+                args.command == 'dnd' and args.enabled == 'status'):
             result = status_result(data, phone, args.extension)
+            if 'announcements' in config:
+                result['available_commands'].extend(ANNOUNCEMENT_HELP)
             if 'home_assistant' in config:
                 result['available_commands'].extend(SCHEDULE_COMMANDS)
                 if args.command in (None, 'status'):
@@ -1421,6 +1671,11 @@ def main(argv=None):
             result['http_status'] = exc.http_status
         if action_key is not None:
             result.update(action_id=action_key, note='Do not retry blindly; inspect status first.')
+            if generic_endpoint or native_lifesize:
+                result.update(driver='lifesize_ssh' if native_lifesize else 'sip_endpoint',
+                    selected_line=args.extension, outcome='unknown',
+                    recovery_command=shlex.join(['cisco', '--config', args.config, '--timeout', str(args.timeout)]
+                        + (['--json'] if args.json else []) + [args.extension, 'status']))
             if args.command == 'voice':
                 result.update(
                     outcome='unknown',
@@ -1432,7 +1687,14 @@ def main(argv=None):
                          'Restore the intended transport and KUBECONFIG, then run '
                          'the read-only recovery command with the same private configuration.')
         elif args.command is None:
-            result['offline_commands'] = ['status', 'help', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS, *MUSIC_HELP]
+            if native_lifesize:
+                import cisco_lifesize
+                result['offline_commands'] = list(cisco_lifesize.AVAILABLE_COMMANDS)
+            else:
+                result['offline_commands'] = (['status', 'help', 'directory', 'destinations',
+                'call NUMBER', 'dial NUMBER', 'hangup', 'dnd [on|off|status]'] if generic_endpoint else
+                ['status', 'help', 'directory', 'destinations', 'pickup', *COMMANDS.values(),
+                 *SCHEDULE_COMMANDS, *VOICE_COMMANDS, *MUSIC_HELP, *ANNOUNCEMENT_HELP])
         print(json.dumps(result), file=sys.stdout if args.json else sys.stderr)
         if not args.json and args.command is None:
             print('Offline command help (live availability unknown):', file=sys.stderr)

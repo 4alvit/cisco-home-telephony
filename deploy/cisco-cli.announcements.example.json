@@ -1,0 +1,25 @@
+{
+  "announcements": {
+    "gateway_url": "http://127.0.0.1:18085",
+    "token_file": "announcement-token.txt",
+    "transport": "kubectl",
+    "kubectl": {
+      "context": "example-cluster",
+      "namespace": "telephony",
+      "selector": "app=asterisk",
+      "container": "announcer"
+    },
+    "groups": {
+      "downstairs": ["201", "203", "222"],
+      "conference": ["222"],
+      "speakers": ["223", "224", "225", "226"],
+      "all": ["201", "203", "222", "223", "224", "225", "226"]
+    },
+    "targets": {
+      "223": {"driver": "ha_satellite", "phone_id": "223"},
+      "224": {"driver": "ha_satellite", "phone_id": "224"},
+      "225": {"driver": "ha_satellite", "phone_id": "225"},
+      "226": {"driver": "ha_satellite", "phone_id": "226"}
+    }
+  }
+}

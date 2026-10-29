@@ -126,7 +126,10 @@ class CameraPreviewTests(unittest.TestCase):
     def xml(self, response):
         self.assertEqual(response.status, 200)
         self.assertIn("xml", response.content_type)
-        return ET.fromstring(response.body)
+        root = ET.fromstring(response.body)
+        for field in ("Title", "Prompt"):
+            self.assertLessEqual(len(root.findtext(field, "")), 32, field)
+        return root
 
     def image_url(self, response):
         xml = self.xml(response)
@@ -204,9 +207,10 @@ class CameraPreviewTests(unittest.TestCase):
     def test_caption_distinguishes_acquisition_from_unknown_capture_time(self):
         ref = self.start()
         page = self.request(ref.page_url)
-        self.assertIn("Acquired:", "".join(self.xml(page).itertext()))
+        self.assertEqual(self.xml(page).findtext("Prompt"), "Capture time unknown; Details")
         details = self.request(ref.page_url + "/text")
         text = "".join(self.xml(details).itertext())
+        self.assertIn("Acquired: 2023-11-14 22:13:20 UTC", text)
         self.assertIn("Camera capture time unavailable.", text)
         self.assertIn("Acquisition does not prove a new camera frame.", text)
         self.assertIn("Stop ends this preview only.", text)
@@ -214,7 +218,7 @@ class CameraPreviewTests(unittest.TestCase):
         self.clock.advance(3)
         repeated = self.request(ref.page_url)
         stamp = datetime.fromtimestamp(self.clock.wall, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        self.assertIn(stamp, "".join(self.xml(repeated).itertext()))
+        self.assertIn(stamp, self.xml(self.request(ref.page_url + "/text")).findtext("Text"))
         self.assertEqual(len(self.backend.calls), 2)
         self.assertIn("capture time", "".join(self.xml(repeated).itertext()).lower())
 
@@ -730,7 +734,7 @@ class CameraPreviewTests(unittest.TestCase):
         self.backend.hook = slow
         page = self.request(ref.page_url)
         stamp = datetime.fromtimestamp(self.clock.wall, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        self.assertIn(stamp, "".join(self.xml(page).itertext()))
+        self.assertIn(stamp, self.xml(self.request(ref.page_url + "/text")).findtext("Text"))
         self.clock.advance(2)
         self.request(ref.page_url)
         self.assertEqual(len(self.backend.calls), 1)

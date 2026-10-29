@@ -24,7 +24,10 @@ invalid_volume_identity player_disabled invalid_player_request invalid_player_se
 invalid_player_source invalid_enqueue invalid_player_position invalid_player_volume_level
 invalid_player_mute player_session_changed player_line_changed player_call_not_observed
 player_control_not_supported player_cleanup_pending player_dialplan_unavailable
-player_call_limit player_not_active line_does_not_belong_to_phone'''.split())
+player_call_limit player_not_active line_does_not_belong_to_phone
+unknown_endpoint endpoint_not_configured endpoint_unavailable endpoint_busy callback_pending
+exactly_one_endpoint_channel_required self_call_not_supported invalid_endpoint_request
+invalid_channel_identity enabled_boolean_required idempotency_key_required'''.split())
 HA_ERRORS = {
     'The selected line does not belong to this handset': 'ha_line_mapping_mismatch',
     'The timer belongs to the other line': 'ha_timer_owned_by_other_line',
@@ -56,10 +59,26 @@ voice_recovery_lock_changed voice_recovery_session_changed voice_recovery_sip_re
 voice_recovery_grace_pending voice_recovery_request_invalid voice_recovery_proof_invalid
 voice_recovery_proof_stale voice_recovery_not_quiet voice_recovery_unverified'''.split())
 SAFE_REASONS = SAFE_REASONS | VOICE_REASONS
-ERROR_REASONS = SAFE_REASONS | frozenset(('invalid_gateway_response', 'gateway_http_error',
+ANNOUNCEMENT_REASONS = frozenset('''unauthorized not_found invalid_body invalid_request
+invalid_idempotency_key invalid_targets duplicate_physical_target invalid_text
+invalid_dry_run idempotency_conflict unknown_announcement announcement_capacity request_failed'''.split())
+ERROR_REASONS = SAFE_REASONS | ANNOUNCEMENT_REASONS | frozenset(('invalid_gateway_response', 'gateway_http_error',
     'network_outcome_unknown', 'invalid_gateway_response_or_request', 'invalid_worker_input',
     'ha_service_http_error', 'ha_schedule_service_response_missing')) | frozenset(HA_ERRORS.values())
 SCHEDULE_PATH = '/api/services/cisco_phone_control/schedule?return_response'
+
+
+def announcement_url(value):
+    """The dedicated API is pod-local and requires explicit literal loopback."""
+    if (not isinstance(value, str) or len(value) > 256 or '?' in value or '#' in value
+            or any(c.isspace() for c in value)):
+        raise ValueError('invalid_announcement_url')
+    url = parse.urlsplit(value)
+    if (url.scheme not in ('http', 'https') or url.hostname != '127.0.0.1'
+            or url.username or url.password or url.path not in ('', '/')
+            or url.query or url.fragment or url.port is None or not 1 <= url.port <= 65535):
+        raise ValueError('invalid_announcement_url')
+    return value.rstrip('/')
 
 
 def json_loads_unique(raw):
@@ -100,21 +119,36 @@ class NoRedirect(request.HTTPRedirectHandler):
 def perform(payload):
     """Return only JSON data or fixed errors; never include a request or exception."""
     try:
-        base = gateway_url(payload['url'])
+        base = (announcement_url if payload.get('api') == 'announcements' else gateway_url)(payload['url'])
         token, path, body, timeout = (payload[k] for k in ('token', 'path', 'body', 'timeout'))
         api = payload.get('api', 'gateway')
-        if api not in ('gateway', 'home_assistant'):
+        if api not in ('gateway', 'home_assistant', 'announcements'):
             raise ValueError('invalid_api')
         token_pattern = r'[A-Za-z0-9_.-]{32,4096}' if api == 'home_assistant' else r'[A-Za-z0-9_-]{32,128}'
         if not isinstance(token, str) or not re.fullmatch(token_pattern, token):
             raise ValueError('invalid_token')
         if api == 'home_assistant' and (path != SCHEDULE_PATH or not isinstance(body, dict)):
             raise ValueError('invalid_ha_request')
+        if api == 'announcements':
+            if path == '/v1/announcements' or re.fullmatch(r'/v1/announcements/[0-9a-f]{32}/stop', path):
+                if not isinstance(body, dict):
+                    raise ValueError('invalid_announcement_request')
+            elif re.fullmatch(r'/v1/announcements/[0-9a-f]{32}', path):
+                if body is not None:
+                    raise ValueError('invalid_announcement_request')
+            else:
+                raise ValueError('invalid_announcement_path')
         if api == 'gateway':
+            endpoint_status = isinstance(path, str) and re.fullmatch(r'/v1/endpoints/2[0-9]{2}', path)
+            endpoint_action = isinstance(path, str) and re.fullmatch(
+                r'/v1/endpoints/2[0-9]{2}/(?:call|hangup|dnd)', path)
             playback_status = (isinstance(path, str) and re.fullmatch(
                 r'/v1/phones/2[0-9]{2}/voice_status\?include_playback=1', path))
-            if playback_status:
+            if endpoint_status or playback_status:
                 if body is not None:
+                    raise ValueError('invalid_request_body')
+            elif endpoint_action:
+                if not isinstance(body, dict):
                     raise ValueError('invalid_request_body')
             elif not re.fullmatch(r'/v1/phones(?:/2[0-9]{2}/[a-z]+(?:_[a-z]+)*)?', path):
                 raise ValueError('invalid_request_path')
@@ -147,6 +181,9 @@ def perform(payload):
         try:
             data = json.loads(exc.read(4097))
             if isinstance(data, dict) and data.get('reason') in SAFE_REASONS:
+                reason = data['reason']
+            if (isinstance(data, dict) and payload.get('api') == 'announcements'
+                    and data.get('reason') in ANNOUNCEMENT_REASONS):
                 reason = data['reason']
             if isinstance(data, dict) and payload.get('api') == 'home_assistant':
                 message = data.get('message')

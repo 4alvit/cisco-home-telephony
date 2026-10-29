@@ -435,9 +435,14 @@ class PhoneVoiceDisplay:
         if row.mode == 'camera' and row.captured_at is not None:
             stale = self.wall_clock() - row.captured_at > max(10, self.refresh_seconds * 2)
             stamp = ('Stale frame: ' if stale else 'Frame: ') + self._date(row.captured_at)
+            # Cisco's XML Prompt is limited to 32 characters. Keep the full
+            # capture date in Details; the stale image prompt retains time/UTC.
+            prompt = ('Stale frame: ' + datetime.fromtimestamp(row.captured_at, timezone.utc)
+                      .strftime('%H:%M:%S UTC')) if stale else stamp
         else:
             stamp = 'Updated: ' + self._date(row.updated_at)
-        self._element(root, 'Prompt', stamp)
+            prompt = stamp
+        self._element(root, 'Prompt', prompt)
         if image_view:
             self._element(root, 'LocationX', '-1')
             self._element(root, 'LocationY', '-1')

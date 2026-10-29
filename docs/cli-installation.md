@@ -69,21 +69,26 @@ python3 --version
 git --version
 mkdir -p "$HOME/src"
 cd "$HOME/src"
-git clone --branch v0.1.0-beta.25 --single-branch \
-  https://github.com/4alvit/cisco-home-telephony.git cisco-home-telephony-beta25
-cd cisco-home-telephony-beta25
+git clone --branch v0.1.0-beta.28 --single-branch \
+  https://github.com/4alvit/cisco-home-telephony.git cisco-home-telephony-beta28
+cd cisco-home-telephony-beta28
 git rev-parse HEAD
 ```
 
-This example selects [Beta 25](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.25).
+This example selects [Beta 28](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.28).
 Confirm that the printed commit is
-`213454385b7e75057f6b4d5db5a7b6a79922ccdd` before continuing. For another
+`62c763e7ee006e70107e55a78594d9b7828a69bc` before continuing. For another
 release, use its recorded full source commit and matching server image; the
 latest default branch is not a release pin.
 
-The Beta 25 pin above does **not** include the newer local-library music
-commands. To use them, select a reviewed newer revision containing the five
-CLI files described in [CLI music](cli-music.md).
+Beta 28 ships the seven CLI modules together with the announcement service, so
+the local-library music, ringer/call volume, LifeSize and announcement commands
+are included. The announcement service is a separate runtime: install its
+matching backend from the same release before enabling announcement routes, and
+keep private configuration unchanged. This release does **not** replace
+firmware, TFTP, the wake-capable gateway image or Echo device software. Beta 25
+and earlier pins do not contain these commands. See [CLI music](cli-music.md)
+and [CLI announcements](cli-announcements.md) for their respective server setup.
 
 For an existing checkout, inspect `git status` and preserve uncommitted work
 before changing revisions. Use a clean checkout at the selected release's
@@ -104,13 +109,24 @@ cisco 212 volume --help
 The link command intentionally refuses to replace an existing `cisco`. If that
 happens, inspect `command -v cisco` and `ls -l "$HOME/.local/bin/cisco"` before
 choosing which installation to keep. Keep the scripts together in the checkout.
-Music-capable revisions require all five: `cisco.py`, `cisco_http.py`,
-`cisco_player.py`, `cisco_library.py` and `cisco_media_source.py`, from the same
-revision. Copying only `cisco.py` breaks its imports and workers.
+The complete CLI bundle contains seven files: `cisco.py`, `cisco_http.py`,
+`cisco_player.py`, `cisco_library.py`, `cisco_media_source.py`,
+`cisco_lifesize.py` and `cisco_announce.py`, from the same revision.
+Copying only `cisco.py` breaks its imports and workers.
 
-For a LifeSize Phone, also install `cisco_lifesize.py` and follow the optional
+For a LifeSize Phone, follow the optional
 [native LifeSize configuration](cli-lifesize.md). SIP registration alone does
 not make a non-Cisco phone controllable through the Cisco gateway.
+
+Spoken `say` commands additionally require the bounded announcement service
+beside Asterisk and its private CLI configuration; see
+[the announcement guide](cli-announcements.md). Direct Echo announcements also
+need the matching guarded HA adapter; each Echo keeps only one SIP extension.
+Updating the CLI alone does not install either server component.
+
+For other configured SIP clients, follow [generic endpoint setup](existing-endpoints.md).
+Both client and gateway must include the endpoint API. No additional CLI module
+is needed; generic calls ring the selected endpoint first.
 
 Put the following line in your shell's startup file once: `~/.zshrc` for
 interactive zsh, `~/.bashrc` for interactive bash. For a macOS bash login shell,
@@ -345,6 +361,12 @@ preference for ordinary incoming calls on the whole hosting phone. Use
 Use `pickup` for a currently ringing ordinary call; use `speaker toggle` only
 for an idle phone. The controller cannot mechanically lift a handset.
 
+That behavior describes Cisco phones. The optional [LifeSize driver](cli-lifesize.md)
+reads and writes the phone's native auto-answer preference, which applies to
+incoming calls without the Cisco gateway's timer/alarm exception. Its separate
+ringer and speaker volume controls support numeric readback and absolute levels;
+its microphone control uses `mic`, not the music `mute` command.
+
 ## 7. Add optional Home Assistant timers and alarms
 
 First install and configure the companion
@@ -407,7 +429,7 @@ before replacing an existing schedule.
   run `python3 /path/to/cisco-home-telephony/scripts/cisco.py --help`. Check the
   symlink still points at an existing checkout.
 - **`No module named cisco_http`:** restore the scripts from the same revision
-  together (all five for the music-capable CLI); do not
+  together (all seven for the complete CLI); do not
   install a similarly named package from a package index.
 - **Wrong Python or syntax error:** inspect `python3 --version` and
   `command -v python3`; the executable uses `/usr/bin/env python3`.
@@ -513,7 +535,7 @@ syntax error. An accepted call still needs state/audio verification. Full
 The installation above checks out a release tag in **detached HEAD** state.
 Do not use `git pull` there. Select the next release and its recorded full
 source commit, and check compatibility with the installed server before
-updating. The example below reselects Beta 25; substitute both values when
+updating. The example below reselects Beta 28; substitute both values when
 moving to another release.
 
 From the checkout, inspect local changes first. Preserve any uncommitted work
@@ -522,18 +544,18 @@ the selected tag and inspect its commit:
 
 ```bash
 git status --short
-target_release=v0.1.0-beta.25
+target_release=v0.1.0-beta.28
 git fetch --no-tags origin "refs/tags/$target_release:refs/tags/$target_release"
 git rev-parse "$target_release^{commit}"
 ```
 
-For Beta 25, the result must be
-`213454385b7e75057f6b4d5db5a7b6a79922ccdd`. If it differs from the selected
+For Beta 28, the result must be
+`62c763e7ee006e70107e55a78594d9b7828a69bc`. If it differs from the selected
 release's recorded commit, stop and resolve the mismatch. After verification,
 switch explicitly to that commit:
 
 ```bash
-git switch --detach 213454385b7e75057f6b4d5db5a7b6a79922ccdd
+git switch --detach 62c763e7ee006e70107e55a78594d9b7828a69bc
 ```
 
 If you used a separate clone, inspect and repoint your existing `cisco` symlink

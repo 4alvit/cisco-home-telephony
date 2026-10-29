@@ -334,7 +334,11 @@ class CameraPreviewController:
         root.find('Title').text = ('Camera preview' if row.state == 'active'
                                    else 'Preview stopped' if row.state == 'stopped'
                                    else 'Preview unavailable')
-        root.find('Prompt').text = stamp + '; capture time unknown'
+        # The XML Prompt has a 32-character limit. Acquisition time is not
+        # camera capture time; keep that distinction visible and the full
+        # acquisition timestamp in the Details text below.
+        root.find('Prompt').text = ('No current still.' if row.acquired_at is None
+                                    else 'Capture time unknown; Details')
         text = root.find('Text')
         if text is not None:
             text.text = (row.label + '\n' + row.message + '\n' + stamp

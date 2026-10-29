@@ -2,9 +2,12 @@
 
 For an already configured hands-free phone, use the [daily-use guide](docs/voice-daily-use.md).
 For setup and opt-in voice operation, start with the [phone and CLI voice quickstart](docs/voice-quickstart.md).
-To install [Beta 25](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.25),
-use its matching source and wake-capable archive with the [gateway installation guide](docs/voice-gateway-deployment.md)
-and [CLI installation guide](docs/cli-installation.md).
+To install [Beta 28](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.28),
+use its CLI and announcement-service packages with the [CLI installation guide](docs/cli-installation.md);
+the wake-capable gateway image remains on
+[Beta 25](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.25)
+with the [gateway installation guide](docs/voice-gateway-deployment.md).
+Beta 28 does not replace firmware, TFTP, the gateway/wake image or Echo device software.
 For profiles available at every phone boot, [Beta 20](https://github.com/4alvit/cisco-home-telephony/releases/tag/v0.1.0-beta.20)
 adds a TFTP-only image and the [permanent profile service](docs/daily-phone-boot.md).
 The TFTP service is separate from the PBX and voice gateway; keep its own
@@ -35,6 +38,7 @@ conversion to MPP is not required.
   records exact firmware, container and installer files while preserving running configuration.
 - **Use an existing PBX:** [install and configure the Cisco CLI](docs/cli-installation.md),
   check the directory, then place an ordinary call or an intercom call.
+- **Reuse speakers and displays:** [existing SIP endpoints](docs/existing-endpoints.md) covers converted Echo clients, additive provisioning and supported HA controls.
 - **Set up the server:** [Asterisk installation, connections and operations](docs/asterisk-operations.md)
   walks through private configuration, k3s deployment, phone registration and acceptance checks.
 - **Diagnose a problem:** follow the [Asterisk operations guide](docs/asterisk-operations.md)
@@ -119,10 +123,17 @@ conversion to MPP is not required.
 - [Internet radio, timers and weekday alarms](docs/radio-and-alarms.md), including
   ten station extensions with toddler music and lullabies, and alerts
   that ring until manually stopped.
-- [Cisco command line](docs/cli.md): `cisco 212` shows status; `cisco 212 220`
-  calls from line 212 to 220. `cisco 212 intercom 220` connects two Cisco phones
+- [Cisco command line](docs/cli.md): `cisco 213` shows status; `cisco 213 220`
+  calls from line 213 to 220. `cisco 213 intercom 220` connects two Cisco phones
   with one-time speaker answer. Includes pickup, speaker toggle, DND, auto-answer,
   timers, weekday alarms, messages and photos, with private local configuration.
+- [LifeSize Phone controls](docs/cli-lifesize.md): the same CLI can use native
+  authenticated SSH for calls, separate ringer/speaker volume, microphone mute,
+  and persistent auto-answer. Includes model-specific limits and installation.
+- [Spoken announcements](docs/cli-announcements.md): use the configured Home
+  Assistant voice for a phone or private mixed group. Cisco and LifeSize use
+  finite SIP calls; configured Echo satellites use guarded direct HA playback.
+  Screen `message` and spoken `say` stay separate.
 - [Room directory](docs/phone-directory.md): a fictional ten-room demonstration
   plus an example Mac client, with stable numbers, room caller ID and read-only
   `cisco directory` lookup. Actual room assignments stay in private inventory.
