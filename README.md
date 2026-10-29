@@ -124,6 +124,9 @@ conversion to MPP is not required.
   calls from line 212 to 220. `cisco 212 intercom 220` connects two Cisco phones
   with one-time speaker answer. Includes pickup, speaker toggle, DND, auto-answer,
   timers, weekday alarms, messages and photos, with private local configuration.
+- [LifeSize Phone controls](docs/cli-lifesize.md): the same CLI can use native
+  authenticated SSH for calls, separate ringer/speaker volume, microphone mute,
+  and persistent auto-answer. Includes model-specific limits and installation.
 - [Room directory](docs/phone-directory.md): a fictional ten-room demonstration
   plus an example Mac client, with stable numbers, room caller ID and read-only
   `cisco directory` lookup. Actual room assignments stay in private inventory.

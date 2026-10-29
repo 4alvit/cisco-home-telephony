@@ -209,6 +209,13 @@ For idle speaker/dial-tone use, explicitly run `cisco 213 speaker toggle`. The g
 
 `cisco 213 autoanswer on` opts the whole hosting phone into gateway auto-answer; `autoanswer off` disables it, and `autoanswer` alone reads status. Incoming calls must pass the gateway's fresh isolated-call checks. Timer and alarm alerts remain manual regardless of this preference. Neither auto-answer nor pickup guarantees that a particular audio output device or volume is selected on the physical handset.
 
+These gateway guarantees apply to Cisco phones. An explicitly configured
+[LifeSize Phone](cli-lifesize.md) uses its own authenticated automation driver:
+native persistent auto-answer, separate numeric ringer and speaker volumes,
+and microphone controls. Native auto-answer affects incoming calls on the
+device and has no gateway timer/alarm exemption. Read that model's command
+matrix before assuming a Cisco feature is available on it.
+
 `alert timer` and `alert alarm` start an alert immediately; they do not schedule it. Alerts ring until manual answer/reject or Stop, with no audio after answering. For countdowns and recurring weekday schedules, use the [Home Assistant integration](https://github.com/ha-homelab/asterisk-telephony) and [radio/alarms guide](radio-and-alarms.md). `ring 640` keeps the legacy 20-second ringing timeout and finite destination behavior.
 
 ## Persistent hands-free mode

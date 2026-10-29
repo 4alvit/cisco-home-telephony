@@ -349,6 +349,12 @@ preference for ordinary incoming calls on the whole hosting phone. Use
 Use `pickup` for a currently ringing ordinary call; use `speaker toggle` only
 for an idle phone. The controller cannot mechanically lift a handset.
 
+That behavior describes Cisco phones. The optional [LifeSize driver](cli-lifesize.md)
+reads and writes the phone's native auto-answer preference, which applies to
+incoming calls without the Cisco gateway's timer/alarm exception. Its separate
+ringer and speaker volume controls support numeric readback and absolute levels;
+its microphone control uses `mic`, not the music `mute` command.
+
 ## 7. Add optional Home Assistant timers and alarms
 
 First install and configure the companion

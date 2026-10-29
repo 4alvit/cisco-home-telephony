@@ -35,9 +35,14 @@ class LifeSizeTests(unittest.TestCase):
                        'label': 'Conference Phone'}
         self.devices = ls.validate_config({'222': self.device}, self.root / 'cli.json')
 
-    def invoke(self, args, *, data=None, calls=(), fail=None, username='222'):
+    def invoke(self, args, *, data=None, calls=(), fail=None, username='222',
+               settings=None, responses=None, persist=True):
         commands, gateway_requests = [], []
         data = inventory() if data is None else data
+        current = {'volume ring-tone': '5', 'volume speaker': '70', 'audio mute': 'off',
+                   'call auto-answer': 'off', 'call auto-mute': 'on', 'call do-not-disturb': 'off'}
+        current.update(settings or {})
+        responses = dict(responses or {})
         class Gateway:
             def __init__(self, *_): pass
             def request(self, path, body=None):
@@ -45,10 +50,18 @@ class LifeSizeTests(unittest.TestCase):
                 return data
         def request(_phone, command):
             commands.append(command)
+            if command in responses:
+                response = responses[command]
+                return response(commands.count(command)) if callable(response) else response
             if command == 'get sip username': return [username]
             if command == 'get sip register': return ['registered']
             if command == 'status call active': return list(calls)
+            if command.startswith('get ') and command[4:] in current:
+                return [current[command[4:]]]
             if fail: raise ls.LifeSizeError(fail)
+            if command.startswith('set ') and persist:
+                name, value = command[4:].rsplit(' ', 1)
+                current[name] = value
             return []
         with patch.object(cisco, 'load_config', return_value={'lifesize': self.devices}), \
                 patch.object(cisco, 'Gateway', Gateway), patch.object(ls.Phone, 'request', request), \
@@ -110,7 +123,8 @@ class LifeSizeTests(unittest.TestCase):
         self.assertEqual(commands.count('control call dial -p sip 555'), 1)
 
     def test_unsupported_cisco_controls_do_not_touch_native_phone(self):
-        for args in (['222', 'dnd', 'on'], ['222', 'image', '/tmp/image.png'], ['222', 'play', 'test']):
+        for args in (['222', 'speaker', 'toggle'], ['222', 'image', '/tmp/image.png'],
+                     ['222', 'play', 'test'], ['222', 'mute'], ['222', 'timer', 'start', '1']):
             code, result, commands, _ = self.invoke(args)
             self.assertEqual(code, 1)
             self.assertEqual(result['reason'], 'command_not_supported_by_lifesize')
@@ -170,7 +184,7 @@ class LifeSizeTests(unittest.TestCase):
             cisco.display(result)
         self.assertIn('cisco 222 555', output.getvalue())
         self.assertIn('cisco 222 777', output.getvalue())
-        self.assertNotIn('auto-answer', output.getvalue())
+        self.assertIn('cisco 222 autoanswer', output.getvalue())
 
     def test_call_parser_rejects_malformed_or_duplicate_call_identity(self):
         for rows in (['unexpected'], ['1;reboot,2,Connected,No,Audio,777,'],
@@ -189,6 +203,243 @@ class LifeSizeTests(unittest.TestCase):
                          subprocess.CompletedProcess([], 0, stdout=b'error,08\n', stderr=b'')):
             with patch.object(ls.subprocess, 'run', return_value=response), self.assertRaises(ls.LifeSizeError):
                 phone.request('get sip register')
+
+    @staticmethod
+    def writes(commands):
+        return [c for c in commands if c.startswith(('set ', 'control '))]
+
+    def test_all_settings_status_commands_are_read_only_during_calls(self):
+        for suffix in ([], ['status'], ['destinations']):
+            with self.subTest(suffix=suffix):
+                code, result, commands, _ = self.invoke(['222', *suffix],
+                    calls=['12,2,Connected,No,Audio,777,'])
+                self.assertEqual(code, 0)
+                self.assertEqual(result['settings']['ringer_volume']['value'], 5)
+                self.assertEqual(result['settings']['call_volume']['max'], 100)
+                self.assertTrue(result['settings']['autoanswer_mic_muted'])
+                self.assertFalse(result['settings']['autoanswer'])
+                self.assertFalse(result['settings']['dnd'])
+                self.assertFalse(result['settings']['mic_muted'])
+                self.assertIn('microphone', result['capabilities'])
+                self.assertEqual(self.writes(commands), [])
+
+    def test_targeted_settings_read_only_the_requested_native_setting(self):
+        for suffix, native, key in (
+                (['volume', 'ringer', 'status'], 'volume ring-tone', 'ringer_volume'),
+                (['volume', 'call', 'status'], 'volume speaker', 'call_volume'),
+                (['autoanswer'], 'call auto-answer', 'autoanswer'),
+                (['automute'], 'call auto-mute', 'autoanswer_mic_muted'),
+                (['dnd', 'status'], 'call do-not-disturb', 'dnd'),
+                (['mic', 'status'], 'audio mute', 'mic_muted')):
+            with self.subTest(suffix=suffix):
+                code, result, commands, _ = self.invoke(['222', *suffix],
+                    calls=['12,2,Connected,No,Audio,777,'])
+                self.assertEqual(code, 0)
+                self.assertEqual(list(result['settings']), [key])
+                self.assertEqual(commands, ['get sip username', 'get sip register',
+                                             'status call active', 'get ' + native])
+                self.assertEqual(self.writes(commands), [])
+
+    def test_autoanswer_dnd_and_automute_write_only_their_setting_and_read_back(self):
+        for suffix, native, key, expected in (
+                (['autoanswer', 'on'], 'call auto-answer', 'autoanswer', True),
+                (['automute', 'off'], 'call auto-mute', 'autoanswer_mic_muted', False),
+                (['dnd', 'on'], 'call do-not-disturb', 'dnd', True)):
+            with self.subTest(suffix=suffix):
+                code, result, commands, requests = self.invoke(['222', *suffix],
+                    calls=['12,2,Connected,No,Audio,777,'] if key == 'dnd' else [])
+                self.assertEqual(code, 0)
+                self.assertTrue(result['confirmed'])
+                self.assertEqual(result['settings'][key], expected)
+                self.assertEqual(self.writes(commands), ['set ' + native + ' ' + suffix[-1]])
+                self.assertEqual(commands[-1], 'status call active' if key == 'dnd' else 'get ' + native)
+                self.assertEqual(requests, [('/v1/phones', None)])
+                self.assertEqual(list(result['settings']), [key])
+                self.assertEqual([c for c in commands if c.startswith('get ') and c[4:] in (
+                    name for name, _ in ls.SETTINGS.values())], ['get ' + native] * 3)
+
+    def test_relative_native_volume_clamps_at_real_limits(self):
+        for context, direction, start, expected, native, calls in (
+                ('ringer', 'up', '9', 10, 'volume ring-tone', []),
+                ('ringer', 'down', '1', 0, 'volume ring-tone', []),
+                ('call', 'up', '99', 100, 'volume speaker', ['12,2,Connected,No,Audio,777,']),
+                ('call', 'down', '1', 0, 'volume speaker', ['12,2,Connected,No,Audio,777,'])):
+            with self.subTest(context=context, direction=direction):
+                code, result, commands, _ = self.invoke(
+                    ['222', 'volume', context, direction, '--steps', '3'],
+                    settings={native: start}, calls=calls)
+                self.assertEqual(code, 0)
+                self.assertEqual(result['value'], expected)
+                self.assertEqual(result['settings'][context + '_volume']['value'], expected)
+                self.assertEqual(self.writes(commands), [f'set {native} {expected}'])
+
+    def test_absolute_volume_and_mic_target_one_connected_call(self):
+        call = '12,2,Connected,No,Audio,777,'
+        for suffix, expected in ((['volume', 'call', 'set', '42'], 'set volume speaker 42'),
+                                 (['mic', 'mute'], 'set audio mute on')):
+            with self.subTest(suffix=suffix):
+                code, result, commands, _ = self.invoke(['222', *suffix], calls=[call])
+                self.assertEqual(code, 0)
+                self.assertEqual(result['call_id'], '12')
+                self.assertEqual(self.writes(commands), [expected])
+                self.assertTrue(result['confirmed'])
+        code, result, commands, _ = self.invoke(['222', 'mic', 'unmute'], calls=[call],
+                                               settings={'audio mute': 'on'})
+        self.assertEqual(code, 0)
+        self.assertEqual(self.writes(commands), ['set audio mute off'])
+
+    def test_changed_settings_require_the_correct_call_context(self):
+        active = ['12,2,Connected,No,Audio,777,']
+        for suffix in (['volume', 'ringer', 'set', '8'], ['autoanswer', 'on'],
+                       ['automute', 'off']):
+            code, result, commands, _ = self.invoke(['222', *suffix], calls=active)
+            self.assertEqual(code, 1)
+            self.assertEqual(result['reason'], 'lifesize_setting_requires_idle_phone')
+            self.assertEqual(self.writes(commands), [])
+        for calls in ([], ['12,2,Ringing,Yes,Audio,777,'],
+                      active + ['13,3,Connected,No,Audio,555,']):
+            for suffix in (['volume', 'call', 'up'], ['mic', 'mute'], ['dnd', 'on']):
+                code, result, commands, _ = self.invoke(['222', *suffix], calls=calls)
+                self.assertEqual(code, 1)
+                self.assertEqual(result['reason'], 'lifesize_requires_one_connected_call')
+                self.assertEqual(self.writes(commands), [])
+
+    def test_noop_and_dry_run_settings_never_write(self):
+        for suffix in (['volume', 'call', 'set', '70'], ['autoanswer', 'off'],
+                       ['automute', 'on'], ['dnd', 'off'], ['mic', 'unmute']):
+            code, result, commands, _ = self.invoke(['222', *suffix],
+                                                   calls=['12,2,Ringing,Yes,Audio,777,'])
+            self.assertEqual(code, 0)
+            self.assertEqual(result['status'], 'ok')
+            self.assertFalse(result['changed'])
+            self.assertIn('registration', result)
+            self.assertNotIn('action_id', result)
+            self.assertEqual(self.writes(commands), [])
+        for suffix in (['volume', 'ringer', 'set', '9'], ['autoanswer', 'on'],
+                       ['automute', 'off'], ['dnd', 'on']):
+            code, result, commands, _ = self.invoke(['222', *suffix, '--dry-run'],
+                calls=['12,2,Connected,No,Audio,777,'] if suffix[0] == 'dnd' else [])
+            self.assertEqual(code, 0)
+            self.assertEqual(result['status'], 'dry_run')
+            self.assertEqual(self.writes(commands), [])
+
+    def test_dnd_change_requires_connected_call_in_both_directions(self):
+        for value, initial in (('on', 'off'), ('off', 'on')):
+            for calls in ([], ['12,2,Ringback,Yes,Audio,777,']):
+                code, result, commands, _ = self.invoke(['222', 'dnd', value], calls=calls,
+                    settings={'call do-not-disturb': initial})
+                self.assertEqual(code, 1)
+                self.assertEqual(result['reason'], 'lifesize_requires_one_connected_call')
+                self.assertEqual(self.writes(commands), [])
+            code, result, commands, _ = self.invoke(['222', 'dnd', value],
+                calls=['12,2,Connected,No,Audio,777,'], settings={'call do-not-disturb': initial})
+            self.assertEqual(code, 0)
+            self.assertEqual(result['call_id'], '12')
+            self.assertEqual(result['settings']['dnd'], value == 'on')
+            self.assertEqual(self.writes(commands), ['set call do-not-disturb ' + value])
+
+    def test_invalid_volume_arguments_are_rejected_before_phone_io(self):
+        for suffix in (['ringer', 'set', '11'], ['call', 'set', '101'], ['call', 'set', '-1'],
+                       ['ringer', 'set'], ['ringer', 'up', '5'],
+                       ['ringer', 'set', '5', '--steps', '2'], ['call', 'status', '--steps', '2']):
+            code, result, commands, _ = self.invoke(['222', 'volume', *suffix])
+            self.assertEqual(code, 1)
+            self.assertEqual(result['status'], 'refused')
+            self.assertEqual(commands, [])
+
+    def test_invalid_native_setting_response_prevents_all_mutation(self):
+        for native, rows, suffix in (
+                ('volume ring-tone', ['11'], ['volume', 'ringer', 'up']),
+                ('volume speaker', ['-1'], ['volume', 'call', 'up']),
+                ('volume speaker', ['70', '71'], ['volume', 'call', 'up']),
+                ('audio mute', ['OFF'], ['mic', 'mute']),
+                ('call auto-answer', ['maybe'], ['autoanswer', 'on']),
+                ('call auto-mute', [], ['automute', 'off']),
+                ('call do-not-disturb', ['on\nreboot'], ['dnd', 'on'])):
+            code, result, commands, _ = self.invoke(['222', *suffix],
+                                                   responses={'get ' + native: rows})
+            self.assertEqual(code, 1)
+            self.assertEqual(result['reason'], 'invalid_lifesize_setting')
+            self.assertEqual(self.writes(commands), [])
+
+    def test_answer_pickup_and_reject_use_exact_incoming_audio_call(self):
+        incoming = '12,2,Ringing,Yes,Audio,777,'
+        for command, native in (('answer', 'control call answer -t audio 12'),
+                                ('pickup', 'control call answer -t audio 12'),
+                                ('reject', 'control call answer -r 12')):
+            for state in ('Ringing', 'Ringback', 'Ring Incoming'):
+                code, result, commands, _ = self.invoke(['222', command],
+                    calls=[f'12,2,{state},Yes,Audio,777,'])
+                self.assertEqual(code, 0)
+                self.assertEqual(self.writes(commands), [native])
+            for calls in ([], ['12,2,Ringing,No,Audio,777,'], ['12,2,Ringback,No,Audio,777,'],
+                          ['12,2,Ring Incoming,No,Audio,777,'],
+                          ['12,2,Connected,Yes,Audio,777,'], [incoming, '13,3,Ringing,Yes,Audio,555,']):
+                code, result, commands, _ = self.invoke(['222', command], calls=calls)
+                self.assertEqual(code, 1)
+                self.assertEqual(self.writes(commands), [])
+
+    def test_call_and_setting_races_refuse_before_dispatch(self):
+        first = ['12,2,Connected,No,Audio,777,']
+        for changed in ([], ['13,2,Connected,No,Audio,777,'], ['12,2,Connected,Yes,Audio,777,'],
+                        ['12,2,Connected,No,Audio,555,'], ['12,2,Ringing,No,Audio,777,']):
+            code, result, commands, _ = self.invoke(['222', 'volume', 'call', 'up'], calls=first,
+                responses={'status call active': lambda n, changed=changed: first if n == 1 else changed})
+            self.assertEqual(code, 1)
+            self.assertEqual(result['reason'], 'lifesize_call_context_changed')
+            self.assertNotIn('action_id', result)
+            self.assertEqual(self.writes(commands), [])
+        code, result, commands, _ = self.invoke(['222', 'volume', 'ringer', 'up'],
+            responses={'get volume ring-tone': lambda n: ['5' if n == 1 else '6']})
+        self.assertEqual(code, 1)
+        self.assertEqual(result['reason'], 'lifesize_setting_changed')
+        self.assertEqual(self.writes(commands), [])
+
+    def test_unconfirmed_setting_readback_or_write_is_never_retried(self):
+        for kwargs in ({'persist': False}, {'fail': 'lifesize_ssh_outcome_unknown'}):
+            code, result, commands, _ = self.invoke(['222', 'autoanswer', 'on'], **kwargs)
+            self.assertEqual(code, 1)
+            self.assertEqual(result['status'], 'not_confirmed')
+            self.assertIn('action_id', result)
+            self.assertEqual(self.writes(commands), ['set call auto-answer on'])
+
+    def test_call_controls_and_messages_do_not_depend_on_unrelated_settings(self):
+        broken = {'get ' + native: ['invalid'] for native, _ in ls.SETTINGS.values()}
+        for suffix, calls in (
+                (['555'], []), (['hangup'], ['12,2,Connected,No,Audio,777,']),
+                (['answer'], ['12,2,Ringing,Yes,Audio,777,']),
+                (['pickup'], ['12,2,Ringing,Yes,Audio,777,']),
+                (['reject'], ['12,2,Ringing,Yes,Audio,777,']),
+                (['message', 'Test'], [])):
+            with self.subTest(suffix=suffix):
+                code, result, commands, _ = self.invoke(['222', *suffix], calls=calls, responses=broken)
+                self.assertEqual(code, 0)
+                self.assertEqual(result['status'], 'accepted')
+                self.assertFalse(set(commands) & set(broken))
+                self.assertEqual(len(commands), 5)
+
+    def test_disabling_autoanswer_ignores_broken_automute_getter(self):
+        code, result, commands, _ = self.invoke(['222', 'autoanswer', 'off'],
+            settings={'call auto-answer': 'on'}, responses={'get call auto-mute': ['invalid']})
+        self.assertEqual(code, 0)
+        self.assertFalse(result['settings']['autoanswer'])
+        self.assertNotIn('get call auto-mute', commands)
+        self.assertEqual(self.writes(commands), ['set call auto-answer off'])
+
+    def test_call_change_during_setting_dispatch_is_not_confirmed_and_not_rolled_back(self):
+        first = ['12,2,Connected,No,Audio,777,']
+        for suffix, expected in ((['volume', 'call', 'up'], 'set volume speaker 71'),
+                                 (['mic', 'mute'], 'set audio mute on'),
+                                 (['dnd', 'on'], 'set call do-not-disturb on')):
+            for final in ([], ['13,3,Connected,Yes,Audio,555,']):
+                with self.subTest(suffix=suffix, final=final):
+                    code, result, commands, _ = self.invoke(['222', *suffix], calls=first,
+                        responses={'status call active': lambda n, final=final: first if n < 3 else final})
+                    self.assertEqual(code, 1)
+                    self.assertEqual(result['status'], 'not_confirmed')
+                    self.assertEqual(result['reason'], 'lifesize_call_context_changed_after_setting')
+                    self.assertIn('action_id', result)
+                    self.assertEqual(self.writes(commands), [expected])
 
     def test_lock_refuses_parallel_local_commands(self):
         with patch.object(ls.Path, 'home', return_value=self.root), ls.device_lock('192.168.50.20'):

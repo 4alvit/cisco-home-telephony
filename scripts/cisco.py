@@ -579,6 +579,8 @@ def make_action(args, data, phone):
                 require(not item['dnd'], 'do_not_disturb')
                 require(not item.get('alert') or item['alert']['state'] == 'ended', 'alert_already_active')
     elif action == 'hardware_volume':
+        require(args.direction in ('up', 'down') and args.value is None,
+                'absolute_volume_and_readback_require_lifesize')
         require(phone['online'], 'phone_unavailable')
         require(not phone.get('alert') or phone['alert']['state'] == 'ended', 'alert_already_active')
         body.update(context=args.context, direction=args.direction, steps=args.steps)
@@ -1157,11 +1159,13 @@ def parser():
         'help': 'Show local commands without accessing private configuration or the network.',
         'destinations': 'Read allowed dial and finite-ring destinations.',
         'directory': 'List Cisco phones, softphones and configured services, highlighting this selected line.',
-        'answer': 'Answer one exact ringing call on this line; never answer a timer/alarm alert.',
+        'answer': 'Answer one exact incoming ringing call. Cisco excludes timer/alarm alerts; '
+                  'LifeSize uses its native incoming-call control.',
         'pickup': 'Alias for Answer of one ringing call. Idle use requires explicit speaker toggle.',
         'hangup': 'Hang up one exact observed call; refuse multiple channels or a sibling call.',
+        'reject': 'Reject one exact incoming ringing call on a configured LifeSize Phone.',
     }
-    for name in ('status', 'help', 'directory', 'destinations', 'answer', 'pickup', 'hangup'):
+    for name in ('status', 'help', 'directory', 'destinations', 'answer', 'pickup', 'hangup', 'reject'):
         sub.add_parser(name, help=descriptions[name], description=descriptions[name])
     sub.add_parser('dial', aliases=['call'], help='Call a number; the destination rings normally.').add_argument('number')
     sub.add_parser('intercom', aliases=['drop-in'], help='Connect two idle Cisco phones with automatic speaker answer.',
@@ -1170,18 +1174,30 @@ def parser():
     sub.add_parser('ring').add_argument('number', nargs='?', default='640')
     sub.add_parser('speaker', description='Explicit idle speaker-key toggle for the whole phone. '
                    'Final speaker state is unknown; this is not an idempotent on/off command.').add_argument('mode', choices=['toggle'])
-    volume = sub.add_parser('volume', help='Step physical ringer or current call volume.',
-        description='Send hardware volume-key steps. Ringer requires an idle, physically on-hook phone; '
+    volume = sub.add_parser('volume', help='Control physical ringer or current call volume.',
+        description='Cisco: send hardware volume-key steps. Ringer requires an idle, physically on-hook phone; '
                     'call requires one active call on the selected line. The phone chooses the current '
                     'handset, headset or speaker output. Absolute level and local audio path are unknown. '
+                    'LifeSize: status reads the native level; set VALUE writes an absolute native level '
+                    '(ringer 0..10, call speaker 0..100). Up/down changes native units, not key presses. '
                     'This is separate from digital music gain. No automatic output switching or retry.')
     volume.add_argument('context', choices=['ringer', 'call'])
-    volume.add_argument('direction', choices=['up', 'down'])
+    volume.add_argument('direction', choices=['up', 'down', 'status', 'set'])
+    volume.add_argument('value', nargs='?', type=int, help='Absolute native level for LifeSize set only')
     volume.add_argument('--steps', type=int, choices=range(1, 6), default=1,
-                        help='Number of key presses (default: 1; maximum: 5)')
+                        help='Key presses on Cisco, native units on LifeSize (default: 1; maximum: 5)')
+    sub.add_parser('mic', help='Read or mute the microphone of a configured LifeSize Phone.',
+        description='LifeSize microphone control, separate from music mute/unmute. '
+                    'Mute/unmute requires one connected call.').add_argument(
+                        'mode', nargs='?', choices=['mute', 'unmute', 'status'], default='status')
+    sub.add_parser('automute', help='Read or set native microphone muting on LifeSize incoming answer.',
+        description='LifeSize native auto-mute preference. This is separate from native auto-answer '
+                    'and from the microphone mute state of a current call.').add_argument(
+                        'enabled', nargs='?', choices=['on', 'off'])
     for name in ('dnd', 'autoanswer'):
         description = ('Set or read whole-phone Do Not Disturb.' if name == 'dnd' else
-                       'Set or read whole-phone gateway auto-answer. Timer/alarm alerts always remain manual.')
+                       'Set or read whole-phone auto-answer. Cisco uses the gateway policy and keeps alerts '
+                       'manual. LifeSize uses its native preference for all incoming calls.')
         sub.add_parser(name, description=description).add_argument(
             'enabled', nargs='?', choices=['on', 'off', 'status'] if name == 'dnd' else ['on', 'off'])
     msg = sub.add_parser('message'); msg.add_argument('text', nargs='?')
@@ -1273,7 +1289,7 @@ def display(result):
         for example in result['examples']:
             print('  ' + example)
         return
-    if result.get('driver') == 'lifesize_ssh' and result['status'] == 'ok':
+    if result.get('driver') == 'lifesize_ssh' and result['status'] == 'ok' and 'registration' in result:
         line = result['selected_line']
         print(f"Line {line} — {result['label']} (LifeSize SSH)")
         print('SIP registration: ' + result['registration'])
@@ -1281,6 +1297,18 @@ def display(result):
             print(f"Call {call['id']}: {call['state']} — {call['number']}")
         if not result['calls']:
             print('No active phone calls observed.')
+        settings = result.get('settings', {})
+        for key, label in (('ringer_volume', 'Ringer volume'), ('call_volume', 'Call speaker volume')):
+            if key in settings:
+                level = settings[key]
+                print(f"{label}: {level['value']} ({level['min']}..{level['max']}, native units)")
+        for key, label in (('autoanswer', 'Native auto-answer'), ('dnd', 'Do Not Disturb'),
+                           ('autoanswer_mic_muted', 'Mute microphone on incoming answer'),
+                           ('mic_muted', 'Microphone muted')):
+            if key in settings:
+                print(f"{label}: {'on' if settings[key] else 'off'}")
+        if result.get('note'):
+            print(result['note'])
         print('Commands:')
         for command in result['available_commands']:
             print(f'  cisco {line} {command}')
@@ -1386,9 +1414,13 @@ def main(argv=None):
             print('Schedules (optional Home Assistant config): ' + '; '.join(SCHEDULE_COMMANDS))
             print('Voice (requires configured gateway supervisor): ' + '; '.join(VOICE_COMMANDS))
             print('Music (requires controlled player): ' + '; '.join(MUSIC_HELP))
+            print('LifeSize (requires native SSH configuration): volume ringer|call status; '
+                  'volume ringer|call set VALUE; mic [mute|unmute|status]; automute [on|off]; reject. '
+                  'Run cisco LINE for the actual device command list and settings.')
         return 0
     action_key = None
     generic_endpoint = False
+    native_lifesize = False
     exit_code = 0
 
     def remember_voice_dispatch(key):
@@ -1405,6 +1437,7 @@ def main(argv=None):
         config = load_config(args.config)
         lifesize = config.get('lifesize', {})
         if args.extension in lifesize and args.command != 'directory':
+            native_lifesize = True
             data = Gateway(config, args.timeout).request('/v1/phones')
             validate_inventory(data)
             result = lifesize_operation('run', args, lifesize, data, remember_voice_dispatch)
@@ -1601,8 +1634,9 @@ def main(argv=None):
             result['http_status'] = exc.http_status
         if action_key is not None:
             result.update(action_id=action_key, note='Do not retry blindly; inspect status first.')
-            if generic_endpoint:
-                result.update(driver='sip_endpoint', selected_line=args.extension, outcome='unknown',
+            if generic_endpoint or native_lifesize:
+                result.update(driver='lifesize_ssh' if native_lifesize else 'sip_endpoint',
+                    selected_line=args.extension, outcome='unknown',
                     recovery_command=shlex.join(['cisco', '--config', args.config, '--timeout', str(args.timeout)]
                         + (['--json'] if args.json else []) + [args.extension, 'status']))
             if args.command == 'voice':
@@ -1616,7 +1650,11 @@ def main(argv=None):
                          'Restore the intended transport and KUBECONFIG, then run '
                          'the read-only recovery command with the same private configuration.')
         elif args.command is None:
-            result['offline_commands'] = (['status', 'help', 'directory', 'destinations',
+            if native_lifesize:
+                import cisco_lifesize
+                result['offline_commands'] = list(cisco_lifesize.AVAILABLE_COMMANDS)
+            else:
+                result['offline_commands'] = (['status', 'help', 'directory', 'destinations',
                 'call NUMBER', 'dial NUMBER', 'hangup', 'dnd [on|off|status]'] if generic_endpoint else
                 ['status', 'help', 'directory', 'destinations', 'pickup', *COMMANDS.values(),
                  *SCHEDULE_COMMANDS, *VOICE_COMMANDS, *MUSIC_HELP])
