@@ -108,6 +108,10 @@ Music-capable revisions require all five: `cisco.py`, `cisco_http.py`,
 `cisco_player.py`, `cisco_library.py` and `cisco_media_source.py`, from the same
 revision. Copying only `cisco.py` breaks its imports and workers.
 
+For a LifeSize Phone, also install `cisco_lifesize.py` and follow the optional
+[native LifeSize configuration](cli-lifesize.md). SIP registration alone does
+not make a non-Cisco phone controllable through the Cisco gateway.
+
 Put the following line in your shell's startup file once: `~/.zshrc` for
 interactive zsh, `~/.bashrc` for interactive bash. For a macOS bash login shell,
 use `~/.bash_profile` or have it source `~/.bashrc`.

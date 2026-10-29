@@ -42,6 +42,7 @@ conversion to MPP is not required.
 - **Improve call and radio sound:** [wideband audio](docs/audio-quality.md) explains
   G.722, the 16 kHz radio path, codec checks and safe fallback to G.711.
 - **Play audio from Home Assistant or Music Assistant:** [phone media players](docs/phone-media-player.md)
+- **Dial for local time or a library track:** [call-in audio services](docs/dial-audio-services.md)
   covers controlled playback, queues, volume, supported sources and deployment.
 - **Adjust ringer or active call volume:** [physical volume controls](docs/hardware-volume.md)
   explains CLI/HA key steps, current handset/headset/speaker behavior and the difference from music gain.
