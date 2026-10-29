@@ -43,7 +43,32 @@ To expose the numbers in the existing Cisco directory and CLI, merge them into t
 
 On deployments with staged voice configuration, the running gateway may read `/run/voice/.local/config/gateway.json` from the `voice-inputs` Secret. Updating only the older `/config` mount will not update the running directory. Inspect the deployment arguments and keep both copies consistent while preserving the other voice-input files.
 
-Add exact `555` and `777` entries with `Timeout="0"` to the existing TFTP `dialplan.xml` for automatic dialing after the third digit. Preserve all other patterns. Cisco phones fetch this file on profile reload or boot; until then, use the **Dial** softkey or the directory entry. Ordinary SIP clients such as LifeSize do not use this Cisco XML file.
+Add exact `555` and `777` entries with `Timeout="0"` to the existing TFTP
+`dialplan.xml`. Preserve all other patterns. Then refresh/restart each online
+Cisco phone and verify a real call to the complete service number. Updating the
+TFTP server alone does not update a phone's currently loaded dial template.
+Leave the updated profiles available for offline phones to fetch when powered on.
+Ordinary SIP clients such as LifeSize do not use this Cisco XML file.
+
+### Accepted CLI request followed by fast busy
+
+`cisco LINE 555` returning `accepted` means that the phone acknowledged the
+remote dial command; it does not confirm the number that reached Asterisk.
+On the tested 7945G, a stale dial template with no `5` prefix caused `Dial:555`
+to send **5** immediately. Asterisk correctly rejected that incomplete number,
+producing fast busy. The same risk applies to other newly added number patterns.
+The Dial softkey is not a reliable workaround for this remote-dial case.
+
+Check the Asterisk call log for the actual extension (`5@home` versus
+`555@home`). If truncated, check the served `dialplan.xml`, refresh the affected
+phone's configuration, and repeat one call. Do not add a PBX alias for the first
+digit: that hides the stale profile and can route other numbers incorrectly.
+For an idle, configured 7945G, the normal restart is **Settings**, then
+`* * # * *`. This preserves the configuration; a factory reset is unnecessary.
+Wait for registration before retrying. With authenticated remote keypad access,
+first verify the Settings screen and idle call state, then send that sequence
+once. An ambiguous last-key response may mean the reboot already began; inspect
+reachability and registration rather than repeating it.
 
 ## Behavior and checks
 
