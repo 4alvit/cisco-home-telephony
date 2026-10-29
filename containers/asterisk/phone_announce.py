@@ -152,7 +152,9 @@ def synthesize(config, text, directory):
             'options': {'voice': service['voice']}, 'message': text, 'cache': False,
         }, limit=65536)
         path = dial_audio.check_path(json.loads(body)['path'], '/api/tts_proxy/')
-        media_id = ha.base + path
+        # The API origin can differ from HA's device-reachable media origin.
+        # Adapters resolve this validated HA-local path using their HA URL.
+        media_id = path
         raw = ha.audio(path)
     else:
         raw = ha.speech(service, text)
@@ -448,13 +450,15 @@ class Announcer:
         if self.clock() + (job.data['duration_seconds'] or 120) + 8 >= job.data['expires_at']:
             job.update(recipient, status='skipped', reason='preparation_budget_exhausted')
             return
-        if not isinstance(job.data.get('media_id'), str):
-            job.update(recipient, status='failed', reason='prepared_media_missing')
+        try:
+            dial_audio.check_path(job.data.get('media_id'), '/api/tts_proxy/')
+        except ValueError:
+            job.update(recipient, status='failed', reason='prepared_media_invalid')
             return
         job.update(recipient, status='submitting', dispatched_at=self.clock())
         try:
             result = api.call(satellite, 'submit', request_id=recipient['root'],
-                              media_id=job.data['media_id'], expires_at=job.data['expires_at'],
+                              media_id=job.data['media_id'], expires_at=int(job.data['expires_at']),
                               preannounce=False, busy_policy='skip')
             self.satellite_result(job, recipient, result)
         except Exception:

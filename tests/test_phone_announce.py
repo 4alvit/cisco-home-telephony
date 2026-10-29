@@ -373,9 +373,10 @@ class AnnouncementTests(unittest.TestCase):
 
     def test_direct_worker_only_reads_pbx_dnd_and_keeps_url_private(self):
         self.enable_satellite()
+        self.now += 0.75
         job, recipient = self.job()
         self.manager.synth = Mock(return_value={'duration_seconds': 2.0,
-                                               'media_id': 'http://192.168.50.10/api/tts_proxy/fixture.wav'})
+                                               'media_id': '/api/tts_proxy/fixture.wav'})
         self.manager.run(job, self.request['text'])
         self.assertEqual(recipient['status'], 'completed')
         self.assertEqual(job.data['status'], 'finished')
@@ -383,8 +384,10 @@ class AnnouncementTests(unittest.TestCase):
         self.manager.synth.assert_called_once()
         submit = next(values for _, operation, values in self.satellite.calls if operation == 'submit')
         self.assertEqual(submit, {'request_id': recipient['root'],
-                                 'media_id': 'http://192.168.50.10/api/tts_proxy/fixture.wav',
-                                 'expires_at': job.data['expires_at'], 'preannounce': False, 'busy_policy': 'skip'})
+                                 'media_id': '/api/tts_proxy/fixture.wav',
+                                 'expires_at': int(job.data['expires_at']), 'preannounce': False, 'busy_policy': 'skip'})
+        self.assertIs(type(submit['expires_at']), int)
+        self.assertLessEqual(submit['expires_at'], job.data['expires_at'])
         self.assertNotIn('media_id', json.dumps(job.public()))
         self.assertIsNone(recipient['channel'])
         self.assertIsNone(recipient['uniqueid'])
@@ -405,7 +408,7 @@ class AnnouncementTests(unittest.TestCase):
     def test_missing_any_guard_prevents_satellite_submission(self):
         self.enable_satellite()
         job, recipient = self.job()
-        job.data['media_id'] = 'http://192.168.50.10/api/tts_proxy/fixture.wav'
+        job.data['media_id'] = '/api/tts_proxy/fixture.wav'
         for key in m.SATELLITE_GUARDS:
             with self.subTest(key=key):
                 recipient.update(status='queued', reason=None)
@@ -419,7 +422,7 @@ class AnnouncementTests(unittest.TestCase):
     def test_unknown_satellite_submission_is_polled_never_replayed(self):
         self.enable_satellite()
         job, recipient = self.job()
-        job.data['media_id'] = 'http://192.168.50.10/api/tts_proxy/fixture.wav'
+        job.data['media_id'] = '/api/tts_proxy/fixture.wav'
         self.satellite.fail_submit = True
         self.manager.dispatch_satellite(job, recipient)
         self.manager.dispatch_satellite(job, recipient)
@@ -428,6 +431,20 @@ class AnnouncementTests(unittest.TestCase):
         self.manager.observe_satellite(job, recipient)
         self.assertEqual(recipient['status'], 'completed')
         self.assertEqual(sum(operation == 'submit' for _, operation, _ in self.satellite.calls), 1)
+
+    def test_satellite_only_submits_validated_ha_local_media_paths(self):
+        self.enable_satellite()
+        job, recipient = self.job()
+        for media_id in (None, 'https://example.invalid/file.wav',
+                         'http://192.168.50.10/api/tts_proxy/fixture.wav',
+                         '/api/tts_proxy/file.wav?token=private', '/api/tts_proxy/../private'):
+            with self.subTest(media_id=media_id):
+                recipient.update(status='queued', reason=None)
+                job.data['media_id'] = media_id
+                self.manager.dispatch_satellite(job, recipient)
+                self.assertEqual((recipient['status'], recipient['reason']),
+                                 ('failed', 'prepared_media_invalid'))
+        self.assertFalse(any(operation == 'submit' for _, operation, _ in self.satellite.calls))
 
     def test_satellite_receipt_requires_identity_and_does_not_leak_reason(self):
         self.enable_satellite()
@@ -485,7 +502,7 @@ class AnnouncementTests(unittest.TestCase):
         ami = FakeAMI()
         self.manager.ami_factory = lambda _config: ami
         self.manager.synth = Mock(return_value={'duration_seconds': 2,
-                                               'media_id': 'http://192.168.50.10/api/tts_proxy/fixture.wav'})
+                                               'media_id': '/api/tts_proxy/fixture.wav'})
         def snapshot():
             if any(operation == 'Originate' for operation, _ in ami.actions):
                 agi.receipt(job.directory, job.data['id'], '222', recipient['root'], 'completed')
@@ -503,7 +520,8 @@ class AnnouncementTests(unittest.TestCase):
         service = {'kind': 'clock', 'engine_id': 'tts.fixture', 'language': 'en', 'voice': 'fixture-voice'}
         settings = {'services': {'555': service}, 'credentials_file': '/private/credentials'}
         ha = Mock(base='http://192.168.50.10')
-        ha.fetch.return_value = (b'{"path":"/api/tts_proxy/fixture.flac"}', 'application/json')
+        ha.fetch.return_value = (b'{"path":"/api/tts_proxy/fixture.flac",'
+                                 b'"url":"http://192.168.50.99/private?token=do-not-forward"}', 'application/json')
         ha.audio.return_value = b'original-audio'
         def encode(args, **_kwargs):
             self.assertEqual((job.directory / 'source.audio').read_bytes(), b'original-audio')
@@ -513,7 +531,9 @@ class AnnouncementTests(unittest.TestCase):
                 m.dial_audio, 'credentials', return_value=('origin', 'private')), patch.object(
                 m.dial_audio, 'HomeAssistant', return_value=ha), patch.object(m.subprocess, 'run', side_effect=encode):
             result = m.synthesize(self.config, self.request['text'], job.directory)
-        self.assertEqual(result, {'duration_seconds': 0.5, 'media_id': 'http://192.168.50.10/api/tts_proxy/fixture.flac'})
+        self.assertEqual(result, {'duration_seconds': 0.5, 'media_id': '/api/tts_proxy/fixture.flac'})
+        self.assertNotIn(ha.base, json.dumps(result))
+        self.assertNotIn('do-not-forward', json.dumps(result))
         ha.fetch.assert_called_once()
         ha.audio.assert_called_once_with('/api/tts_proxy/fixture.flac')
         ha.speech.assert_not_called()

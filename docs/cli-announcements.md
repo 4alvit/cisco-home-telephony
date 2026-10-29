@@ -271,6 +271,11 @@ therefore does not create silent calls or empty direct announcements.
 Direct delivery passes the prepared `media_id`, with `preannounce: false`,
 instead of asking each satellite to synthesize `message` through its own
 pipeline. This keeps the selected voice consistent across a mixed group.
+The server passes a validated HA-local `/api/tts_proxy/...` path. Each adapter
+resolves that path using Home Assistant's media address, which may differ from
+the private API address used by Asterisk. Credentials and query tokens are
+never embedded in that path. Submission deadlines are whole Unix seconds,
+rounded down so conversion cannot extend the job's lifetime.
 The stock [Home Assistant announcement action](https://www.home-assistant.io/actions/assist_satellite.announce/)
 distinguishes `media_id` from `message`; its `message` option uses the
 satellite's configured pipeline voice. The guarded adapter adds ownership,
