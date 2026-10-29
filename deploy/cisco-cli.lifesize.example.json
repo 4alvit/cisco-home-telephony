@@ -1,0 +1,11 @@
+{
+  "lifesize": {
+    "222": {
+      "host": "192.168.50.20",
+      "label": "Conference Phone",
+      "identity_file": "~/.ssh/lifesize",
+      "known_hosts_file": "~/.ssh/lifesize_known_hosts",
+      "legacy_rsa": false
+    }
+  }
+}

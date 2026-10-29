@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Control one Cisco line and its hosting phone through the private gateway."""
+"""Control one phone line through the private gateway or a configured LifeSize SSH driver."""
 import argparse
 import base64
 import json
@@ -90,7 +90,7 @@ def load_config(path):
     try:
         config = json_loads_unique(read_file(path, 16384, private=True))
         require(isinstance(config, dict), 'config_requires_object')
-        allowed = {'gateway_url', 'token', 'token_file', 'transport', 'kubectl', 'home_assistant', 'music'}
+        allowed = {'gateway_url', 'token', 'token_file', 'transport', 'kubectl', 'home_assistant', 'music', 'lifesize'}
         require(set(config) <= allowed, 'unknown_config_field')
         config['gateway_url'] = gateway_url(config['gateway_url'])
         require(('token' in config) != ('token_file' in config), 'choose_token_or_token_file')
@@ -118,6 +118,8 @@ def load_config(path):
             require('kubectl' not in config, 'kubectl_requires_explicit_transport')
         if 'home_assistant' in config:
             config['home_assistant'] = load_ha_config(config['home_assistant'], path)
+        if 'lifesize' in config:
+            config['lifesize'] = lifesize_operation('validate_config', config['lifesize'], path)
         if 'music' in config:
             try:
                 from cisco_library import LibraryError, validate_config
@@ -130,6 +132,17 @@ def load_config(path):
         return config
     except (ValueError, KeyError, TypeError, UnicodeError):
         raise Refused('invalid_private_config') from None
+
+
+def lifesize_operation(operation, *args):
+    try:
+        import cisco_lifesize
+    except ImportError:
+        raise Refused('lifesize_client_not_installed') from None
+    try:
+        return getattr(cisco_lifesize, operation)(*args)
+    except cisco_lifesize.LifeSizeError as error:
+        raise Refused(error.reason) from None
 
 
 def load_ha_config(config, path):
@@ -986,7 +999,7 @@ def parser():
     p = argparse.ArgumentParser(description=__doc__, prog='cisco', epilog=
         'Examples: cisco directory; cisco 213; cisco 213 600. Calls use the selected line.')
     global_options(p)
-    p.add_argument('extension', help='exact configured Cisco line, or directory for the whole phone registry')
+    p.add_argument('extension', help='exact configured phone line, or directory for the whole phone registry')
     sub = p.add_subparsers(dest='command')
     descriptions = {
         'status': 'Read current phone status and optional HA schedules.',
@@ -1092,14 +1105,34 @@ def display_schedule(schedule):
 
 
 def display(result):
+    if result.get('driver') == 'lifesize_ssh' and result['status'] == 'ok':
+        line = result['selected_line']
+        print(f"Line {line} — {result['label']} (LifeSize SSH)")
+        print('SIP registration: ' + result['registration'])
+        for call in result['calls']:
+            print(f"Call {call['id']}: {call['state']} — {call['number']}")
+        if not result['calls']:
+            print('No active phone calls observed.')
+        print('Commands:')
+        for command in result['available_commands']:
+            print(f'  cisco {line} {command}')
+        print('Allowed dial numbers: ' + ', '.join(result['dial_allowlist']))
+        print('Examples:')
+        for destination in ('555', '777', '600'):
+            if destination in result['dial_allowlist']:
+                print(f'  cisco {line} {destination}')
+        return
     if 'directory' in result:
         print('Phone directory:')
         for phone in result['directory']:
             marker = '*' if phone['selected'] else ' '
             room = phone['room'] if phone['room'] is not None else 'Unassigned'
-            text = f"{marker} {' / '.join(phone['lines'])}: {room} — online {phone['online']}"
+            availability = 'not checked' if phone['online'] is None else str(phone['online'])
+            text = f"{marker} {' / '.join(phone['lines'])}: {room} — online {availability}"
             if phone['type'] == 'cisco':
                 text += f"; DND {phone['dnd']}; auto-answer {phone['autoanswer']}; channels {phone['channel_count']}"
+            elif phone['type'] == 'lifesize':
+                text += f"; LifeSize SSH (run cisco {phone['id']} for live status)"
             else:
                 text += '; softphone (directory only; no Cisco controls)'
             print(text)
@@ -1199,6 +1232,16 @@ def main(argv=None):
             require(re.fullmatch(r'2[0-9]{2}', args.extension), 'extension_requires_three_digit_cisco_line')
         require(1 <= args.timeout <= 60, 'timeout_requires_1_to_60_seconds')
         config = load_config(args.config)
+        lifesize = config.get('lifesize', {})
+        if args.extension in lifesize and args.command != 'directory':
+            data = Gateway(config, args.timeout).request('/v1/phones')
+            validate_inventory(data)
+            result = lifesize_operation('run', args, lifesize, data, remember_voice_dispatch)
+            if args.json:
+                print(json.dumps(result, ensure_ascii=True))
+            else:
+                display(result)
+            return 0
         if args.command in MUSIC_COMMANDS:
             try:
                 import cisco_player
@@ -1252,7 +1295,10 @@ def main(argv=None):
                     print('Schedule commands: ' + '; '.join(SCHEDULE_COMMANDS))
                 return 1
         if args.command == 'directory':
-            result = directory_result(data, args.extension)
+            result = directory_result(data, None if args.extension in lifesize else args.extension)
+            result['selected_line'] = args.extension
+            if lifesize:
+                result = lifesize_operation('add_directory', result, lifesize)
         elif args.command in ('schedule', 'timer', 'alarm'):
             require('home_assistant' in config, 'home_assistant_schedule_config_required')
             ha_config = config['home_assistant']

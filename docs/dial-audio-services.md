@@ -4,6 +4,10 @@
 
 The example uses **555** for local time and **777** for one configured song. The song restarts at the beginning on every call and ends normally or when the caller hangs up. Select another number if either extension is already in use.
 
+To originate these calls from `cisco 222 555` on a LifeSize Phone, configure the
+[optional native CLI driver](cli-lifesize.md). Asterisk registration by itself
+does not enable remote control of a non-Cisco phone.
+
 ## Configure
 
 Copy [the example](../deploy/dial-audio.example.json) to a private deployment directory and install it as `/etc/asterisk/dial-audio.json`. Keep the real file, media paths, credentials, and household inventory out of the public repository.
