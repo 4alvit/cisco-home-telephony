@@ -405,6 +405,10 @@ HA action. This is deliberate: a missing adapter must not unexpectedly ring
 the room, inject speech into a call or interrupt an unrelated conversation.
 Music ducking and restoration are adapter-specific; this CLI does not promise
 uniform pause/resume of arbitrary Android apps or multiroom synchronization.
+On Show, the native ownership guard coordinates the integrated SIP, Assist and
+announcement paths. Other Android applications are observed and may cause the
+announcement to abort; this is not a system-wide lock over every Android audio
+application. See the Show adapter's release notes for its exact supported scope.
 
 ### Updating an existing installation
 
