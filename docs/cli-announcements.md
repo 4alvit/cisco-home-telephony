@@ -58,6 +58,12 @@ its journal remains available. Different content with the same key is rejected.
 The service retains bounded journals for 24 hours; a key is not a permanent
 deduplication guarantee after its journal expires.
 
+Journals survive a service process restart only while the shared spool remains
+available. The renderer reuses the existing spool volume: with `emptyDir`, a
+replacement pod loses that history. Use a persistent spool if history must
+survive pod replacement. An unknown job after such a replacement is not proof
+that its message was never played; do not automatically submit it again.
+
 ## Recipients and call behavior
 
 Supported recipients are configured Cisco phones and explicitly configured
@@ -213,6 +219,11 @@ announcement on one available phone before expanding the group. A dry run
 validates the request and configured targets without synthesizing, calling or
 checking live availability. Busy, offline and DND checks happen when a real job
 is dispatched.
+
+A PBX restart may temporarily leave a phone without an active SIP contact until
+its next registration refresh. The phone can still display its previous
+registration state. Confirm the contact in Asterisk before diagnosing a skipped
+`offline` recipient as an announcement failure.
 
 ## Results and troubleshooting
 
