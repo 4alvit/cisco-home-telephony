@@ -112,6 +112,10 @@ For a LifeSize Phone, also install `cisco_lifesize.py` and follow the optional
 [native LifeSize configuration](cli-lifesize.md). SIP registration alone does
 not make a non-Cisco phone controllable through the Cisco gateway.
 
+For other configured SIP clients, follow [generic endpoint setup](existing-endpoints.md).
+Both client and gateway must include the endpoint API. No additional CLI module
+is needed; generic calls ring the selected endpoint first.
+
 Put the following line in your shell's startup file once: `~/.zshrc` for
 interactive zsh, `~/.bashrc` for interactive bash. For a macOS bash login shell,
 use `~/.bash_profile` or have it source `~/.bashrc`.

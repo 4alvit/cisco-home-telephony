@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Control one phone line through the private gateway or a configured LifeSize SSH driver."""
+"""Control one phone line through the private gateway, SIP callbacks or a configured LifeSize SSH driver."""
 import argparse
 import base64
 import json
@@ -331,7 +331,157 @@ def validate_softphones(data, used_lines):
         seen.add(line)
         require(phone.get('room') is None or valid_room(phone['room']), 'invalid_phone_room')
         require(type(phone.get('online')) is bool, 'invalid_phone_status')
+        require(type(phone.get('controls_enabled', False)) is bool, 'invalid_softphone_controls')
     return softphones
+
+
+def selected_endpoint(data, line):
+    """Keep Cisco line validation separate from explicitly opted-in SIP clients."""
+    validate_inventory(data)
+    return next((phone for phone in data.get('softphones', [])
+                 if phone['extension'] == line and phone.get('controls_enabled') is True), None)
+
+
+def validate_endpoint_status(value, line):
+    require(isinstance(value, dict) and value.get('extension') == line, 'invalid_endpoint_identity')
+    require(value.get('ami_fresh') is True, 'gateway_ami_not_fresh')
+    observed = value.get('observed_at')
+    try:
+        fresh = (type(observed) in (int, float) and math.isfinite(observed)
+                 and -5 <= time.time() - observed <= 90)
+    except OverflowError:
+        fresh = False
+    require(fresh, 'gateway_endpoint_status_stale')
+    require(value.get('room') is None or valid_room(value['room']), 'invalid_phone_room')
+    for field in ('configured', 'available', 'calling', 'ringing', 'in_call', 'dnd', 'dnd_pending'):
+        require(type(value.get(field)) is bool, 'invalid_endpoint_status')
+    require(value.get('call_state') in ('idle', 'calling', 'ringing', 'in_call', 'ambiguous',
+                                       'unavailable', 'unknown'), 'invalid_endpoint_status')
+    if 'callback_state' in value:
+        require(isinstance(value['callback_state'], str)
+                and value['callback_state'] in ('idle', 'starting', 'active', 'unknown'),
+                'invalid_callback_state')
+    require(not value['available'] or value['configured'], 'invalid_endpoint_status')
+    calls = value.get('calls')
+    require(isinstance(calls, list) and len(calls) <= 32, 'invalid_channel_inventory')
+    channels, identities = set(), set()
+    for call in calls:
+        require(isinstance(call, dict) and isinstance(call.get('channel'), str)
+                and re.fullmatch(r'PJSIP/' + re.escape(line) + r'-[0-9a-f]+', call['channel'])
+                and isinstance(call.get('uniqueid'), str)
+                and re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', call['uniqueid'])
+                and isinstance(call.get('state'), str)
+                and re.fullmatch(r'[A-Za-z ]{1,40}', call['state']), 'invalid_channel_identity')
+        require(call['channel'] not in channels and call['uniqueid'] not in identities,
+                'ambiguous_channel_identity')
+        channels.add(call['channel']); identities.add(call['uniqueid'])
+    capabilities = value.get('capabilities')
+    require(isinstance(capabilities, dict) and all(type(capabilities.get(key)) is bool
+            for key in ('call', 'hangup', 'dnd', 'answer', 'auto_answer', 'media')),
+            'invalid_endpoint_capabilities')
+    require(not any(capabilities[key] for key in ('answer', 'auto_answer', 'media')),
+            'unsupported_endpoint_capabilities')
+    numbers = value.get('dial_allowlist')
+    require(isinstance(numbers, list) and all(isinstance(number, str)
+            and re.fullmatch(r'[0-9]{3,8}', number) for number in numbers), 'invalid_destination_inventory')
+    return value
+
+
+def endpoint_status_result(value, line):
+    fields = ('extension', 'room', 'configured', 'available', 'call_state', 'calling',
+              'ringing', 'in_call', 'dnd', 'dnd_pending')
+    endpoint = {field: value.get(field) for field in fields}
+    if 'callback_state' in value:
+        endpoint['callback_state'] = value['callback_state']
+    endpoint['calls'] = [{key: call[key] for key in ('channel', 'uniqueid', 'state')} for call in value['calls']]
+    endpoint['capabilities'] = {key: value['capabilities'][key]
+                               for key in ('call', 'hangup', 'dnd', 'answer', 'auto_answer', 'media')}
+    available = ['status', 'help', 'directory', 'destinations']
+    if value['capabilities']['call']:
+        available.extend(['call NUMBER', 'dial NUMBER'])
+    if value['capabilities']['hangup']:
+        available.append('hangup')
+    if value['capabilities']['dnd']:
+        available.append('dnd [on|off|status]')
+    examples = [f'cisco {line} status', f'cisco {line} directory']
+    destinations = [number for number in value['dial_allowlist'] if number != line]
+    if value['capabilities']['call'] and destinations:
+        examples.append(f'cisco {line} {"600" if "600" in destinations else destinations[0]}')
+    if value['capabilities']['hangup']:
+        examples.append(f'cisco {line} hangup')
+    if value['capabilities']['dnd']:
+        examples.extend([f'cisco {line} dnd on', f'cisco {line} dnd off', f'cisco {line} dnd status'])
+    note = 'Calls ring this endpoint first. Answer on the device to connect the destination.'
+    if value.get('callback_state') == 'unknown':
+        note += (' Callback outcome is unknown. Inspect the endpoint and reconcile the pending callback '
+                 'before placing another call; do not retry blindly.')
+    return {'status': 'ok', 'driver': 'sip_endpoint', 'selected_line': line, 'endpoint': endpoint,
+            'observed_at': value['observed_at'], 'ami_fresh': True, 'available_commands': available,
+            'dial_allowlist': list(value['dial_allowlist']), 'examples': examples,
+            'note': note}
+
+
+def endpoint_command(args, gateway, on_dispatch):
+    line = args.extension
+    value = validate_endpoint_status(gateway.request(f'/v1/endpoints/{line}'), line)
+    if args.command in (None, 'status', 'destinations') or (
+            args.command == 'dnd' and args.enabled in (None, 'status')):
+        return endpoint_status_result(value, line)
+    action = 'call' if args.command in ('call', 'dial') else args.command
+    require(action in ('call', 'hangup', 'dnd'), 'command_not_supported_by_endpoint')
+    require(value['capabilities'][action], 'command_not_supported_by_endpoint')
+    require(value['configured'], 'endpoint_not_configured')
+    body = {}
+    if action == 'call':
+        require(args.number in value['dial_allowlist'], 'destination_not_allowlisted')
+        require(args.number != line, 'self_call_not_supported')
+        require(value['available'], 'endpoint_unavailable')
+        require(value.get('callback_state', 'idle') == 'idle', 'callback_pending')
+        require(value['call_state'] == 'idle' and not value['calls']
+                and not any(value[key] for key in ('calling', 'ringing', 'in_call')), 'endpoint_busy')
+        require(not value['dnd'] and not value['dnd_pending'], 'do_not_disturb')
+        body['number'] = args.number
+    elif action == 'hangup':
+        require(len(value['calls']) == 1, 'exactly_one_endpoint_channel_required')
+        body.update({key: value['calls'][0][key] for key in ('channel', 'uniqueid')})
+    else:
+        body['enabled'] = args.enabled == 'on'
+    key = args.idempotency_key or 'cli-' + secrets.token_hex(16)
+    require(re.fullmatch(r'[A-Za-z0-9_.:-]{8,128}', key), 'invalid_idempotency_key')
+    body['idempotency_key'] = key
+    result = {'status': 'dry_run', 'driver': 'sip_endpoint', 'selected_line': line,
+              'action': action, 'request': body}
+    if action == 'call':
+        result['note'] = 'Calls ring this endpoint first. Answer on the device to connect the destination.'
+    if args.dry_run:
+        return result
+    previous_dispatch = getattr(gateway, 'on_dispatch', None)
+    gateway.on_dispatch = lambda: on_dispatch(key)
+    try:
+        response = gateway.request(f'/v1/endpoints/{line}/{action}', body)
+        on_dispatch(key)  # A returned receipt proves the request reached the server.
+    finally:
+        gateway.on_dispatch = previous_dispatch
+    require(response.get('status') == 'accepted' and response.get('action_id') == key
+            and response.get('extension') == line, 'unconfirmed_endpoint_response')
+    result = {'status': 'accepted', 'driver': 'sip_endpoint', 'selected_line': line,
+              'action': action, 'action_id': key,
+              'note': 'Request accepted; inspect status to observe the effect. No automatic retry.'}
+    if action == 'call':
+        require(response.get('number') == body['number'] and response.get('mode') == 'callback'
+                and type(response.get('ring_timeout_seconds')) is int
+                and response['ring_timeout_seconds'] == 20, 'unconfirmed_endpoint_response')
+        result.update(number=body['number'], mode='callback', ring_timeout_seconds=20,
+                      note='Callback accepted: this endpoint rings first. Answer on the device to connect '
+                           'the destination. Connection is not confirmed; inspect status. No automatic retry.')
+    elif action == 'hangup':
+        require(all(response.get(field) == body[field] for field in ('channel', 'uniqueid')),
+                'unconfirmed_endpoint_response')
+        result.update({field: body[field] for field in ('channel', 'uniqueid')})
+    else:
+        require(response.get('dnd') is body['enabled'], 'unconfirmed_endpoint_response')
+        result['dnd'] = body['enabled']
+    return result
 
 
 def validate_services(data, used_lines):
@@ -399,7 +549,8 @@ def directory_result(data, selected_line=None):
     for phone in softphones:
         entries.append({'type': 'softphone', 'id': phone['extension'], 'lines': [phone['extension']],
                         'room': phone.get('room'), 'online': phone['online'],
-                        'selected': selected_line == phone['extension']})
+                        'selected': selected_line == phone['extension'],
+                        **({'controls_enabled': True} if phone.get('controls_enabled') is True else {})})
     entries.sort(key=lambda phone: int(phone['id']))
     return {'status': 'ok', 'directory': entries, 'selected_line': selected_line,
             'services': sorted(({key: entry[key] for key in ('number', 'label', 'kind')}
@@ -1031,7 +1182,8 @@ def parser():
     for name in ('dnd', 'autoanswer'):
         description = ('Set or read whole-phone Do Not Disturb.' if name == 'dnd' else
                        'Set or read whole-phone gateway auto-answer. Timer/alarm alerts always remain manual.')
-        sub.add_parser(name, description=description).add_argument('enabled', nargs='?', choices=['on', 'off'])
+        sub.add_parser(name, description=description).add_argument(
+            'enabled', nargs='?', choices=['on', 'off', 'status'] if name == 'dnd' else ['on', 'off'])
     msg = sub.add_parser('message'); msg.add_argument('text', nargs='?')
     msg.add_argument('--text-file'); msg.add_argument('--title', default='Notice')
     img = sub.add_parser('image'); img.add_argument('file'); img.add_argument('--title', default='Notice')
@@ -1105,6 +1257,22 @@ def display_schedule(schedule):
 
 
 def display(result):
+    if result.get('driver') == 'sip_endpoint' and result['status'] == 'ok':
+        endpoint, line = result['endpoint'], result['selected_line']
+        print(f"Line {line} — {endpoint.get('room') or 'SIP endpoint'}")
+        print(f"Configured: {endpoint['configured']}; available: {endpoint['available']}; "
+              f"call state: {endpoint['call_state']}; DND: {endpoint['dnd']}; pending DND: {endpoint['dnd_pending']}")
+        if 'callback_state' in endpoint:
+            print('Callback state: ' + endpoint['callback_state'])
+        for call in endpoint['calls']:
+            print(f"Call: {call['state']} — {call['channel']} / {call['uniqueid']}")
+        print(result['note'])
+        print('Commands: ' + '; '.join(result['available_commands']))
+        print('Allowed dial numbers: ' + ', '.join(result['dial_allowlist']))
+        print('Examples (actions run only when you execute them):')
+        for example in result['examples']:
+            print('  ' + example)
+        return
     if result.get('driver') == 'lifesize_ssh' and result['status'] == 'ok':
         line = result['selected_line']
         print(f"Line {line} — {result['label']} (LifeSize SSH)")
@@ -1133,6 +1301,8 @@ def display(result):
                 text += f"; DND {phone['dnd']}; auto-answer {phone['autoanswer']}; channels {phone['channel_count']}"
             elif phone['type'] == 'lifesize':
                 text += f"; LifeSize SSH (run cisco {phone['id']} for live status)"
+            elif phone.get('controls_enabled') is True:
+                text += f"; SIP callback, hangup and DND (run cisco {phone['id']} for live status)"
             else:
                 text += '; softphone (directory only; no Cisco controls)'
             print(text)
@@ -1218,6 +1388,7 @@ def main(argv=None):
             print('Music (requires controlled player): ' + '; '.join(MUSIC_HELP))
         return 0
     action_key = None
+    generic_endpoint = False
     exit_code = 0
 
     def remember_voice_dispatch(key):
@@ -1276,9 +1447,17 @@ def main(argv=None):
                 gateway = Gateway(config, args.timeout)
                 data = gateway.request('/v1/phones')
                 if args.command != 'directory':
+                    if selected_endpoint(data, args.extension) is not None:
+                        generic_endpoint = True
+                        result = endpoint_command(args, gateway, remember_voice_dispatch)
+                        if args.json:
+                            print(json.dumps(result, ensure_ascii=True))
+                        else:
+                            display(result)
+                        return 0
                     phone = validate_inventory(data, args.extension)
             except (Refused, OSError, ValueError, UnicodeError, TypeError, KeyError, AttributeError, RecursionError) as exc:
-                if args.command not in (None, 'status') or 'home_assistant' not in config:
+                if generic_endpoint or args.command not in (None, 'status') or 'home_assistant' not in config:
                     raise
                 ha_config = config['home_assistant']
                 value = Gateway(ha_config, args.timeout).request(SCHEDULE_PATH, {
@@ -1340,7 +1519,8 @@ def main(argv=None):
                     result.update(status='not_confirmed', reason='ha_schedule_outcome_unknown',
                                   note='Local schedule state is shown; ringing outcome is unknown. Do not retry blindly.')
         elif args.command in (None, 'status', 'destinations') or (
-                args.command in ('dnd', 'autoanswer') and args.enabled is None):
+                args.command in ('dnd', 'autoanswer') and args.enabled is None) or (
+                args.command == 'dnd' and args.enabled == 'status'):
             result = status_result(data, phone, args.extension)
             if 'home_assistant' in config:
                 result['available_commands'].extend(SCHEDULE_COMMANDS)
@@ -1421,6 +1601,10 @@ def main(argv=None):
             result['http_status'] = exc.http_status
         if action_key is not None:
             result.update(action_id=action_key, note='Do not retry blindly; inspect status first.')
+            if generic_endpoint:
+                result.update(driver='sip_endpoint', selected_line=args.extension, outcome='unknown',
+                    recovery_command=shlex.join(['cisco', '--config', args.config, '--timeout', str(args.timeout)]
+                        + (['--json'] if args.json else []) + [args.extension, 'status']))
             if args.command == 'voice':
                 result.update(
                     outcome='unknown',
@@ -1432,7 +1616,10 @@ def main(argv=None):
                          'Restore the intended transport and KUBECONFIG, then run '
                          'the read-only recovery command with the same private configuration.')
         elif args.command is None:
-            result['offline_commands'] = ['status', 'help', 'directory', 'destinations', 'pickup', *COMMANDS.values(), *SCHEDULE_COMMANDS, *VOICE_COMMANDS, *MUSIC_HELP]
+            result['offline_commands'] = (['status', 'help', 'directory', 'destinations',
+                'call NUMBER', 'dial NUMBER', 'hangup', 'dnd [on|off|status]'] if generic_endpoint else
+                ['status', 'help', 'directory', 'destinations', 'pickup', *COMMANDS.values(),
+                 *SCHEDULE_COMMANDS, *VOICE_COMMANDS, *MUSIC_HELP])
         print(json.dumps(result), file=sys.stdout if args.json else sys.stderr)
         if not args.json and args.command is None:
             print('Offline command help (live availability unknown):', file=sys.stderr)

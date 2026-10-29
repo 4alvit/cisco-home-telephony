@@ -24,7 +24,10 @@ invalid_volume_identity player_disabled invalid_player_request invalid_player_se
 invalid_player_source invalid_enqueue invalid_player_position invalid_player_volume_level
 invalid_player_mute player_session_changed player_line_changed player_call_not_observed
 player_control_not_supported player_cleanup_pending player_dialplan_unavailable
-player_call_limit player_not_active line_does_not_belong_to_phone'''.split())
+player_call_limit player_not_active line_does_not_belong_to_phone
+unknown_endpoint endpoint_not_configured endpoint_unavailable endpoint_busy callback_pending
+exactly_one_endpoint_channel_required self_call_not_supported invalid_endpoint_request
+invalid_channel_identity enabled_boolean_required idempotency_key_required'''.split())
 HA_ERRORS = {
     'The selected line does not belong to this handset': 'ha_line_mapping_mismatch',
     'The timer belongs to the other line': 'ha_timer_owned_by_other_line',
@@ -111,10 +114,16 @@ def perform(payload):
         if api == 'home_assistant' and (path != SCHEDULE_PATH or not isinstance(body, dict)):
             raise ValueError('invalid_ha_request')
         if api == 'gateway':
+            endpoint_status = isinstance(path, str) and re.fullmatch(r'/v1/endpoints/2[0-9]{2}', path)
+            endpoint_action = isinstance(path, str) and re.fullmatch(
+                r'/v1/endpoints/2[0-9]{2}/(?:call|hangup|dnd)', path)
             playback_status = (isinstance(path, str) and re.fullmatch(
                 r'/v1/phones/2[0-9]{2}/voice_status\?include_playback=1', path))
-            if playback_status:
+            if endpoint_status or playback_status:
                 if body is not None:
+                    raise ValueError('invalid_request_body')
+            elif endpoint_action:
+                if not isinstance(body, dict):
                     raise ValueError('invalid_request_body')
             elif not re.fullmatch(r'/v1/phones(?:/2[0-9]{2}/[a-z]+(?:_[a-z]+)*)?', path):
                 raise ValueError('invalid_request_path')

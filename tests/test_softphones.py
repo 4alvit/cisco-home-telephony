@@ -130,6 +130,72 @@ class SoftphoneTests(unittest.TestCase):
             self.assertEqual(after, before)
             self.check(self.read_configs(out))
 
+    def test_per_client_codecs_preserve_existing_endpoints_credentials_and_acls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            provision.generate(self.site, self.inventory, out)
+            baseline = self.read_configs(out)
+            old_secrets = json.loads((out / 'softphone-secrets.json').read_text())
+            cisco_secrets = (out / 'secrets.json').read_bytes()
+            additions = json.loads((ROOT / 'examples/softphones.endpoints.example.json').read_text())['softphones']
+            site = copy.deepcopy(self.site)
+            site['softphones'].extend(additions)
+            provision.generate(site, self.inventory, out)
+            configs = self.read_configs(out)
+            self.check(configs, site)
+            secrets = json.loads((out / 'softphone-secrets.json').read_text())
+            self.assertEqual(secrets['209'], old_secrets['209'])
+            self.assertEqual((out / 'secrets.json').read_bytes(), cisco_secrets)
+            old_endpoint, _ = softphones.render_client(self.site, self.client, old_secrets['209'])
+            self.assertIn(old_endpoint, configs['pjsip.conf'])
+            for client in additions:
+                endpoint, dialplan = softphones.render_client(site, client, secrets[client['extension']])
+                self.assertIn(endpoint, configs['pjsip.conf'])
+                self.assertIn(dialplan, configs['extensions.conf'])
+                self.assertIn('allow=' + ','.join(client['codecs']) + '\n', endpoint)
+                self.assertIn('permit=' + client['source_ipv4'] + '/32\n', endpoint)
+                self.assertIn('transport=transport-' + client['transport'] + '\n', endpoint)
+                self.assertIn('incoming_call_offer_pref=local_first\n', endpoint)
+                self.assertIn('outgoing_call_offer_pref=local_merge\n', endpoint)
+                self.assertNotIn(client['extension'], configs['extensions.conf'].split('[cisco-alert]')[1])
+            self.assertEqual(configs['pjsip.conf'].count('allow=g722,ulaw,alaw\n'),
+                             baseline['pjsip.conf'].count('allow=g722,ulaw,alaw\n') + 1)
+            self.assertEqual(len(set(secrets.values())), len(secrets))
+
+    def test_explicit_default_codecs_preserve_rendered_output(self):
+        password = 'x' * 24
+        self.assertEqual(
+            softphones.render_client(self.site, self.client, password),
+            softphones.render_client(self.site, dict(self.client, codecs=['g722', 'ulaw', 'alaw']), password))
+
+    def test_invalid_codecs_fail_before_output(self):
+        for codecs in (None, True, 1, 'ulaw,alaw', {}, [], ['g722', 'g722'],
+                       ['opus'], ['G722'], ['g722', 'ulaw', 'alaw', 'opus'],
+                       ['ulaw\npermit=0.0.0.0/0'], [None], [[]], [{}]):
+            with self.subTest(codecs=codecs), tempfile.TemporaryDirectory() as tmp:
+                site = copy.deepcopy(self.site)
+                site['softphones'][0]['codecs'] = codecs
+                out = Path(tmp) / 'not-created'
+                with self.assertRaisesRegex(ValueError, 'softphone codecs must'):
+                    provision.generate(site, self.inventory, out)
+                self.assertFalse(out.exists())
+
+    def test_codec_changes_are_detected_without_rotating_credentials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            provision.generate(self.site, self.inventory, out)
+            baseline = self.read_configs(out)
+            saved = (out / 'softphone-secrets.json').read_bytes()
+            for codecs in (['ulaw', 'alaw'], ['alaw', 'ulaw'], ['g722']):
+                with self.subTest(codecs=codecs):
+                    site = copy.deepcopy(self.site)
+                    site['softphones'][0]['codecs'] = codecs
+                    with self.assertRaisesRegex(ValueError, 'softphone configuration differs'):
+                        softphones.check(site, baseline)
+                    provision.generate(site, self.inventory, out)
+                    self.check(self.read_configs(out), site)
+                    self.assertEqual((out / 'softphone-secrets.json').read_bytes(), saved)
+
     def test_invalid_room_is_rejected_before_output(self):
         for room in (None, 1, False, [], {}, '', ' Mac', 'Mac ', '\tMac', 'Mac\n',
                      'Mac;permit=all', 'Mac\\name', '"Mac"', 'M\u00e1c', '-Mac', 'A' * 49):

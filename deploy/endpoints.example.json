@@ -1,0 +1,29 @@
+{
+  "node_ipv4": "192.168.50.10",
+  "gateway": {
+    "enabled": true
+  },
+  "softphones": [
+    {
+      "extension": "290",
+      "label": "Speaker client",
+      "source_ipv4": "192.168.50.91",
+      "transport": "udp",
+      "codecs": [
+        "ulaw",
+        "alaw"
+      ]
+    },
+    {
+      "extension": "291",
+      "label": "Display client",
+      "source_ipv4": "192.168.50.92",
+      "transport": "udp",
+      "codecs": [
+        "g722",
+        "ulaw",
+        "alaw"
+      ]
+    }
+  ]
+}

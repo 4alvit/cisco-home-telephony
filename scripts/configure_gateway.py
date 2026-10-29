@@ -19,7 +19,7 @@ from render_gateway import gateway
 from render_k3s import load_site
 
 
-def prepare(site, inventory, callbacks, ami, clients, api_port=18084):
+def prepare(site, inventory, callbacks, ami, clients, api_port=18084, *, control_endpoints=()):
     require = gateway.require
     require(site.get('gateway', {}).get('enabled') is True, 'enable_site_gateway_first', 400)
     require(site['gateway']['ami_client_ipv4'] == site['node_ipv4'], 'gateway_ami_source_must_be_local_node', 400)
@@ -49,6 +49,15 @@ def prepare(site, inventory, callbacks, ami, clients, api_port=18084):
     require(not apps_enabled or all('apps_path' in phone for phone in phones), 'app_urls_required_for_all_phones', 400)
     clients_metadata = [{'extension': client['extension'], 'room': client.get('room')}
                         for client in softphones.validate(site, [line for phone in phones for line in phone['lines']])]
+    require(isinstance(control_endpoints, (list, tuple)) and len(control_endpoints) <= 50
+            and all(isinstance(extension, str) and re.fullmatch(r'2[0-9]{2}', extension)
+                    for extension in control_endpoints), 'bad_control_endpoint', 400)
+    controlled = set(control_endpoints)
+    require(controlled <= {client['extension'] for client in clients_metadata},
+            'control_endpoint_must_be_configured_softphone', 400)
+    for client in clients_metadata:
+        if client['extension'] in controlled:
+            client['controls_enabled'] = True
     local_numbers = ([line for phone in phones for line in phone['lines']]
                      + [client['extension'] for client in clients_metadata])
     services = service_catalog.build(site, has_phones=bool(phones), local_numbers=local_numbers,
@@ -76,13 +85,16 @@ def main():
     parser.add_argument('--ami-secret', required=True)
     parser.add_argument('--ha-source-ip', action='append', required=True)
     parser.add_argument('--api-port', type=int, default=18084)
+    parser.add_argument('--control-endpoint', action='append', default=[], metavar='EXT',
+                        help='enable callback, exact hangup and DND for this configured softphone; repeat per endpoint')
     parser.add_argument('--enable-persistent', action='store_true', required=True)
     parser.add_argument('--output', required=True)
     args = parser.parse_args()
     os.umask(0o077)
     result = prepare(load_site(args.site), json.loads(Path(args.inventory).read_text()),
                      [load_config(path, allow_expired=True) for path in args.callback],
-                     json.loads(Path(args.ami_secret).read_text()), args.ha_source_ip, args.api_port)
+                     json.loads(Path(args.ami_secret).read_text()), args.ha_source_ip, args.api_port,
+                     control_endpoints=args.control_endpoint)
     write_new(args.output, (json.dumps(result, indent=2) + '\n').encode())
     print('Created private persistent gateway input. Existing phone credentials and callback URLs are unchanged.')
 

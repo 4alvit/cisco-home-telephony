@@ -35,6 +35,7 @@ conversion to MPP is not required.
   records exact firmware, container and installer files while preserving running configuration.
 - **Use an existing PBX:** [install and configure the Cisco CLI](docs/cli-installation.md),
   check the directory, then place an ordinary call or an intercom call.
+- **Reuse speakers and displays:** [existing SIP endpoints](docs/existing-endpoints.md) covers converted Echo clients, additive provisioning and supported HA controls.
 - **Set up the server:** [Asterisk installation, connections and operations](docs/asterisk-operations.md)
   walks through private configuration, k3s deployment, phone registration and acceptance checks.
 - **Diagnose a problem:** follow the [Asterisk operations guide](docs/asterisk-operations.md)

@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "gateway": {
+    "base_url": "http://gateway.example.lan:8080",
+    "authorization_secret": "endpoint_gateway_authorization"
+  },
+  "destinations": [
+    {"extension": "600", "label": "Echo test"},
+    {"extension": "201", "label": "Example desk"}
+  ],
+  "endpoints": [
+    {"id": "example_sip", "label": "Example SIP client", "kind": "sip", "extension": "209"},
+    {
+      "id": "example_native",
+      "label": "Example native phone",
+      "kind": "native",
+      "state_entity": "sensor.example_phone_call_state",
+      "ready_entity": "binary_sensor.example_phone_ready",
+      "actions": {
+        "dial": {"action": "script.example_phone_dial", "destination_field": "number"},
+        "hangup": {"action": "script.example_phone_hangup"}
+      }
+    },
+    {
+      "id": "example_cast",
+      "label": "Example Cast speaker",
+      "kind": "cast",
+      "media_player_entity": "media_player.example_cast",
+      "tts_entity": "tts.example_provider"
+    }
+  ]
+}

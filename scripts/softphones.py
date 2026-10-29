@@ -11,6 +11,7 @@ PRIVATE = tuple(ipaddress.IPv4Network(n) for n in ('10.0.0.0/8', '172.16.0.0/12'
 SECRET_PATTERN = r'[A-Za-z0-9_-]{24,30}'
 MARKER = 'HOME_CLIENT_KIND=softphone'
 ROOM_PATTERN = r"[A-Za-z0-9][A-Za-z0-9 _'()-]{0,47}"
+DEFAULT_CODECS = ('g722', 'ulaw', 'alaw')
 
 
 def room_name(value):
@@ -18,6 +19,18 @@ def room_name(value):
     if not isinstance(value, str) or not re.fullmatch(ROOM_PATTERN, value) or value != value.strip():
         raise ValueError('room must be 1..48 ASCII letters/digits/spaces/_/\'/(/)/-, start with a letter or digit, and have no surrounding whitespace')
     return value
+
+
+def audio_codecs(client):
+    """Retain wideband by default; allow a client's ordered, supported subset."""
+    if 'codecs' not in client:
+        return DEFAULT_CODECS
+    values = client['codecs']
+    if (not isinstance(values, list) or not 1 <= len(values) <= len(DEFAULT_CODECS)
+            or any(not isinstance(value, str) or value not in DEFAULT_CODECS for value in values)
+            or len(set(values)) != len(values)):
+        raise ValueError('softphone codecs must be a nonempty ordered list of unique g722, ulaw or alaw values')
+    return values
 
 
 def validate(site, cisco_extensions=()):
@@ -28,8 +41,8 @@ def validate(site, cisco_extensions=()):
     result = []
     for client in values:
         required = {'extension', 'label', 'source_ipv4', 'transport'}
-        if not isinstance(client, dict) or not required <= set(client) or set(client) - required - {'room'}:
-            raise ValueError('each softphone requires extension, label, source_ipv4 and transport, with optional room')
+        if not isinstance(client, dict) or not required <= set(client) or set(client) - required - {'room', 'codecs'}:
+            raise ValueError('each softphone requires extension, label, source_ipv4 and transport, with optional room and codecs')
         extension = client['extension']
         if not isinstance(extension, str) or not re.fullmatch(r'2[0-9]{2}', extension):
             raise ValueError('softphone extension must be a string in 200..299')
@@ -42,6 +55,7 @@ def validate(site, cisco_extensions=()):
             room_name(client['room'])
         if client['transport'] not in ('tcp', 'udp'):
             raise ValueError('softphone transport must be tcp or udp')
+        audio_codecs(client)
         value = client['source_ipv4']
         if not isinstance(value, str):
             raise ValueError('softphone source_ipv4 must be a private IPv4 literal')
@@ -59,11 +73,11 @@ def networks(site):
     return list(dict.fromkeys(client['source_ipv4'] + '/32' for client in validate(site)))
 
 
-def prepare_secrets(clients, out, cisco_passwords):
+def prepare_secrets(clients, out, cisco_passwords, *, path=None):
     """Read and validate before writing; preserve disabled client credentials for reuse."""
-    if not clients:
+    if not clients and path is None:
         return None
-    path = Path(out) / 'softphone-secrets.json'
+    path = Path(path) if path is not None else Path(out) / 'softphone-secrets.json'
     if path.is_symlink() or (path.exists() and not stat.S_ISREG(path.stat().st_mode)):
         raise ValueError('softphone secrets must be a regular private file')
     saved = json.loads(path.read_text()) if path.exists() else {}
@@ -90,7 +104,7 @@ def render_client(site, client, password):
     if not isinstance(password, str) or not re.fullmatch(SECRET_PATTERN, password):
         raise ValueError('invalid softphone secret')
     extension, label = client['extension'], client.get('room', client['label'])
-    # Answer with the best common codec, retaining G.711-only client support.
+    # Answer with the best common codec in this client's configured order.
     # These are active Asterisk 22 policies; codec_prefs_* is reserved.
     # https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/Module_Configuration/res_pjsip/#incoming_call_offer_pref
     pjsip = f'''[{extension}]
@@ -98,7 +112,7 @@ type=endpoint
 transport=transport-{client['transport']}
 context=home
 disallow=all
-allow=g722,ulaw,alaw
+allow={','.join(audio_codecs(client))}
 incoming_call_offer_pref=local_first
 outgoing_call_offer_pref=local_merge
 auth=auth-softphone-{extension}

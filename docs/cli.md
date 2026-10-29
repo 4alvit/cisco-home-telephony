@@ -91,6 +91,28 @@ Choose the transport explicitly:
 
 Both transports require an explicit RFC1918 IPv4 gateway literal and disable HTTP proxies and redirects. HTTPS uses normal certificate verification. HTTP is for the existing trusted private network. There is no automatic transport fallback and no direct AMI, CGI, SSH or phone-reboot fallback.
 
+## Existing non-Cisco SIP clients
+
+The optional [generic endpoint setup](existing-endpoints.md) adds a second control
+path for configured softphones with `controls_enabled: true`. The same private
+CLI connection is used; no SIP password is required on the CLI host.
+
+```sh
+cisco 290                 # Fresh PBX status and supported examples
+cisco 290 600             # Ring 290 first; after answer connect to echo test
+cisco 290 hangup          # End its single, freshly identified call
+cisco 290 dnd on          # Reject incoming calls through the managed dialplan
+cisco 290 dnd off
+```
+
+These are synthetic numbers. Generic calling is a **callback**, not a remote
+speakerphone key: the selected endpoint must answer first. Hardware answer,
+volume, music and display commands remain unavailable unless a separate native
+driver implements them. The configured LifeSize driver keeps precedence. The
+older Beta 25 CLI and gateway do not contain this optional endpoint API; install
+both from the same reviewed revision containing these changes. See the
+[HA package](endpoint-home-assistant.md) for corresponding dashboard controls.
+
 ## Commands and scope
 
 [Physical volume controls](hardware-volume.md) use the phone's volume keys.
