@@ -111,11 +111,29 @@ Each selected extension must already be a `softphones` entry in `site.json`;
 Cisco lines and unknown extensions are rejected. Without the flags, software
 clients retain the existing directory-only default.
 
+`configure_gateway.py` is a bootstrap/migration generator: it creates a new API
+token and does not round-trip every advanced setting from a running gateway.
+For an existing installation, modify a private copy of the current configuration
+and retain its token, source allowlist, phone credentials and optional features.
+Compare both active configuration copies before rollout. Do not replace a live
+gateway with fresh bootstrap output merely to enable another endpoint.
+
+An emergency code overlay must also be carried forward deliberately. Before a
+later image-based upgrade, verify that the new image contains the deployed
+endpoint and media changes, then retire the corresponding `/workspace` overlay
+mounts in the reviewed candidate. The deployment renderer refuses these overlays
+to prevent accidentally hiding or discarding live code. Preserve state volumes;
+never remove an overlay first and assume an older image has equivalent code.
+
 A **callback** rings the selected endpoint first; after the user answers, Asterisk
 dials the destination. It is different from a native device's immediate outbound
 dial action. A native TECHO5 or display adapter may provide answer/hangup directly.
 Do not show speakerphone, hardware volume, auto-answer or media-player controls
 unless that device adapter actually implements them.
+
+For a native TECHO5 endpoint, optional [English and Russian Assist commands](assist-phone.md)
+map fixed phrases to one explicitly configured target and a reviewed destination list.
+They do not enable wake-word listening during calls or change a voice pipeline.
 
 Cast speech uses the existing media player and TTS service. It may interrupt current
 media; do not promise automatic restoration on devices that lack announcement
