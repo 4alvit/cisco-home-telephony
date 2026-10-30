@@ -256,31 +256,36 @@ the fast job fails; the next push cancels it through the workflow concurrency
 group. Both jobs run for every pull request, and both workflows run on pushes
 to the default branch.
 
-A pull request whose every changed file is Markdown skips the builds inside
-`images`, never the job. The job must still run to report its required context:
-a `paths-ignore` filter would drop it, and the branch policy would then wait for
-a check that never arrives, so such a pull request could not merge at all.
-`scripts/ci_images_scope.py` compares the exact event commits inside the job and
-lets each build, scan, smoke and export step skip only when no changed path can
-reach an image. Everything else keeps the builds: a single non-Markdown path, an
-invalid or zero SHA, a checkout that differs from the triggering commit, a base
-commit outside that checkout, an unexpected path, or a diff that cannot be read.
-Pushes and manual dispatches always build, so the default branch and every
-exported artifact still come from a real build of the exact commit. A skipped
-pull-request job reports success in seconds and says so, without claiming any
-image was built. A pull-request branch is covered by the
-`pull_request` event alone, so a commit pushed to an open pull request is
-built once instead of once per trigger; a branch push without a pull request
-starts nothing, and an explicit workflow dispatch covers that case. The test
-suite holds this: `tests/test_workflow_triggers.py` fails when a workflow
-triggers an unfiltered `push` next to a pull request, and it rejects a `push`
-narrowed by `paths` alone for the same reason. `tests/test_ci_job_split.py`
-holds the split itself: it fails when container work reappears in `validate`,
-when the builds leave `images`, when a path filter or a job-level condition
-could stop `images` from reporting at all, when a container step loses its
-documentation-only gate, or when this list of required contexts drifts from the
-job names the workflows actually declare. `tests/test_ci_images_scope.py`
-covers the decision itself, including the cases that must keep the builds. Before the test suite,
+A pull request whose every changed file is Markdown skips that work inside both
+jobs, never a job itself. Each job must still run to report its required
+context: a `paths-ignore` filter would drop it, and the branch policy would then
+wait for a check that never arrives, so such a pull request could not merge at
+all. `scripts/ci_docs_scope.py` compares the exact event commits inside the
+running job and only then skips work. In `images` that means every build, scan,
+smoke and export; in `validate` it means the dependency install, the test suite
+and the shell checks, while the link checker and the two modules that read
+Markdown still run without any third-party dependency. Everything else keeps the
+full work: a single non-Markdown path, an invalid or zero SHA, a checkout that
+differs from the triggering commit, a base commit outside that checkout, an
+unexpected path, or a diff that cannot be read. Pushes and manual dispatches
+build and test everything, so the default branch and every exported artifact
+still come from a real build of the exact commit. A skipped job reports success
+in seconds and says so, without claiming an image was built or a suite passed.
+
+A pull-request branch is covered by the `pull_request` event alone, so a commit
+pushed to an open pull request is built once instead of once per trigger; a
+branch push without a pull request starts nothing, and an explicit workflow
+dispatch covers that case. The test suite holds this:
+`tests/test_workflow_triggers.py` fails when a workflow triggers an unfiltered
+`push` next to a pull request, and it rejects a `push` narrowed by `paths` alone
+for the same reason. `tests/test_ci_job_split.py` holds the split itself: it
+fails when container work reappears in `validate`, when the builds leave
+`images`, when a path filter or a job-level condition could stop `images` from
+reporting at all, when a container step loses its documentation-only gate, when
+a Markdown-only pull request loses its link check or a test module that reads
+Markdown, or when this list of required contexts drifts from the job names the
+workflows actually declare. `tests/test_ci_docs_scope.py` covers the decision
+itself, including every case that must keep the full work. Before the test suite,
 `scripts/verify_docs_links.py` resolves every repository-local link and heading
 anchor in the tracked Markdown files, so a moved file or reworded heading fails
 without waiting for a build. External URLs are out of scope. The wake workflow

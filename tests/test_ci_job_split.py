@@ -44,7 +44,12 @@ JOB_LEVEL_IF = re.compile(r'^ {4}if\s*:', re.MULTILINE)
 TRIGGER_START = re.compile(r'^on\s*:\s*$')
 PATH_FILTER = re.compile(r'^\s*paths(?:-ignore)?\s*:', re.MULTILINE)
 SCOPE_GATE = "steps.scope.outputs.images == 'true'"
-SCOPE_SCRIPT = 'scripts/ci_images_scope.py'
+DOC_SKIP = "steps.scope.outputs.documentation_only != 'true'"
+SCOPE_SCRIPT = 'scripts/ci_docs_scope.py'
+# A test module that mentions either of these reads the repository's Markdown
+# rather than files it creates itself.
+DOCUMENTATION_READERS = ('POLICY', 'markdown_files(')
+HEAVY_FAST_STEPS = ('Install public test dependencies', 'Python and shell checks')
 REQUIRED_SENTENCE = re.compile(r'The required contexts are (.+?)\.', re.S)
 BACKTICK = re.compile(r'`([^`]+)`')
 
@@ -154,6 +159,47 @@ def skipped_build_problems(text):
     return problems
 
 
+def named_step(body, name):
+    """Return the step whose name is exactly `name`."""
+    return next((step for step in job_steps(body) if f'- name: {name}' in step), None)
+
+
+def documentation_reader_modules(directory):
+    """Return the test modules that read the repository's own Markdown."""
+    return {path.name for path in sorted(directory.glob('test_*.py'))
+            if any(marker in path.read_text(encoding='utf-8')
+                   for marker in DOCUMENTATION_READERS)}
+
+
+def documentation_only_problems(text, test_directory):
+    """Return one problem per documentation check a Markdown-only pull request loses."""
+    body = job_bodies(text).get(FAST_JOB, '')
+    problems = []
+    scope = named_step(body, 'Decide whether this pull request changes only documentation')
+    if scope is None or SCOPE_SCRIPT not in scope:
+        problems.append('the short job no longer reads the documentation-only decision')
+    links = named_step(body, 'Verify documentation links and anchors')
+    if links is None:
+        problems.append('the short job no longer verifies documentation links')
+    elif re.search(r'^ {8}if\s*:', links, re.MULTILINE):
+        problems.append('the link check is conditional, so a Markdown-only pull request loses it')
+    for name in HEAVY_FAST_STEPS:
+        step = named_step(body, name)
+        if step is None:
+            problems.append(f'the short job no longer has the {name} step')
+        elif DOC_SKIP not in executable_lines(step):
+            problems.append(f'{name} still runs for a Markdown-only pull request')
+    checks = named_step(body, 'Check the documentation that changed')
+    if checks is None:
+        problems.append('a Markdown-only pull request runs no documentation test')
+    else:
+        for module in sorted(documentation_reader_modules(test_directory)):
+            if 'tests.' + module[:-3] not in checks:
+                problems.append(f'{module} reads Markdown but no longer runs for a '
+                                'Markdown-only pull request')
+    return problems
+
+
 def policy_problems(doc, workflow_directory):
     """Return problems with the documented required contexts."""
     match = REQUIRED_SENTENCE.search(doc)
@@ -193,6 +239,33 @@ class RepositorySplitTests(unittest.TestCase):
     def test_the_slow_job_still_builds_and_smokes_every_image(self):
         problems = slow_job_problems(workflow_text('validate.yml'))
         self.assertEqual([], problems, '\n'.join(problems))
+
+    def test_a_documentation_only_pull_request_keeps_its_documentation_checks(self):
+        problems = documentation_only_problems(workflow_text('validate.yml'), ROOT / 'tests')
+        self.assertEqual([], problems, '\n'.join(problems))
+
+    def test_running_the_suite_on_a_documentation_only_pull_request_is_rejected(self):
+        text = workflow_text('validate.yml')
+        gated = f'      - name: Python and shell checks\n        if: {DOC_SKIP}\n'
+        self.assertIn(gated, text, 'the test suite is no longer gated by the decision')
+        mutated = text.replace(gated, '      - name: Python and shell checks\n', 1)
+        self.assertTrue(documentation_only_problems(mutated, ROOT / 'tests'))
+
+    def test_dropping_a_markdown_reader_from_the_documentation_checks_is_rejected(self):
+        text = workflow_text('validate.yml')
+        command = ('python3 -m unittest tests.test_verify_docs_links '
+                   'tests.test_ci_job_split -v')
+        self.assertIn(command, text, 'the documentation checks changed')
+        mutated = text.replace(command, 'python3 -m unittest tests.test_ci_job_split -v', 1)
+        problems = documentation_only_problems(mutated, ROOT / 'tests')
+        self.assertIn('test_verify_docs_links.py reads Markdown', ' '.join(problems))
+
+    def test_a_conditional_link_check_is_rejected(self):
+        text = workflow_text('validate.yml')
+        anchor = '      - name: Verify documentation links and anchors\n'
+        self.assertIn(anchor, text, 'the link check changed')
+        mutated = text.replace(anchor, anchor + f'        if: {DOC_SKIP}\n', 1)
+        self.assertTrue(documentation_only_problems(mutated, ROOT / 'tests'))
 
     def test_a_documentation_only_pull_request_keeps_the_context_reported(self):
         problems = skipped_build_problems(workflow_text('validate.yml'))
@@ -241,6 +314,18 @@ class RepositorySplitTests(unittest.TestCase):
         self.assertIn(sentence, text, 'the required-contexts wording changed')
         mutated = text.replace(sentence, '`validate` and `Wake gate`', 1)
         self.assertTrue(policy_problems(mutated, WORKFLOWS))
+
+
+class DocumentationReaderTests(unittest.TestCase):
+    def test_only_modules_reading_repository_markdown_are_listed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / 'test_policy.py').write_text("POLICY = 'docs/ci-images.md'\n")
+            (directory / 'test_links.py').write_text(
+                "verify_docs_links.markdown_files(ROOT)\n")
+            (directory / 'test_other.py').write_text('value = 1\n')
+            self.assertEqual({'test_policy.py', 'test_links.py'},
+                             documentation_reader_modules(directory))
 
 
 class SplitFixtureTests(unittest.TestCase):

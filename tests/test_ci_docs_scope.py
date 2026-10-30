@@ -1,8 +1,9 @@
-"""Only a proven documentation-only pull request may skip the image builds.
+"""Only a proven documentation-only pull request may skip the image work.
 
-`images` stays a required context, so its job always runs and always reports.
-The decision inside it is what may skip the builds, and it must fail closed:
-treating container code as documentation would merge unbuilt images.
+`validate` and `images` stay required contexts, so both jobs always run and
+always report. The decision inside them is what may skip their heavy work, and
+it must fail closed: treating container code as documentation would merge
+unbuilt images and untested Python.
 """
 import importlib.util
 from pathlib import Path
@@ -11,7 +12,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location('images_scope', ROOT / 'scripts/ci_images_scope.py')
+SPEC = importlib.util.spec_from_file_location('docs_scope', ROOT / 'scripts/ci_docs_scope.py')
 scope = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(scope)
 
@@ -59,6 +60,7 @@ class ImagesScopeTests(unittest.TestCase):
         root, base, head = self.case('docs/guide.md')
         result = scope.classify('pull_request', pull_event(base, head), head, root)
         self.assertFalse(result['images'])
+        self.assertTrue(result['documentation_only'])
         self.assertEqual('documentation-only-diff', result['reason'])
         self.assertEqual(1, result['changed_paths'])
 
@@ -70,6 +72,7 @@ class ImagesScopeTests(unittest.TestCase):
                 root, base, head = self.case(changed)
                 result = scope.classify('pull_request', pull_event(base, head), head, root)
                 self.assertTrue(result['images'], changed)
+                self.assertFalse(result['documentation_only'], changed)
                 self.assertEqual('changed-paths', result['reason'])
 
     def test_an_uppercase_markdown_suffix_is_still_documentation(self):
@@ -82,6 +85,8 @@ class ImagesScopeTests(unittest.TestCase):
         dispatched = scope.classify('workflow_dispatch', {}, head, root)
         self.assertTrue(pushed['images'])
         self.assertTrue(dispatched['images'])
+        self.assertFalse(pushed['documentation_only'])
+        self.assertFalse(dispatched['documentation_only'])
         self.assertEqual('not-a-pull-request', pushed['reason'])
 
     def test_an_empty_diff_is_not_treated_as_documentation(self):
