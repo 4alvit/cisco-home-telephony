@@ -102,6 +102,56 @@ class VerifyDocsLinksTests(unittest.TestCase):
                                'Inline `[x](nowhere.md)` stays literal.\n')
         self.assertEqual(self.problems('guide.md'), [])
 
+    def test_shorter_nested_fences_do_not_expose_example_links_or_headings(self):
+        for marker in ('`', '~'):
+            with self.subTest(marker=marker):
+                path = self.write('guide.md',
+                    marker * 4 + 'markdown\n' + marker * 3 + 'sh\n'
+                    '[literal](missing-example.md)\n## Literal heading\n' +
+                    marker * 3 + '\n' + marker * 5 + ' \t\n'
+                    '## Actual heading\n[broken](missing-real.md)\n')
+                problems, links = verify_docs_links.check(self.root, [path])
+                self.assertEqual(links, 1)
+                self.assertEqual(len(problems), 1)
+                self.assertIn("guide.md:8: 'missing-real.md'", problems[0])
+                self.assertEqual(verify_docs_links.anchors(path), {'actual-heading'})
+
+    def test_fence_with_trailing_text_does_not_close_code_block(self):
+        for marker in ('`', '~'):
+            with self.subTest(marker=marker):
+                path = self.write('guide.md', marker * 3 + 'text\n' +
+                    marker * 3 + 'more text\n[literal](missing-example.md)\n'
+                    '## Literal heading\n' + marker * 3 + '\n## Actual heading\n')
+                self.assertEqual(self.problems('guide.md'), [])
+                self.assertEqual(verify_docs_links.anchors(path), {'actual-heading'})
+
+    def test_unclosed_long_fence_keeps_shorter_fences_and_links_literal(self):
+        path = self.write('guide.md', '````text\n```\n'
+                          '[literal](missing-example.md)\n## Literal heading\n')
+        self.assertEqual(self.problems('guide.md'), [])
+        self.assertEqual(verify_docs_links.anchors(path), set())
+
+    def test_angle_destinations_accept_spaces_for_links_images_and_references(self):
+        self.write('run book.md', '# Deploy\n')
+        self.write('sample image.svg', '<svg/>\n')
+        path = self.write('guide.md',
+            '[inline](<run book.md#deploy> "Inline title")\n'
+            '![image](<sample image.svg>)\n[reference][rb]\n'
+            "[rb]: <run book.md#deploy> 'Reference title'\n")
+        problems, links = verify_docs_links.check(self.root, [path])
+        self.assertEqual(problems, [])
+        self.assertEqual(links, 3)
+
+    def test_missing_angle_destinations_with_spaces_are_reported_in_full(self):
+        for text in ('[inline](<missing guide.md>)\n',
+                     '[reference][rb]\n[rb]: <missing guide.md>\n'):
+            with self.subTest(text=text):
+                path = self.write('guide.md', text)
+                problems, links = verify_docs_links.check(self.root, [path])
+                self.assertEqual(links, 1)
+                self.assertEqual(len(problems), 1)
+                self.assertIn("'missing guide.md' does not exist", problems[0])
+
     def test_external_links_are_skipped(self):
         self.write('guide.md', '[site](https://example.com/a#b) '
                                '[mail](mailto:ops@example.com)\n')
