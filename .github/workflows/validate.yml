@@ -29,18 +29,28 @@ jobs:
   # waiting for the container builds. Both jobs are required, and they are
   # independent on purpose: the images job still starts when a test fails, and
   # the next push cancels it through this workflow's concurrency group.
-  # Pull requests that touch only Markdown still run the images job, but its
-  # builds are skipped inside it: a path filter would drop the job instead and
-  # leave the required `images` context unreported for that pull request.
+  # Pull requests that touch only Markdown still run both jobs, but the work
+  # inside them is skipped: a path filter would drop a job instead and leave its
+  # required context unreported for that pull request. Markdown cannot reach an
+  # image or a media test, so `validate` keeps only the checks that read it.
   validate:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # The scope decision diffs the event's exact base commit, which needs
+          # the pull-request history rather than a single shallow commit.
+          fetch-depth: 0
+      - name: Decide whether this pull request changes only documentation
+        id: scope
+        run: python3 scripts/ci_docs_scope.py
+      # Markdown is the link checker's input, so this always runs.
       - name: Verify documentation links and anchors
         run: python3 scripts/verify_docs_links.py
       - name: Install public test dependencies
+        if: steps.scope.outputs.documentation_only != 'true'
         run: |
           python3 -m venv .venv
           .venv/bin/python -m pip install --disable-pip-version-check \
@@ -55,10 +65,22 @@ jobs:
           ffmpeg -version
           ffprobe -version
       - name: Python and shell checks
+        if: steps.scope.outputs.documentation_only != 'true'
         run: |
           .venv/bin/python -m unittest discover -s tests -v
           .venv/bin/python -m compileall -q scripts voice_assistant containers/asterisk tools/firmware_lab tools/sip_video tools/l16_lab
           for script in scripts/*.sh; do bash -n "$script"; done
+      # Markdown is also the input of the policy test and of the link-checker
+      # tests, so the two modules that read it still run. Neither needs the
+      # third-party test dependencies installed above.
+      - name: Check the documentation that changed
+        if: steps.scope.outputs.documentation_only == 'true'
+        run: python3 -m unittest tests.test_verify_docs_links tests.test_ci_job_split -v
+      - name: Report the skipped checks
+        if: steps.scope.outputs.documentation_only == 'true'
+        run: |
+          echo "Every changed file is Markdown, so the dependency install, test suite and container builds were skipped."
+          echo "The link checker and the documentation policy test ran instead; the push to main runs everything."
 
   images:
     runs-on: ubuntu-24.04
@@ -72,7 +94,7 @@ jobs:
           fetch-depth: 0
       - name: Decide whether this pull request needs the image builds
         id: scope
-        run: python3 scripts/ci_images_scope.py
+        run: python3 scripts/ci_docs_scope.py
       - name: Ensure the host media tools the L16 lab shells out to
         if: steps.scope.outputs.images == 'true'
         run: |

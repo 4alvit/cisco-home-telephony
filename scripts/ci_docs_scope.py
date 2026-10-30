@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Prove that a pull request changes nothing the container images contain.
+"""Prove that a pull request changes nothing but documentation.
 
-`images` is a required pull-request context, so the job itself must always
-report a result: a `paths-ignore` filter would drop the whole job, and the
-branch policy would then wait for a check that never arrives. This decision
-runs inside the job instead and lets the builds, scans, smokes and exports skip
-when every changed file is Markdown, which no image can contain.
+Markdown cannot reach a container image or a Python, shell or media check, so
+`images` may skip its builds and `validate` may skip its heavy steps on such a
+pull request. Both jobs are required contexts, so neither may be dropped by a
+`paths-ignore` filter: the branch policy would then wait for a check that never
+arrives. The decision therefore runs inside the running job and only skips work.
 
-Everything else keeps the builds. Pushes and manual dispatches build
+Everything else keeps the full work. Pushes and manual dispatches run
 unconditionally, so the default branch and every exported artifact still come
 from a real build of the exact commit. An invalid or zero SHA, a checkout that
 differs from the triggering commit, a base commit that is not contained in that
-checkout, an unexpected path or an empty diff also keeps them: a wrong
-"documentation only" answer would merge unbuilt container code, so the decision
-fails closed rather than assuming.
+checkout, an unexpected path or an empty diff also keeps it: a wrong
+"documentation only" answer would merge unbuilt container code and untested
+Python, so the decision fails closed rather than assuming.
 """
 from __future__ import annotations
 
@@ -70,15 +70,16 @@ def classify(event_name, event, github_sha, root):
         raise ValueError('Checkout differs from the triggering commit')
     if event_name != 'pull_request':
         # Pushes keep the default branch honestly built and a dispatch exists to
-        # export verified bytes, so neither may skip the images.
-        return {'images': True, 'reason': 'not-a-pull-request', 'head': checked_out, 'base': None}
+        # export verified bytes, so neither may skip anything.
+        return {'images': True, 'documentation_only': False,
+                'reason': 'not-a-pull-request', 'head': checked_out, 'base': None}
     pull = event['pull_request']
     base, head = commit(pull['base']['sha']), commit(pull['head']['sha'])
     for value in (base, head):
         ancestor(root, value, checked_out)
     paths = changed_paths(root, base, head)
     skip = documentation_only(paths)
-    return {'images': not skip,
+    return {'images': not skip, 'documentation_only': skip,
             'reason': 'documentation-only-diff' if skip else 'changed-paths',
             'base': base, 'head': head, 'checked_out': checked_out,
             'changed_paths': len(paths)}
@@ -89,7 +90,8 @@ def main():
                       json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text()),
                       os.environ['GITHUB_SHA'], Path.cwd())
     with Path(os.environ['GITHUB_OUTPUT']).open('a') as stream:
-        stream.write('images=' + str(result['images']).lower() + '\n')
+        for key in ('images', 'documentation_only'):
+            stream.write(key + '=' + str(result[key]).lower() + '\n')
     print(json.dumps(result, sort_keys=True))
 
 
