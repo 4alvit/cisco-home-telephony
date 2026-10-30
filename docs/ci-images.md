@@ -271,6 +271,11 @@ unexpected path, or a diff that cannot be read. Pushes and manual dispatches
 build and test everything, so the default branch and every exported artifact
 still come from a real build of the exact commit. A skipped job reports success
 in seconds and says so, without claiming an image was built or a suite passed.
+`validate` on such a pull request finishes in seconds rather than minutes,
+because the checks that remain resolve links and read Markdown without
+installing a third-party dependency. Mixing one Markdown edit with any code,
+workflow or script file is no longer Markdown-only, so the full path runs: a
+change to the checks themselves is never covered by the reduced one.
 
 A pull-request branch is covered by the `pull_request` event alone, so a commit
 pushed to an open pull request is built once instead of once per trigger; a
