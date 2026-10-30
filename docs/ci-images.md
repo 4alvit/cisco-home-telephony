@@ -256,7 +256,10 @@ built once instead of once per trigger; a branch push without a pull request
 starts nothing, and an explicit workflow dispatch covers that case. The test
 suite holds this: `tests/test_workflow_triggers.py` fails when a workflow
 triggers an unfiltered `push` next to a pull request, and it rejects a `push`
-narrowed by `paths` alone for the same reason. Before the test suite,
+narrowed by `paths` alone for the same reason. `tests/test_ci_job_split.py`
+holds the split itself: it fails when container work reappears in `validate`,
+when the builds leave `images`, or when this list of required contexts drifts
+from the job names the workflows actually declare. Before the test suite,
 `scripts/verify_docs_links.py` resolves every repository-local link and heading
 anchor in the tracked Markdown files, so a moved file or reworded heading fails
 without waiting for a build. External URLs are out of scope. The wake workflow
@@ -282,7 +285,7 @@ real gate result without requiring a redundant image build.
 Branch policy is managed separately in the GitHub infrastructure configuration.
 Verify its live presence before enabling automatic merge: `gh pr merge --auto`
 can merge immediately in an unprotected repository and is not itself a CI wait.
-The policy must require these two exact contexts with strict base updates. It
+The policy must require these three exact contexts with strict base updates. It
 does not require an approving review: this repository has one maintainer, who
 cannot approve their own pull request, so such a rule could only ever be
 bypassed and would make the gate look stronger than it is. A second person's

@@ -63,6 +63,16 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Ensure the host media tools the L16 lab shells out to
+        run: |
+          # The lab encodes and decodes G.722 with the host ffmpeg binaries.
+          # The fast job installs them for its media tests; this job needs the
+          # same guarantee instead of trusting whatever the runner image ships.
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+          ffmpeg -version
       - name: Build and smoke-test the isolated voice runtime
         run: bash scripts/build-voice-image.sh cisco-home-ci
       - name: Verify speech codecs and artwork isolation in the final image
