@@ -248,12 +248,27 @@ The required contexts are `validate`, `images` and `Wake gate`, all emitted by
 GitHub Actions. `validate` holds the fast checks and usually finishes in about
 three minutes; `images` builds the voice and PBX containers, scans the voice
 image, rejects actionable vulnerabilities and runs the isolated container
-smokes, which takes about nine minutes. The two jobs are independent and both
+smokes, which takes about nine minutes whenever the pull request changes
+anything an image contains. The two jobs are independent and both
 are required, so a failing test is reported long before the builds finish while
 a build failure still blocks the merge. An image build does still start when
 the fast job fails; the next push cancels it through the workflow concurrency
 group. Both jobs run for every pull request, and both workflows run on pushes
-to the default branch. A pull-request branch is covered by the
+to the default branch.
+
+A pull request whose every changed file is Markdown skips the builds inside
+`images`, never the job. The job must still run to report its required context:
+a `paths-ignore` filter would drop it, and the branch policy would then wait for
+a check that never arrives, so such a pull request could not merge at all.
+`scripts/ci_images_scope.py` compares the exact event commits inside the job and
+lets each build, scan, smoke and export step skip only when no changed path can
+reach an image. Everything else keeps the builds: a single non-Markdown path, an
+invalid or zero SHA, a checkout that differs from the triggering commit, a base
+commit outside that checkout, an unexpected path, or a diff that cannot be read.
+Pushes and manual dispatches always build, so the default branch and every
+exported artifact still come from a real build of the exact commit. A skipped
+pull-request job reports success in seconds and says so, without claiming any
+image was built. A pull-request branch is covered by the
 `pull_request` event alone, so a commit pushed to an open pull request is
 built once instead of once per trigger; a branch push without a pull request
 starts nothing, and an explicit workflow dispatch covers that case. The test
@@ -261,8 +276,11 @@ suite holds this: `tests/test_workflow_triggers.py` fails when a workflow
 triggers an unfiltered `push` next to a pull request, and it rejects a `push`
 narrowed by `paths` alone for the same reason. `tests/test_ci_job_split.py`
 holds the split itself: it fails when container work reappears in `validate`,
-when the builds leave `images`, or when this list of required contexts drifts
-from the job names the workflows actually declare. Before the test suite,
+when the builds leave `images`, when a path filter or a job-level condition
+could stop `images` from reporting at all, when a container step loses its
+documentation-only gate, or when this list of required contexts drifts from the
+job names the workflows actually declare. `tests/test_ci_images_scope.py`
+covers the decision itself, including the cases that must keep the builds. Before the test suite,
 `scripts/verify_docs_links.py` resolves every repository-local link and heading
 anchor in the tracked Markdown files, so a moved file or reworded heading fails
 without waiting for a build. External URLs are out of scope. The wake workflow

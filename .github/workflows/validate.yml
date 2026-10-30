@@ -29,6 +29,9 @@ jobs:
   # waiting for the container builds. Both jobs are required, and they are
   # independent on purpose: the images job still starts when a test fails, and
   # the next push cancels it through this workflow's concurrency group.
+  # Pull requests that touch only Markdown still run the images job, but its
+  # builds are skipped inside it: a path filter would drop the job instead and
+  # leave the required `images` context unreported for that pull request.
   validate:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -63,7 +66,15 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # The scope decision diffs the event's exact base commit, which needs
+          # the pull-request history rather than a single shallow commit.
+          fetch-depth: 0
+      - name: Decide whether this pull request needs the image builds
+        id: scope
+        run: python3 scripts/ci_images_scope.py
       - name: Ensure the host media tools the L16 lab shells out to
+        if: steps.scope.outputs.images == 'true'
         run: |
           # The lab encodes and decodes G.722 with the host ffmpeg binaries.
           # The fast job installs them for its media tests; this job needs the
@@ -74,8 +85,10 @@ jobs:
           fi
           ffmpeg -version
       - name: Build and smoke-test the isolated voice runtime
+        if: steps.scope.outputs.images == 'true'
         run: bash scripts/build-voice-image.sh cisco-home-ci
       - name: Verify speech codecs and artwork isolation in the final image
+        if: steps.scope.outputs.images == 'true'
         run: |
           docker run --rm --pull never --network none --read-only \
             --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges \
@@ -83,6 +96,7 @@ jobs:
             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
             --entrypoint python3 -i cisco-home-ci/voice:pilot - < tests/test_voice_speech_codecs.py
       - name: Scan the complete voice runtime image
+        if: steps.scope.outputs.images == 'true'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.74.0
@@ -94,11 +108,13 @@ jobs:
           ignore-unfixed: false
           exit-code: '0'
       - name: Export complete image SBOM
+        if: steps.scope.outputs.images == 'true'
         run: trivy convert --format cyclonedx --output container-sbom.cdx.json container-trivy.json
       - name: Reject actionable image vulnerabilities
+        if: steps.scope.outputs.images == 'true'
         run: python3 scripts/verify_voice_security.py container-trivy.json
       - name: Preserve complete image security evidence
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.scope.outputs.images == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: voice-security-evidence
@@ -108,7 +124,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Export verified voice runtime
-        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'voice' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'voice' && github.ref == 'refs/heads/main' && steps.scope.outputs.images == 'true'
         run: |
           set -euo pipefail
           mkdir -p .build/voice-image-artifacts
@@ -123,7 +139,7 @@ jobs:
           printf 'Verified voice artifact size: %s bytes (limit: 250 MiB; only voice exported)\n' "$voice_bytes"
           test "$voice_bytes" -lt $((250 * 1024 * 1024))
       - name: Upload verified voice runtime
-        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'voice' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'voice' && github.ref == 'refs/heads/main' && steps.scope.outputs.images == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: verified-voice-amd64-${{ github.sha }}
@@ -132,8 +148,10 @@ jobs:
           compression-level: 0
           retention-days: 1
       - name: Build both PBX images and verify binary versions
+        if: steps.scope.outputs.images == 'true'
         run: bash scripts/build-images.sh cisco-home-ci
       - name: Verify firewall policies in disconnected network namespaces
+        if: steps.scope.outputs.images == 'true'
         run: |
           docker build -t cisco-home-ci/firewall-test:bookworm - <<'DOCKERFILE'
           FROM cisco-home-ci/tftp:bookworm
@@ -143,8 +161,10 @@ jobs:
           EXTERNAL_FIREWALL_TEST_IMAGE=cisco-home-ci/firewall-test:bookworm \
             python3 -m unittest discover -s tests -p test_external_firewall.py -v
       - name: Isolated smoke with synthetic generated configuration
+        if: steps.scope.outputs.images == 'true'
         run: bash scripts/smoke-containers.sh cisco-home-ci
       - name: Verify isolated L16 media and native call expiry
+        if: steps.scope.outputs.images == 'true'
         run: |
           umask 077
           python3 -m tools.l16_lab asterisk \
@@ -153,7 +173,7 @@ jobs:
             --execute --output .local/l16/ci-1
           cat .local/l16/ci-1/report.json
       - name: Export verified amd64 images
-        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'pbx' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'pbx' && github.ref == 'refs/heads/main' && steps.scope.outputs.images == 'true'
         run: |
           set -euo pipefail
           mkdir -p .build/image-artifacts
@@ -170,7 +190,7 @@ jobs:
           printf 'Verified PBX image artifact size: %s bytes (limit: 400 MiB; only PBX exported)\n' "$total_bytes"
           test "$total_bytes" -lt $((400 * 1024 * 1024))
       - name: Upload verified amd64 images
-        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'pbx' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'pbx' && github.ref == 'refs/heads/main' && steps.scope.outputs.images == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: verified-amd64-images-${{ github.sha }}
@@ -179,7 +199,7 @@ jobs:
           compression-level: 0
           retention-days: 1
       - name: Export verified TFTP image
-        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'tftp' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'tftp' && github.ref == 'refs/heads/main' && steps.scope.outputs.images == 'true'
         run: |
           set -euo pipefail
           mkdir -p .build/tftp-image-artifacts
@@ -191,7 +211,7 @@ jobs:
           sha256sum tftp-amd64.tar.gz image.json source.json > SHA256SUMS
           test "$(du -sb . | cut -f1)" -lt $((150 * 1024 * 1024))
       - name: Upload verified TFTP image
-        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'tftp' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'tftp' && github.ref == 'refs/heads/main' && steps.scope.outputs.images == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: verified-tftp-amd64-${{ github.sha }}
@@ -199,3 +219,8 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
+      - name: Report the skipped builds
+        if: steps.scope.outputs.images != 'true'
+        run: |
+          echo "Every changed file is Markdown, so nothing here can change an image."
+          echo "The required images context is satisfied without building; the push to main rebuilds all images."

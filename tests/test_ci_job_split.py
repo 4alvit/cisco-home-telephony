@@ -7,6 +7,13 @@ build step back into the fast job restores the ten-minute wait before any
 result, and dropping or renaming the slow job leaves the branch policy waiting
 for a check context that never appears.
 
+A third regression is quieter than either: hiding the slow job behind a path
+filter. Markdown-only pull requests should not pay for the builds, but dropping
+the whole job leaves the branch policy waiting for a required context that is
+never reported, so the pull request cannot merge at all. The job therefore
+always runs and the repository gates its steps instead; these checks hold that
+shape as much as they hold the split.
+
 The workflows are parsed here without PyYAML, whose absence the test
 environment already relies on, so only the top-level `jobs:` subset this
 repository uses is understood. The live ruleset is external state and is
@@ -32,6 +39,12 @@ CONTAINER_WORK = ('docker', 'trivy', 'build-voice-image.sh', 'build-images.sh',
                   'verify_voice_security.py', 'test_external_firewall')
 SLOW_JOB_WORK = ('build-voice-image.sh', 'build-images.sh', 'smoke-containers.sh')
 REQUIRED = ('validate', 'images', 'Wake gate')
+STEP_START = re.compile(r'^ {6}- ')
+JOB_LEVEL_IF = re.compile(r'^ {4}if\s*:', re.MULTILINE)
+TRIGGER_START = re.compile(r'^on\s*:\s*$')
+PATH_FILTER = re.compile(r'^\s*paths(?:-ignore)?\s*:', re.MULTILINE)
+SCOPE_GATE = "steps.scope.outputs.images == 'true'"
+SCOPE_SCRIPT = 'scripts/ci_images_scope.py'
 REQUIRED_SENTENCE = re.compile(r'The required contexts are (.+?)\.', re.S)
 BACKTICK = re.compile(r'`([^`]+)`')
 
@@ -92,6 +105,55 @@ def slow_job_problems(text):
             for marker in SLOW_JOB_WORK if marker not in body]
 
 
+def trigger_block(text):
+    """Return the workflow's top-level `on:` block."""
+    lines = text.splitlines()
+    start = next((index for index, line in enumerate(lines)
+                  if TRIGGER_START.match(line)), None)
+    if start is None:
+        raise ValueError('workflow declares no top-level on key')
+    block = []
+    for line in lines[start + 1:]:
+        if line.strip() and not line[:1].isspace():
+            break
+        block.append(line)
+    return '\n'.join(block)
+
+
+def job_steps(body):
+    """Return one block of text per step in a job body."""
+    blocks, current = [], None
+    for line in body.splitlines():
+        if STEP_START.match(line):
+            if current is not None:
+                blocks.append('\n'.join(current))
+            current = [line]
+        elif current is not None:
+            current.append(line)
+    if current is not None:
+        blocks.append('\n'.join(current))
+    return blocks
+
+
+def skipped_build_problems(text):
+    """Return one problem per way the slow job could stop reporting its context."""
+    problems = []
+    if PATH_FILTER.search(trigger_block(text)):
+        problems.append('a path filter drops the whole job, so the required context '
+                        'is never reported for a filtered pull request')
+    body = job_bodies(text).get(SLOW_JOB, '')
+    if JOB_LEVEL_IF.search(body):
+        problems.append(f'{SLOW_JOB} has a job-level condition, so GitHub may report no context')
+    if SCOPE_SCRIPT not in executable_lines(body):
+        problems.append(f'{SLOW_JOB} no longer reads the documentation-only decision')
+    for step in job_steps(body):
+        executable = executable_lines(step)
+        if any(marker in executable for marker in CONTAINER_WORK) and SCOPE_GATE not in executable:
+            problems.append('container work runs without the scope gate: '
+                            + step.strip().splitlines()[0].lstrip('- ').strip())
+    return problems
+
+
 def policy_problems(doc, workflow_directory):
     """Return problems with the documented required contexts."""
     match = REQUIRED_SENTENCE.search(doc)
@@ -131,6 +193,33 @@ class RepositorySplitTests(unittest.TestCase):
     def test_the_slow_job_still_builds_and_smokes_every_image(self):
         problems = slow_job_problems(workflow_text('validate.yml'))
         self.assertEqual([], problems, '\n'.join(problems))
+
+    def test_a_documentation_only_pull_request_keeps_the_context_reported(self):
+        problems = skipped_build_problems(workflow_text('validate.yml'))
+        self.assertEqual([], problems, '\n'.join(problems))
+
+    def test_a_path_filter_on_the_slow_job_is_rejected(self):
+        text = workflow_text('validate.yml')
+        anchor = '  pull_request:\n'
+        self.assertIn(anchor, text, 'the pull-request trigger changed')
+        mutated = text.replace(anchor, anchor + '    paths-ignore: ["docs/**"]\n', 1)
+        self.assertTrue(skipped_build_problems(mutated))
+
+    def test_a_container_step_outside_the_scope_gate_is_rejected(self):
+        text = workflow_text('validate.yml')
+        gated = ('      - name: Build both PBX images and verify binary versions\n'
+                 f'        if: {SCOPE_GATE}\n')
+        self.assertIn(gated, text, 'the PBX build is no longer gated by the scope decision')
+        mutated = text.replace(gated, '      - name: Build both PBX images and verify binary versions\n', 1)
+        problems = skipped_build_problems(mutated)
+        self.assertTrue(problems, 'an ungated build step was accepted')
+
+    def test_a_job_level_condition_on_the_slow_job_is_rejected(self):
+        text = workflow_text('validate.yml')
+        anchor = '  images:\n    runs-on: ubuntu-24.04\n'
+        self.assertIn(anchor, text, 'the slow job header changed')
+        mutated = text.replace(anchor, '  images:\n    if: false\n    runs-on: ubuntu-24.04\n', 1)
+        self.assertTrue(skipped_build_problems(mutated))
 
     def test_the_policy_requires_the_contexts_the_workflows_declare(self):
         problems = policy_problems(policy_text(), WORKFLOWS)
