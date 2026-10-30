@@ -108,7 +108,10 @@ prove that a live phone or Home Assistant pipeline works. Follow the separate
 ## Optional wake image export
 
 The wake runtime has its own workflow because it layers private-model staging
-over the manual voice image. Dispatch its single `export_image` input:
+over the manual voice image. It rebuilds that base image, about 38 seconds
+against 37 in the `images` job, instead of receiving it: separate runners share
+no filesystem, and measured artifact handoff costs 60-90 seconds plus roughly
+200 MiB of the shared artifact quota. Dispatch its single `export_image` input:
 
 ```sh
 gh workflow run voice-wake.yml --repo 4alvit/cisco-home-telephony \
