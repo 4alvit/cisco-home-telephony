@@ -1,0 +1,35 @@
+name: Trusted PR approval
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited, converted_to_draft]
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited, converted_to_draft]
+
+# Keep the bootstrap PR in draft until credentials and Actions approval are wired.
+# See docs/pr-approval.md. This caller never checks out or executes PR code.
+# Metadata-only edits must not cancel a meaningful pending approval/merge run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number }}-${{ (github.event.action != 'edited' || github.event.changes.base) && 'state' || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  auto-approve:
+    if: >-
+      (github.event.action != 'edited' || github.event.changes.base) &&
+      ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.user.login != 'dependabot[bot]') ||
+       (github.event_name == 'pull_request_target' &&
+        github.event.pull_request.base.ref == github.event.repository.default_branch &&
+        (github.event.pull_request.head.repo.full_name != github.repository ||
+         github.event.pull_request.user.login == 'dependabot[bot]'))) &&
+      contains(fromJSON('["4alvit","californiantiramisu","dependabot[bot]","renovate[bot]"]'), github.event.pull_request.user.login) &&
+      !github.event.pull_request.draft
+    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/auto-approve-reusable.yml@368320994ed55ae68935dcadb4062000a4648b92
+    secrets:
+      BOT_PAT: ${{ secrets.BOT_PAT }}
+      APPROVAL_PAT: ${{ secrets.APPROVAL_PAT }}
