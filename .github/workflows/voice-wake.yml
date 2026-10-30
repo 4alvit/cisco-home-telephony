@@ -48,14 +48,12 @@ jobs:
           python3 -m venv .venv
           .venv/bin/python -m unittest discover -s tests -p 'test_voice_wake_*.py' -v
           .venv/bin/python -m unittest discover -s tests -p 'test_render_voice_wake_job.py' -v
-      # This rebuilds the base voice image that validate.yml also builds. The
-      # two workflows run on separate runners, so the image cannot be shared,
-      # and handing it over costs more than building it again: the base takes
-      # about 38 seconds here and 37 seconds there, while saving, uploading,
-      # downloading and loading the image takes 60-90 seconds and about 200 MB
-      # of the shared artifact quota. The rebuild is not on the pull-request
-      # critical path either, because the images job runs about eight minutes.
-      # Keep the rebuild rather than adding a cross-workflow handoff.
+      # Build the base independently on this runner rather than adding an
+      # artifact handoff dependency and storage quota use between workflows.
+      # Build and pull times vary with cache conditions; rebuilding is not
+      # guaranteed to be faster. Before changing this design, measure warm and
+      # cold builds, transfer overhead and retention for the intended runners.
+      # See docs/ci-images.md for the rationale and example run evidence.
       - name: Build and verify the manual base
         run: bash scripts/build-voice-image.sh cisco-wake-ci
       - name: Build and verify the optional wake layer

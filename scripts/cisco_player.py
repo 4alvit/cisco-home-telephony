@@ -249,8 +249,8 @@ def run(args, config, *, client=None, phone=None, gateway_factory=None,
                 'requested_count': requested, 'accepted_count': len(accepted), 'remaining_count': 0,
                 'action_ids': attempted, 'accepted_action_ids': accepted, 'accepted_item_numbers': accepted_items,
                 'note': 'Requests accepted; inspect music status for playback. No automatic retry.'}, 0
-    except Exception as error:
-        reason = getattr(error, 'reason', None)
+    except (Exception, KeyboardInterrupt) as error:
+        reason = 'music_interrupted' if isinstance(error, KeyboardInterrupt) else getattr(error, 'reason', None)
         if not isinstance(reason, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,99}', reason):
             reason = 'music_local_or_transport_error'
         unknown = len(attempted) > len(accepted)

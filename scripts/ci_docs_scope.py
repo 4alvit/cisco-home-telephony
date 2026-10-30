@@ -9,11 +9,11 @@ arrives. The decision therefore runs inside the running job and only skips work.
 
 Everything else keeps the full work. Pushes and manual dispatches run
 unconditionally, so the default branch and every exported artifact still come
-from a real build of the exact commit. An invalid or zero SHA, a checkout that
-differs from the triggering commit, a base commit that is not contained in that
-checkout, an unexpected path or an empty diff also keeps it: a wrong
-"documentation only" answer would merge unbuilt container code and untested
-Python, so the decision fails closed rather than assuming.
+from a real build of the exact commit. An empty or non-Markdown diff also keeps
+the full work. Invalid commits, a mismatched checkout, missing or ambiguous
+history, or unexpected paths fail the required job instead of granting a skip:
+a wrong "documentation only" answer would merge unbuilt container code and
+untested Python.
 """
 from __future__ import annotations
 
@@ -77,11 +77,18 @@ def classify(event_name, event, github_sha, root):
     base, head = commit(pull['base']['sha']), commit(pull['head']['sha'])
     for value in (base, head):
         ancestor(root, value, checked_out)
-    paths = changed_paths(root, base, head)
+    ancestors = git(root, 'merge-base', '--all', base, head).decode().splitlines()
+    if len(ancestors) != 1:
+        raise ValueError('Cannot prove a unique pull-request merge base')
+    comparison_base = commit(ancestors[0])
+    # Target-branch changes after this PR branched are not part of its diff.
+    # Use the same proven merge-base comparison as the optional wake scope.
+    paths = changed_paths(root, comparison_base, head)
     skip = documentation_only(paths)
     return {'images': not skip, 'documentation_only': skip,
             'reason': 'documentation-only-diff' if skip else 'changed-paths',
-            'base': base, 'head': head, 'checked_out': checked_out,
+            'base': base, 'comparison_base': comparison_base,
+            'head': head, 'checked_out': checked_out,
             'changed_paths': len(paths)}
 
 

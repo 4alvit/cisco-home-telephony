@@ -192,6 +192,12 @@ result, inspect `music`/`queue`; do not blindly repeat `play` or change request
 IDs to bypass an uncertain operation. An accepted request is not proof of
 audible playback.
 
+Ctrl-C during selection, dispatch or readiness waiting returns a nonzero exit
+code and a `music_interrupted` receipt. The receipt preserves accepted and
+unconfirmed action IDs and counts, including a request whose acknowledgement
+was interrupted. It does not stop playback or retry the remaining selection;
+inspect `music` or `queue` before deciding what to do next.
+
 ## Limits and troubleshooting
 
 - The gateway queue holds at most **50 items**, including the current track.

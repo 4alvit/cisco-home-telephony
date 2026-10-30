@@ -61,6 +61,13 @@ playback was stopped. After a network error, inspect the known job
 before deciding whether to send a new announcement. A new job can produce a
 second audible announcement; do not retry blindly.
 
+For a terminal job, `say-status` uses the same exit-code rules as `say`: zero
+requires a `finished` job with every recipient `completed`. Failed, skipped,
+stopped or unknown delivery returns a nonzero code, including a mixed group.
+A successful status read for an active job normally returns zero so it can be
+polled; unknown delivery still returns nonzero. Inspect the reported job state
+before interpreting an active status read as completed playback.
+
 For an operation whose key you need to retain explicitly:
 
 ```sh
