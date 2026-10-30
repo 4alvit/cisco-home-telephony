@@ -1,8 +1,10 @@
 """Link-checker behaviour and the repository's own documentation; offline."""
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -50,6 +52,39 @@ class VerifyDocsLinksTests(unittest.TestCase):
         problem = self.problems('guide.md', 'runbook.md')
         self.assertEqual(len(problem), 1)
         self.assertIn('no matching heading', problem[0])
+
+    def test_mixed_case_markdown_files_are_discovered_and_checked(self):
+        subprocess.run(['git', '-C', str(self.root), 'init', '-q'], check=True)
+        self.write('README.md', '# Readme\n')
+        self.write('UPPER.MD', '[Broken](missing.md)\n')
+        self.write('mixed.Md', '# Mixed\n')
+        self.write('not-markdown.txt', '[Ignored](missing.md)\n')
+        subprocess.run(['git', '-C', str(self.root), 'add', '.'], check=True)
+        self.write('untracked.md', '[Untracked](missing.md)\n')
+        files = verify_docs_links.markdown_files(self.root)
+        self.assertEqual({'README.md', 'UPPER.MD', 'mixed.Md'},
+                         {path.name for path in files})
+        problems, links = verify_docs_links.check(self.root, files)
+        self.assertEqual(1, links)
+        self.assertEqual(1, len(problems))
+        self.assertIn('UPPER.MD:1:', problems[0])
+        self.assertIn('does not exist', problems[0])
+
+    def test_filesystem_fallback_discovers_mixed_case_markdown(self):
+        expected = self.write('docs/UPPER.MD', '# Upper\n')
+        self.write('.local/private.MD', '[Private](missing.md)\n')
+        self.write('not-markdown.txt', '[Ignored](missing.md)\n')
+        with patch.object(verify_docs_links.subprocess, 'run', side_effect=OSError):
+            self.assertEqual([expected], verify_docs_links.markdown_files(self.root))
+
+    def test_mixed_case_markdown_anchor_targets_are_checked(self):
+        self.write('runbook.MD', '## Deploy\n')
+        self.write('guide.md', '[Valid](runbook.MD#deploy)\n')
+        self.assertEqual([], self.problems('guide.md'))
+        self.write('guide.md', '[Missing](runbook.MD#missing)\n')
+        problems = self.problems('guide.md')
+        self.assertEqual(1, len(problems))
+        self.assertIn('no matching heading', problems[0])
 
     def test_repeated_headings_get_numbered_anchors(self):
         self.write('runbook.md', '## Notes\n\n## Notes\n')

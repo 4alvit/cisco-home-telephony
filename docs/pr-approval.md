@@ -7,6 +7,30 @@ workflow checks out or runs pull-request code. The shared workflow verifies the
 reviewer's identity, refuses self-approval, re-reads the head and base before
 writing a review, and attaches the approval to that exact head commit.
 
+## Verified deployment
+
+The Cisco rollout completed on 30 October 2026. [PR #71](https://github.com/4alvit/cisco-home-telephony/pull/71)
+installed the caller, and the [independent review](https://github.com/4alvit/cisco-home-telephony/pull/71#pullrequestreview-5710759005)
+by `californiantiramisu` approved its exact head
+`6ba014255956f78d457054f107a7e0d520625fca`. The
+[approval workflow succeeded](https://github.com/4alvit/cisco-home-telephony/actions/runs/41038141163),
+and the PR merged normally as
+[`0fa9273`](https://github.com/4alvit/cisco-home-telephony/commit/0fa927353829e1e48823e0dc5405bcb7a07b8e0a).
+
+The subsequent Terraform rollout restored one required independent approval
+and approval after the last push, while preserving strict base checks,
+`validate`, `images`, `Wake gate` and the existing owner emergency bypass.
+The live readback matched that policy, and a fresh scoped plan reported no
+changes. [Governance issue #101](https://github.com/4alvit/terraform-github-4alvit/issues/101)
+records the completed reconciliation. Actions approval is enabled; default
+workflow permissions remain read-only.
+
+This proves the maintainer-PR path at that revision. It does not replace
+fresh verification after a credential or policy change, or prove that the
+automation-authored and Dependabot paths have each been exercised. The setup
+instructions below apply to a new installation or a deliberately disconnected
+deployment; do not recreate an existing secret just to repeat the bootstrap.
+
 ## Staged activation
 
 Keep the bootstrap PR in draft while reviewing this caller and connecting its
@@ -15,13 +39,11 @@ without adding a project-specific activation variable. A skipped job on a draft
 PR is **not** evidence that bot approval works. Once a trusted PR is ready, a
 missing credential produces a configuration failure rather than silent approval.
 
-The read-only audit on 30 October 2026 found no repository Actions secrets,
-`can_approve_pull_request_reviews: false`, and default workflow permissions of
-`read`. The existing automation collaborator has repository write access.
-The caller alone therefore does not complete activation. Secret delivery,
-the Actions approval setting and a successful real review remain prerequisites.
-Track the coordinated rollout in
-[the governance issue](https://github.com/4alvit/terraform-github-4alvit/issues/101).
+For a new installation, the caller alone does not complete activation. Secret
+delivery, the Actions approval setting and a successful real review are all
+prerequisites. Check the current configuration before changing it: repository
+collaborator access does not establish that the secret or approval capability
+is configured.
 
 ## Eligibility and execution boundary
 

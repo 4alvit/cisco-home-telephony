@@ -194,6 +194,61 @@ class PlayerCLITests(unittest.TestCase):
         self.assertEqual(len(calls), 3)
         self.assertNotIn(PRIVATE, json.dumps(result))
 
+    def test_interrupt_during_resolution_has_no_mutation(self):
+        def interrupted(*_):
+            raise KeyboardInterrupt(PRIVATE)
+        code, result, calls, _, _ = self.invoke(
+            ['play', 'example'], resolver_side_effect=interrupted)
+        self.assertEqual((code, result['status'], result['reason']),
+                         (1, 'refused', 'music_interrupted'))
+        self.assertEqual(result['action_ids'], [])
+        self.assertEqual(result['accepted_action_ids'], [])
+        self.assertEqual((result['accepted_count'], result['unconfirmed_count']), (0, 0))
+        self.assertEqual(calls, [('/v1/phones', None)])
+        self.assertNotIn(PRIVATE, json.dumps(result))
+
+    def test_interrupt_during_dispatch_retains_partial_and_unknown_requests(self):
+        def accepted(body):
+            return dict(status='accepted', action_id=body['idempotency_key'], session_id=SESSION)
+        def interrupted(_):
+            raise KeyboardInterrupt(PRIVATE)
+        for accepted_count in (0, 1):
+            with self.subTest(accepted_count=accepted_count):
+                code, result, calls, _, _ = self.invoke(
+                    ['play', 'example', '--idempotency-key', 'interrupted-example'],
+                    tracks=[track('One'), track('Two'), track('Three')], initial=active(),
+                    posts=[accepted] * accepted_count + [interrupted])
+                identifiers = ['interrupted-example:' + str(i + 1) for i in range(accepted_count + 1)]
+                self.assertEqual((code, result['status'], result['reason']),
+                                 (1, 'not_confirmed', 'music_interrupted'))
+                self.assertEqual(result['session_id'], SESSION)
+                self.assertEqual(result['action_ids'], identifiers)
+                self.assertEqual(result['accepted_action_ids'], identifiers[:-1])
+                self.assertEqual(result['accepted_item_numbers'], list(range(1, accepted_count + 1)))
+                self.assertEqual((result['requested_count'], result['accepted_count'], result['remaining_count'],
+                                  result['unconfirmed_count'], result['not_attempted_count']),
+                                 (3, accepted_count, 3 - accepted_count, 1, 2 - accepted_count))
+                self.assertEqual(len(calls), accepted_count + 2)
+                self.assertTrue(all(path.endswith('/player_play') for path, body in calls if body))
+                self.assertNotIn(PRIVATE, json.dumps(result))
+
+    def test_interrupt_during_readiness_retains_accepted_request_without_retry(self):
+        with patch.object(player.time, 'sleep', side_effect=KeyboardInterrupt(PRIVATE)):
+            code, result, calls, _, _ = self.invoke(
+                ['play', 'example', '--idempotency-key', 'readiness-interrupted'],
+                tracks=[track('One'), track('Two')], reads=[state(), active(state='buffering')])
+        self.assertEqual((code, result['status'], result['reason']),
+                         (1, 'partial', 'music_interrupted'))
+        self.assertEqual(result['session_id'], SESSION)
+        self.assertEqual(result['action_ids'], ['readiness-interrupted:1'])
+        self.assertEqual(result['accepted_action_ids'], result['action_ids'])
+        self.assertEqual(result['accepted_item_numbers'], [1])
+        self.assertEqual((result['requested_count'], result['accepted_count'], result['remaining_count'],
+                          result['unconfirmed_count'], result['not_attempted_count']), (2, 1, 1, 0, 1))
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(len([body for _, body in calls if body]), 1)
+        self.assertNotIn(PRIVATE, json.dumps(result))
+
     def test_replacement_session_during_readiness_is_never_adopted(self):
         code, result, calls, _, _ = self.invoke(
             ['play', 'example', '--all'], tracks=[track('One'), track('Two')],

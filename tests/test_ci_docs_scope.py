@@ -10,6 +10,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('docs_scope', ROOT / 'scripts/ci_docs_scope.py')
@@ -64,6 +65,39 @@ class ImagesScopeTests(unittest.TestCase):
         self.assertEqual('documentation-only-diff', result['reason'])
         self.assertEqual(1, result['changed_paths'])
 
+    def test_diverged_target_changes_do_not_become_pull_request_changes(self):
+        for changed, documentation_only in (('docs/guide.md', True),
+                                             ('scripts/runtime.py', False)):
+            with self.subTest(changed=changed):
+                root, common, head = self.case(changed)
+                run(root, 'checkout', '-qb', 'target', common)
+                (root / 'base.py').write_text('already validated target change\n')
+                run(root, 'add', '.')
+                run(root, 'commit', '-qm', 'unrelated target change')
+                base = run(root, 'rev-parse', 'HEAD')
+                run(root, 'merge', '--no-ff', '-qm', 'synthetic test merge', head)
+                merged = run(root, 'rev-parse', 'HEAD')
+                result = scope.classify('pull_request', pull_event(base, head), merged, root)
+                self.assertEqual(documentation_only, result['documentation_only'])
+                self.assertEqual(not documentation_only, result['images'])
+                self.assertEqual(common, result['comparison_base'])
+                self.assertEqual(base, result['base'])
+                self.assertEqual(head, result['head'])
+                self.assertEqual(1, result['changed_paths'])
+
+    def test_missing_or_ambiguous_merge_base_fails(self):
+        root, base, head = self.case('docs/guide.md')
+        original_git = scope.git
+        for evidence in (b'', f'{base}\n{"a" * 40}\n'.encode()):
+            with self.subTest(evidence=evidence):
+                def uncertain(root, *args):
+                    if args[:2] == ('merge-base', '--all'):
+                        return evidence
+                    return original_git(root, *args)
+                with patch.object(scope, 'git', side_effect=uncertain):
+                    with self.assertRaisesRegex(ValueError, 'unique pull-request merge base'):
+                        scope.classify('pull_request', pull_event(base, head), head, root)
+
     def test_any_other_path_keeps_the_builds(self):
         for changed in ('scripts/tool.py', '.github/workflows/validate.yml',
                         'containers/voice/Dockerfile', 'LICENSE',
@@ -110,6 +144,19 @@ class ImagesScopeTests(unittest.TestCase):
         root, base, head = self.case('docs/guide.md')
         with self.assertRaises(ValueError):
             scope.classify('pull_request', pull_event('0' * 40, head), head, root)
+
+    def test_both_event_commits_must_be_contained_in_the_checkout(self):
+        root, common, head = self.case('docs/guide.md')
+        run(root, 'checkout', '-qb', 'target', common)
+        (root / 'base.md').write_text('target documentation\n')
+        run(root, 'add', '.')
+        run(root, 'commit', '-qm', 'target change')
+        base = run(root, 'rev-parse', 'HEAD')
+        for checked_out in (base, head):
+            with self.subTest(checked_out=checked_out):
+                run(root, 'checkout', '--detach', '-q', checked_out)
+                with self.assertRaisesRegex(ValueError, 'not contained'):
+                    scope.classify('pull_request', pull_event(base, head), checked_out, root)
 
 
 if __name__ == '__main__':

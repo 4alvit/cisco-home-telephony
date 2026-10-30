@@ -66,12 +66,14 @@ def markdown_files(root):
     """Return tracked Markdown files, falling back to a filesystem walk."""
     try:
         result = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "-z", "*.md"],
+            ["git", "-C", str(root), "ls-files", "-z"],
             capture_output=True, check=True, text=True)
     except (OSError, subprocess.CalledProcessError):
-        return sorted(path for path in root.rglob("*.md")
-                      if not SKIP_DIRECTORIES.intersection(path.parts))
-    return sorted(root / name for name in result.stdout.split("\0") if name)
+        return sorted(path for path in root.rglob("*")
+                      if path.is_file() and path.name.lower().endswith(".md")
+                      and not SKIP_DIRECTORIES.intersection(path.parts))
+    return sorted(root / name for name in result.stdout.split("\0")
+                  if name and name.lower().endswith(".md"))
 
 
 def check(root, files):
@@ -127,7 +129,7 @@ def resolve(root, path, target, known):
     fragment = unquote(split.fragment)
     if not fragment or destination.is_dir():
         return None
-    if destination.suffix != ".md":
+    if not destination.name.lower().endswith(".md"):
         return "uses a fragment on a non-Markdown file"
     if destination not in known:
         known[destination] = anchors(destination)

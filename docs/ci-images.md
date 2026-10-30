@@ -108,10 +108,16 @@ prove that a live phone or Home Assistant pipeline works. Follow the separate
 ## Optional wake image export
 
 The wake runtime has its own workflow because it layers private-model staging
-over the manual voice image. It rebuilds that base image, about 38 seconds
-against 37 in the `images` job, instead of receiving it: separate runners share
-no filesystem, and measured artifact handoff costs 60-90 seconds plus roughly
-200 MiB of the shared artifact quota. Dispatch its single `export_image` input:
+over the manual voice image. It rebuilds that base image independently because
+the workflows use separate runners. This avoids an artifact handoff dependency
+and its storage quota use; it is not a claim that rebuilding is always faster.
+In [the PR #72 wake run](https://github.com/4alvit/cisco-home-telephony/actions/runs/41042971500),
+the base step took 38 seconds, while the corresponding step in
+[the image run](https://github.com/4alvit/cisco-home-telephony/actions/runs/41042971406)
+took 75 seconds. Pull and cache conditions affect those timings. Before adding
+a handoff, measure both warm and cold builds, transfer overhead and artifact
+retention under the intended runner configuration. Dispatch the wake workflow's
+single `export_image` input:
 
 ```sh
 gh workflow run voice-wake.yml --repo 4alvit/cisco-home-telephony \
@@ -256,21 +262,28 @@ the fast job fails; the next push cancels it through the workflow concurrency
 group. Both jobs run for every pull request, and both workflows run on pushes
 to the default branch.
 
-A pull request whose every changed file is Markdown skips that work inside both
+A pull request whose every changed file is Markdown (`.md`, case-insensitive,
+including `.MD`) skips that work inside both
 jobs, never a job itself. Each job must still run to report its required
 context: a `paths-ignore` filter would drop it, and the branch policy would then
 wait for a check that never arrives, so such a pull request could not merge at
-all. `scripts/ci_docs_scope.py` compares the exact event commits inside the
-running job and only then skips work. In `images` that means every build, scan,
-smoke and export; in `validate` it means the dependency install, the test suite
+all. `scripts/ci_docs_scope.py` finds the unique merge base of the event's exact
+base and head commits, then compares that merge base with the PR head. This
+includes changes from an older branch point that a synthetic merge checkout
+can otherwise hide. The job verifies that its checkout contains both event
+commits before considering the reduced path. In `images` that means every
+build, scan, smoke and export; in `validate` it means the dependency install, the test suite
 and the shell checks, while the link checker and the two modules that read
-Markdown still run without any third-party dependency. Everything else keeps the
-full work: a single non-Markdown path, an invalid or zero SHA, a checkout that
-differs from the triggering commit, a base commit outside that checkout, an
-unexpected path, or a diff that cannot be read. Pushes and manual dispatches
+Markdown still run without any third-party dependency. An empty diff or a
+single non-Markdown path, including either side of a rename, keeps the full
+work. Invalid or zero SHAs, a checkout that differs from the triggering commit,
+a base or head outside that checkout, a missing or ambiguous merge base,
+unexpected paths, or a diff that cannot be read fail the scope step instead of
+granting a documentation-only skip. Pushes and manual dispatches
 build and test everything, so the default branch and every exported artifact
-still come from a real build of the exact commit. A skipped job reports success
-in seconds and says so, without claiming an image was built or a suite passed.
+still come from a real build of the exact commit. A job using the reduced path
+reports success in seconds and identifies the work it skipped, without claiming
+an image was built or the full suite passed.
 `validate` on such a pull request finishes in seconds rather than minutes,
 because the checks that remain resolve links and read Markdown without
 installing a third-party dependency. Mixing one Markdown edit with any code,
@@ -317,12 +330,13 @@ Branch policy is managed separately in the GitHub infrastructure configuration.
 Verify its live presence before enabling automatic merge: `gh pr merge --auto`
 can merge immediately in an unprotected repository and is not itself a CI wait.
 The policy must require these three exact contexts with strict base updates.
-The intended review policy also requires one independent approval. The
-30 October 2026 audit found the live approval count at zero; that is tracked
-drift, not an approved single-maintainer exception. The staged
-[trusted PR approval caller](pr-approval.md) must be connected to the existing
-automation credential and proven on a current PR head before the separate
-Terraform rollout restores review enforcement. The maintainer keeps an
+The review policy also requires one independent approval and approval after
+the last push. The 30 October 2026 rollout connected the
+[trusted PR approval caller](pr-approval.md#verified-deployment), proved an
+independent review on the current PR head and restored enforcement through
+Terraform. Live readback and a fresh no-change scoped plan confirmed the policy;
+[the governance issue](https://github.com/4alvit/terraform-github-4alvit/issues/101)
+records its completion. The maintainer keeps an
 explicit bypass for recovery when Actions cannot run, so a bypassed merge is a
 deliberate, auditable exception and never the normal path. Release publication
 still checks the complete exact-source image run and independently verifies

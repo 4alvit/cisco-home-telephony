@@ -267,6 +267,14 @@ def recovery(args, identifier):
                       args.extension, 'say-status', identifier])
 
 
+def delivery_failed(job):
+    """Active jobs remain observable; finished processing is not delivery success."""
+    if job['status'] not in TERMINAL:
+        return any(recipient['status'] == 'unknown' for recipient in job['recipients'])
+    return job['status'] in ('failed', 'stopped') or any(
+        recipient['status'] != 'completed' for recipient in job['recipients'])
+
+
 def run(args, config, *, gateway_factory, inventory_validator, read_file, clock=time.monotonic,
         sleep=time.sleep):
     identifier, dispatched, lines = None, False, []
@@ -284,8 +292,7 @@ def run(args, config, *, gateway_factory, inventory_validator, read_file, clock=
             require(re.fullmatch(r'[0-9a-f]{32}', identifier), 'invalid_announcement_id')
             latest = validate_job(service.request('/v1/announcements/' + identifier), identifier, lines, routes)
             if args.command == 'say-status':
-                return latest, int(latest['status'] == 'failed' or any(
-                    p['status'] == 'unknown' for p in latest['recipients']))
+                return latest, int(delivery_failed(latest))
             if args.dry_run:
                 return dict(latest, status='dry_run', action='stop'), 0
             if latest['status'] not in TERMINAL:
@@ -334,9 +341,7 @@ def run(args, config, *, gateway_factory, inventory_validator, read_file, clock=
         latest['answers'] = list(answers.values())
         latest['note'] = ('Playback results come from the configured delivery driver. '
                           'They do not prove that a person heard the message.')
-        failure = latest['status'] in ('failed', 'stopped') or any(
-            p['status'] != 'completed' for p in latest['recipients'])
-        return latest, int(failure)
+        return latest, int(delivery_failed(latest))
     except (Exception, KeyboardInterrupt) as error:
         cancelled.set()
         reason = getattr(error, 'reason', 'announcement_local_or_transport_error')

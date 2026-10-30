@@ -136,6 +136,43 @@ class AnnouncementCLITests(unittest.TestCase):
         self.assertEqual(len(requests), 1)
         self.assertEqual(requests[0][1], '/v1/announcements/'+IDENTIFIER)
 
+    def test_send_and_status_share_terminal_delivery_outcomes(self):
+        for job_status in ('finished', 'failed', 'stopped'):
+            for recipient_status in ('completed', 'failed', 'skipped', 'stopped', 'unknown'):
+                expected = int(job_status != 'finished' or recipient_status != 'completed')
+                for command, argument in (('say', 'Example'), ('say-status', IDENTIFIER)):
+                    with self.subTest(job=job_status, recipient=recipient_status, command=command):
+                        code, result, requests = self.invoke(['212', command, argument],
+                            reply=job(status=job_status, recipient_status=recipient_status))
+                        self.assertEqual(code, expected)
+                        self.assertEqual(result['status'], job_status)
+                        self.assertEqual(result['recipients'][0]['status'], recipient_status)
+                        if command == 'say-status':
+                            self.assertEqual(requests, [(True, '/v1/announcements/'+IDENTIFIER, None)])
+
+    def test_mixed_delivery_failure_is_not_success_for_send_or_status(self):
+        for recipient_status in ('failed', 'skipped', 'stopped', 'unknown'):
+            reply = direct_job(('223', '225'))
+            reply['recipients'][1]['status'] = recipient_status
+            for command, argument in (('say', 'Example'), ('say-status', IDENTIFIER)):
+                with self.subTest(recipient=recipient_status, command=command):
+                    code, result, _ = self.invoke(['223,225', command, argument], reply=reply,
+                                                config=direct_configuration())
+                    self.assertEqual(code, 1)
+                    self.assertEqual(result['recipients'][0]['status'], 'completed')
+                    self.assertEqual(result['recipients'][1]['status'], recipient_status)
+
+    def test_active_status_remains_observable_without_delivery_confirmation(self):
+        for job_status, recipient_status in (('accepted', 'queued'), ('running', 'ringing'),
+                ('running', 'playing'), ('running', 'completed'), ('running', 'failed'),
+                ('stopping', 'stopping'), ('running', 'unknown')):
+            with self.subTest(job=job_status, recipient=recipient_status):
+                code, result, requests = self.invoke(['212', 'say-status', IDENTIFIER],
+                    reply=job(status=job_status, recipient_status=recipient_status))
+                self.assertEqual(code, int(recipient_status == 'unknown'))
+                self.assertEqual(result['status'], job_status)
+                self.assertEqual(requests, [(True, '/v1/announcements/'+IDENTIFIER, None)])
+
     def test_unexpected_fields_are_filtered_from_receipts(self):
         value = job(); value.update(text='SECRET', token='SECRET')
         value['recipients'][0]['address'] = 'SECRET'
