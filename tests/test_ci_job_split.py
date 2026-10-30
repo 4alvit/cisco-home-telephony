@@ -111,7 +111,7 @@ def declared_contexts(workflow_directory):
     declared = set()
     for path in sorted(workflow_directory.glob('*.y*ml')):
         text = path.read_text(encoding='utf-8')
-        declared |= set(job_bodies(text)) | set(job_names(text).values())
+        declared.update(job_names(text).values())
     return declared
 
 
@@ -239,6 +239,32 @@ jobs:
 
     def test_a_policy_sentence_without_contexts_is_rejected(self):
         self.assertTrue(policy_problems('Branch policy is external.\n', self.root))
+
+    def test_a_display_name_replaces_its_job_id_context(self):
+        path = self.workflow(
+            '      - run: python3 -m unittest discover -s tests\n',
+            '      - run: bash scripts/build-images.sh ci\n')
+        self.write('wake.yml', '''
+jobs:
+  gate:
+    name: Wake gate
+    runs-on: ubuntu-24.04
+    steps:
+      - run: true
+''')
+        doc = 'The required contexts are `validate`, `images` and `Wake gate`.\n'
+        self.assertEqual([], policy_problems(doc, self.root))
+        original = path.read_text(encoding='utf-8')
+        for name in ('Container build', "'Container build'", '"Container build"'):
+            with self.subTest(name=name):
+                path.write_text(original.replace(
+                    '  images:\n', f'  images:\n    name: {name}\n'),
+                    encoding='utf-8')
+                self.assertEqual({'validate', 'Container build', 'Wake gate'},
+                                 declared_contexts(self.root))
+                self.assertEqual(
+                    ['the policy requires images, which no workflow declares'],
+                    policy_problems(doc, self.root))
 
 
 if __name__ == '__main__':
