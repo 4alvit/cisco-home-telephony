@@ -241,9 +241,16 @@ accepted codec set requires new fixtures and a fresh security review.
 
 ## Required pull-request checks
 
-The required contexts are `validate` and `Wake gate`, both emitted by GitHub
-Actions. `validate` runs for every pull request, and both workflows run on
-pushes to the default branch. A pull-request branch is covered by the
+The required contexts are `validate`, `images` and `Wake gate`, all emitted by
+GitHub Actions. `validate` holds the fast checks and usually finishes in about
+three minutes; `images` builds the voice and PBX containers, scans the voice
+image, rejects actionable vulnerabilities and runs the isolated container
+smokes, which takes about nine minutes. The two jobs are independent and both
+are required, so a failing test is reported long before the builds finish while
+a build failure still blocks the merge. An image build does still start when
+the fast job fails; the next push cancels it through the workflow concurrency
+group. Both jobs run for every pull request, and both workflows run on pushes
+to the default branch. A pull-request branch is covered by the
 `pull_request` event alone, so a commit pushed to an open pull request is
 built once instead of once per trigger; a branch push without a pull request
 starts nothing, and an explicit workflow dispatch covers that case. The test

@@ -25,9 +25,13 @@ concurrency:
   group: validate-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  # Fast checks first so a broken test is reported within minutes instead of
+  # waiting for the container builds. Both jobs are required, and they are
+  # independent on purpose: the images job still starts when a test fails, and
+  # the next push cancels it through this workflow's concurrency group.
   validate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 15
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -52,6 +56,13 @@ jobs:
           .venv/bin/python -m unittest discover -s tests -v
           .venv/bin/python -m compileall -q scripts voice_assistant containers/asterisk tools/firmware_lab tools/sip_video tools/l16_lab
           for script in scripts/*.sh; do bash -n "$script"; done
+
+  images:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Build and smoke-test the isolated voice runtime
         run: bash scripts/build-voice-image.sh cisco-home-ci
       - name: Verify speech codecs and artwork isolation in the final image
@@ -120,13 +131,13 @@ jobs:
               && rm -rf /var/lib/apt/lists/*
           DOCKERFILE
           EXTERNAL_FIREWALL_TEST_IMAGE=cisco-home-ci/firewall-test:bookworm \
-            .venv/bin/python -m unittest discover -s tests -p test_external_firewall.py -v
+            python3 -m unittest discover -s tests -p test_external_firewall.py -v
       - name: Isolated smoke with synthetic generated configuration
         run: bash scripts/smoke-containers.sh cisco-home-ci
       - name: Verify isolated L16 media and native call expiry
         run: |
           umask 077
-          .venv/bin/python -m tools.l16_lab asterisk \
+          python3 -m tools.l16_lab asterisk \
             --image cisco-home-ci/asterisk:22.11.0 \
             --docker-socket /var/run/docker.sock \
             --execute --output .local/l16/ci-1
