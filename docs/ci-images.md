@@ -273,6 +273,12 @@ real gate result without requiring a redundant image build.
 Branch policy is managed separately in the GitHub infrastructure configuration.
 Verify its live presence before enabling automatic merge: `gh pr merge --auto`
 can merge immediately in an unprotected repository and is not itself a CI wait.
-The one-review policy must require these two exact contexts with strict base
-updates; release publication still checks the complete exact-source image run
-and independently verifies exported bytes.
+The policy must require these two exact contexts with strict base updates. It
+does not require an approving review: this repository has one maintainer, who
+cannot approve their own pull request, so such a rule could only ever be
+bypassed and would make the gate look stronger than it is. A second person's
+review is still expected when one is available. The maintainer keeps an
+explicit bypass for recovery when Actions cannot run, so a bypassed merge is a
+deliberate, auditable exception and never the normal path. Release publication
+still checks the complete exact-source image run and independently verifies
+exported bytes.
