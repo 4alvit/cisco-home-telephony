@@ -242,7 +242,12 @@ accepted codec set requires new fixtures and a fresh security review.
 ## Required pull-request checks
 
 The required contexts are `validate` and `Wake gate`, both emitted by GitHub
-Actions. `validate` runs for every pull request. Before the test suite,
+Actions. `validate` runs for every pull request, and both workflows run on
+pushes to the default branch. A pull-request branch is covered by the
+`pull_request` event alone, so a commit pushed to an open pull request is
+built once instead of once per trigger; a branch push without a pull request
+starts nothing, and an explicit workflow dispatch covers that case. Before the
+test suite,
 `scripts/verify_docs_links.py` resolves every repository-local link and heading
 anchor in the tracked Markdown files, so a moved file or reworded heading fails
 without waiting for a build. External URLs are out of scope. The wake workflow
