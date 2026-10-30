@@ -16,10 +16,10 @@ from urllib.parse import unquote, urlsplit
 
 SKIP_DIRECTORIES = {".git", ".venv", ".local", ".build", "node_modules",
                     "__pycache__"}
-LINK = re.compile(r'!?\[[^\]\n]*\]\(\s*<?([^)\s>]+)>?'
+LINK = re.compile(r'!?\[[^\]\n]*\]\(\s*(?:<(?P<angle>[^<>\n]*)>|(?P<plain>[^)\s<>]+))'
                   r'(?:\s+(?:"[^"]*"|\'[^\']*\'))?\s*\)')
-REFERENCE = re.compile(r"^ {0,3}\[[^\]\n]+\]:\s*<?([^\s>]+)>?")
-FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+REFERENCE = re.compile(r"^ {0,3}\[[^\]\n]+\]:\s*(?:<(?P<angle>[^<>\n]*)>|(?P<plain>[^\s<>]+))")
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 INLINE_CODE = re.compile(r"(`+)(.+?)\1")
 HTML_ANCHOR = re.compile(r'<a\s[^>]*(?:id|name)="([^"]+)"')
 HEADING = re.compile(r"^ {0,3}#{1,6}\s+(.*?)\s*#*\s*$")
@@ -35,23 +35,28 @@ def slug(text):
     return text.replace(" ", "-")
 
 
+def prose_lines(path):
+    """Yield numbered lines outside fenced code, preserving fence run lengths."""
+    fence = None
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        marker = FENCE.match(line)
+        if fence is not None:
+            if (marker and marker.group(1)[0] == fence[0]
+                    and len(marker.group(1)) >= len(fence)
+                    and not marker.group(2).strip(" \t")):
+                fence = None
+            continue
+        if marker and (marker.group(1)[0] != "`" or "`" not in marker.group(2)):
+            fence = marker.group(1)
+            continue
+        yield number, line
+
+
 def anchors(path):
     """Return every fragment a link may target in one Markdown file."""
     found = set()
     seen = {}
-    fence = None
-    for line in path.read_text(encoding="utf-8").splitlines():
-        marker = FENCE.match(line)
-        if marker:
-            char = marker.group(1)[0]
-            if fence is None:
-                fence = char
-                continue
-            if char == fence:
-                fence = None
-                continue
-        if fence is not None:
-            continue
+    for _, line in prose_lines(path):
         found.update(HTML_ANCHOR.findall(line))
         heading = HEADING.match(line)
         if heading:
@@ -83,27 +88,17 @@ def check(root, files):
     known = {}
     for path in files:
         rel = path.relative_to(root)
-        fence = None
-        for number, line in enumerate(
-                path.read_text(encoding="utf-8").splitlines(), 1):
-            marker = FENCE.match(line)
-            if marker:
-                char = marker.group(1)[0]
-                if fence is None:
-                    fence = char
-                    continue
-                if char == fence:
-                    fence = None
-                    continue
-            if fence is not None:
-                continue
+        for number, line in prose_lines(path):
             masked = INLINE_CODE.sub(lambda match: " " * len(match.group(0)),
                                      line)
-            targets = LINK.findall(masked)
+            matches = list(LINK.finditer(masked))
             reference = REFERENCE.match(masked)
             if reference:
-                targets.append(reference.group(1))
-            for target in targets:
+                matches.append(reference)
+            for match in matches:
+                target = match.group("angle")
+                if target is None:
+                    target = match.group("plain")
                 links += 1
                 problem = resolve(root, path, target, known)
                 if problem:
