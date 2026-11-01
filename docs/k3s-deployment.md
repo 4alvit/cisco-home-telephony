@@ -12,6 +12,11 @@ image and the version-2 exact-source firewall policy. `--tftp-only` opens bounde
 firmware maintenance without applying Asterisk; `--with-tftp` still includes the
 PBX. Physical cold-boot and node-restart acceptance remain separate gates.
 
+Complete the [network interruption and node-local recovery setup](node-recovery.md)
+when using locally imported images. It retains approved image archives, restores
+missing exact references without a registry and documents the fixed-node
+tolerations used to survive temporary loss of the control-plane route.
+
 ## 1. Choose the home node
 
 Public examples use an illustrative network: node `voice-node`, IP

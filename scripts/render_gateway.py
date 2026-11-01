@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from render_k3s import load_site, secret
+from render_k3s import fixed_node_tolerations, load_site, secret
 
 MODULE = Path(__file__).resolve().parents[1] / 'containers/asterisk/phone_gateway.py'
 spec = importlib.util.spec_from_file_location('phone_gateway', MODULE)
@@ -29,6 +29,7 @@ def render(site, config):
             'template': {'metadata': {'labels': labels}, 'spec': {
                 'hostNetwork': True, 'dnsPolicy': 'ClusterFirstWithHostNet', 'automountServiceAccountToken': False,
                 'nodeSelector': {'kubernetes.io/os': 'linux'},
+                'tolerations': fixed_node_tolerations(),
                 'affinity': {'nodeAffinity': {'requiredDuringSchedulingIgnoredDuringExecution': {'nodeSelectorTerms': [
                     {'matchFields': [{'key': 'metadata.name', 'operator': 'In', 'values': [site['node_name']]}]}]}}},
                 'securityContext': {'runAsUser': 10001, 'runAsGroup': 10001, 'runAsNonRoot': True,

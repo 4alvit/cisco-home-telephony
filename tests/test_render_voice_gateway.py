@@ -143,6 +143,25 @@ class RenderVoiceGatewayTests(unittest.TestCase):
         self.assertNotIn('control.json', self.files(result))
         self.assertNotIn('--voice-control-config', self.pod(result)['containers'][0]['args'])
 
+    def test_partition_tolerations_replace_defaults_and_preserve_custom_policy(self):
+        oldpod = self.deployment['spec']['template']['spec']
+        custom = {'key': 'dedicated', 'operator': 'Equal', 'value': 'voice', 'effect': 'NoSchedule'}
+        oldpod['tolerations'] = [custom, {
+            'key': 'node.kubernetes.io/unreachable', 'operator': 'Exists',
+            'effect': 'NoExecute', 'tolerationSeconds': 300}]
+        before = copy.deepcopy(oldpod['tolerations'])
+        tolerations = self.pod(self.render())['tolerations']
+        self.assertEqual(tolerations, [custom,
+            {'key': 'node.kubernetes.io/not-ready', 'operator': 'Exists', 'effect': 'NoExecute'},
+            {'key': 'node.kubernetes.io/unreachable', 'operator': 'Exists', 'effect': 'NoExecute'}])
+        self.assertEqual(oldpod['tolerations'], before)
+
+    def test_finite_broad_toleration_requires_explicit_operator_resolution(self):
+        self.deployment['spec']['template']['spec']['tolerations'] = [
+            {'operator': 'Exists', 'effect': 'NoExecute', 'tolerationSeconds': 30}]
+        with self.assertRaisesRegex(ValueError, 'finite_wildcard'):
+            self.render()
+
     def test_profiles_staged_disabled_and_explicit_enable(self):
         for enabled in (False, True):
             result = self.render(profiles=self.profiles, enable_voice=enabled)

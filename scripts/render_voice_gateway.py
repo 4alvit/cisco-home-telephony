@@ -104,6 +104,7 @@ gateway = module('_voice_gateway_render_gateway', ROOT / 'containers/asterisk/ph
 control = module('_voice_gateway_render_control', ROOT / 'containers/asterisk/phone_voice_control.py')
 stager = module('_voice_gateway_render_stager', ROOT / 'containers/voice/stage_private.py')
 models = module('_voice_gateway_render_models', ROOT / 'containers/voice-wake/stage_models.py')
+k3s_renderer = module('_voice_gateway_render_k3s', ROOT / 'scripts/render_k3s.py')
 
 
 def canonical(value):
@@ -464,6 +465,7 @@ def render(deployment, config, receipt, capacity, *, image, cpu_request, cpu_lim
                               'fsGroup': 10001, 'seccompProfile': {'type': 'RuntimeDefault'}}
     pod.setdefault('nodeSelector', {})['kubernetes.io/os'] = 'linux'
     pod['nodeSelector']['kubernetes.io/arch'] = capacity['node_arch']
+    pod['tolerations'] = k3s_renderer.fixed_node_tolerations(pod.get('tolerations'))
     pod['initContainers'] = [{'name': 'stage-voice-private', 'image': image, 'imagePullPolicy': 'IfNotPresent',
         'command': ['/usr/local/bin/python3', '-c', INIT_CODE], 'securityContext': copy.deepcopy(security),
         'resources': {'requests': {'cpu': '10m', 'memory': '32Mi'}, 'limits': {'cpu': '200m', 'memory': '64Mi'}},

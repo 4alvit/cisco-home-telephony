@@ -5,6 +5,11 @@ an independent, bounded firmware maintenance Job. Both use the same managed TFTP
 image and exclusive host lock. `--profiles-only` updates only profiles and their
 TFTP owner; it does not read, apply or restart the Asterisk configuration.
 
+For recovery after router/control-plane interruptions, preserve the exact
+container images outside the disposable runtime cache and retain fixed-node
+Pods during transient loss of connectivity. See the
+[network interruption and node-local recovery guide](node-recovery.md).
+
 **Installed on 2026-10-22:** the dedicated service contains all ten inventoried
 phone profiles, the dial plan and three wallpaper assets. The 14 served files,
 their permissions, the immutable image and the single managed listener were

@@ -1,0 +1,25 @@
+[Unit]
+Description=Restore approved local telephony container images
+After=k3s.service k3s-agent.service
+ConditionPathExists=/etc/cisco-telephony-image-cache.json
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+RuntimeDirectory=cisco-telephony-image-cache
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/local/sbin/telephony-image-cache --apply
+TimeoutStartSec=300
+KillMode=control-group
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/run/cisco-telephony-image-cache
+# /run is readable: ctr talks to K3s' existing containerd UNIX socket.
+# No network pull, Kubernetes mutation, service restart or phone control occurs.

@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="780" viewBox="0 0 1100 780" role="img" aria-labelledby="title desc">
+  <title id="title">Recovery after a network interruption</title>
+  <desc id="desc">Fixed-node telephony workloads tolerate a temporarily unreachable control plane. Verified local OCI archives restore missing exact container images, without a registry or service restart. Asterisk, the gateway and daily TFTP then serve registered phones. This is recovery on one node, not failover.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#64748b"/></marker>
+  </defs>
+  <rect width="1100" height="780" fill="#f8fafc"/>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="42" y="48" font-size="27" font-weight="700" fill="#0f172a">Keep local telephony local</text>
+    <text x="42" y="76" font-size="16" fill="#475569">Two protections for a network interruption: retain the Pods and retain the images.</text>
+
+    <rect x="42" y="108" width="430" height="109" rx="16" fill="#fff1f2" stroke="#fda4af" stroke-width="2"/>
+    <text x="65" y="139" font-size="19" font-weight="700" fill="#9f1239">Router / control-plane route interrupted</text>
+    <text x="65" y="167" font-size="15" fill="#881337">Previously: default eviction after 300 seconds</text>
+    <text x="65" y="191" font-size="15" fill="#881337">Missing local images then prevented replacement.</text>
+    <path d="M472 162 H520" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="538" y="108" width="520" height="109" rx="16" fill="#ecfdf5" stroke="#6ee7b7" stroke-width="2"/>
+    <text x="561" y="139" font-size="19" font-weight="700" fill="#065f46">Retain the fixed-node workloads</text>
+    <text x="561" y="167" font-size="15" fill="#065f46">Unreachable / NotReady NoExecute tolerations do not expire.</text>
+    <text x="561" y="191" font-size="15" fill="#065f46">Existing node affinity and single-replica placement stay intact.</text>
+
+    <rect x="42" y="245" width="1016" height="366" rx="20" fill="#eff6ff" stroke="#93c5fd" stroke-width="2"/>
+    <text x="66" y="280" font-size="21" font-weight="700" fill="#1e3a8a">On the existing telephony node</text>
+    <rect x="67" y="302" width="419" height="122" rx="13" fill="#ffffff" stroke="#60a5fa" stroke-width="2"/>
+    <text x="87" y="333" font-size="18" font-weight="700" fill="#1e40af">Durable approved OCI archive</text>
+    <text x="87" y="360" font-size="15" fill="#334155">Exact image references + archive SHA-256</text>
+    <text x="87" y="384" font-size="15" fill="#334155">Native K3s startup import; conditional cache disabled</text>
+    <text x="87" y="406" font-size="14" fill="#64748b">Operational recovery data, not a temporary download</text>
+
+    <path d="M488 358 H558" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="578" y="302" width="454" height="122" rx="13" fill="#ffffff" stroke="#a78bfa" stroke-width="2"/>
+    <text x="599" y="333" font-size="18" font-weight="700" fill="#5b21b6">Local containerd image store</text>
+    <text x="599" y="360" font-size="15" fill="#334155">Timer checks every 2 minutes and after boot.</text>
+    <text x="599" y="384" font-size="15" fill="#334155">Missing / incomplete → verify → import → pin</text>
+    <text x="599" y="406" font-size="14" fill="#64748b">Check CRI + content; wrong digest → refuse</text>
+
+    <path d="M550 439 V469 M227 470 H875 M227 470 V487 M550 470 V487 M875 470 V487" fill="none" stroke="#64748b" stroke-width="2"/>
+    <text x="557" y="458" font-size="13" fill="#475569">Accepted images available to the workloads</text>
+    <rect x="67" y="489" width="309" height="93" rx="13" fill="#dbeafe" stroke="#60a5fa"/>
+    <text x="88" y="522" font-size="20" font-weight="700" fill="#1e40af">Asterisk</text>
+    <text x="88" y="550" font-size="15" fill="#1e3a8a">SIP registration and service dialplan</text>
+    <rect x="395" y="489" width="309" height="93" rx="13" fill="#ede9fe" stroke="#a78bfa"/>
+    <text x="416" y="522" font-size="20" font-weight="700" fill="#5b21b6">Phone gateway</text>
+    <text x="416" y="550" font-size="15" fill="#4c1d95">CLI, Home Assistant and reconciliation</text>
+    <rect x="723" y="489" width="309" height="93" rx="13" fill="#ccfbf1" stroke="#2dd4bf"/>
+    <text x="744" y="522" font-size="20" font-weight="700" fill="#115e59">Daily TFTP</text>
+    <text x="744" y="550" font-size="15" fill="#134e4a">Profiles, dial plan and wallpaper files</text>
+
+    <path d="M550 612 V635" fill="none" stroke="#64748b" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="145" y="650" width="810" height="76" rx="15" fill="#fffbeb" stroke="#fbbf24" stroke-width="2"/>
+    <text x="167" y="679" font-size="19" font-weight="700" fill="#92400e">Verify fresh registration, then the requested feature</text>
+    <text x="167" y="705" font-size="15" fill="#78350f">Both phone lines · TFTP assets · attended 555 audio · saved background selection</text>
+    <text x="42" y="759" font-size="14" fill="#64748b">No registry pull, blind phone reboot or firmware interruption. One-node recovery does not provide failover.</text>
+  </g>
+</svg>

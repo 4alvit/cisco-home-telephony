@@ -32,6 +32,7 @@ class ProfileDeploymentTests(unittest.TestCase):
         self.assertEqual(deployment['spec']['strategy'], {'type': 'Recreate'})
         pod = deployment['spec']['template']['spec']
         self.assertEqual(pod['restartPolicy'], 'Always')
+        self.assertEqual(pod['tolerations'], render.fixed_node_tolerations())
         self.assertFalse(pod.get('hostPID', False))
         self.assertFalse(pod.get('shareProcessNamespace', False))
         self.assertFalse(pod['automountServiceAccountToken'])
