@@ -132,9 +132,11 @@ phone's actual clock. This project does not install an NTP server.
 ## 3. Admit exact phone addresses and scope DHCP option 150
 
 For permanent addressing, use the site's reserved phone block outside its
-dynamic pool. The [OpenWrt/dnsmasq address runbook](static-phone-addresses.md)
-covers coordinated DHCP, DNS, Asterisk and gateway changes when a provisional
-address needs to move.
+dynamic pool. First identify the actual DHCPv4 owner using the
+[address runbook](static-phone-addresses.md). It covers dnsmasq and Kea HA,
+including coordinated DHCP, DNS, Asterisk and gateway changes when a provisional
+address needs to move. A router running dnsmasq for DNS does not prove that
+dnsmasq also serves DHCP.
 
 Reserve each new phone's current verified address when safe, after checking
 leases and static configuration for duplicate MACs or IPs. For an illustrative
@@ -164,8 +166,8 @@ examples are starting points, not a command to flush a live shared ruleset.
 
 Use the existing DHCP server. Add reservations and option 150 only for the new
 MACs, using individual rules or a tag assigned only by those reservations.
-For dnsmasq, the intended effective rules look like this **template**, with
-real verified MACs substituted privately:
+When dnsmasq is the confirmed DHCP owner, the intended effective rules look like
+this **template**, with real verified MACs substituted privately:
 
 ```text
 dhcp-host=<PHONE_D_MAC>,set:cisco_new,192.168.50.24,phone-d
@@ -177,7 +179,7 @@ Keep the three existing reservations/tags unchanged. On routers that generate
 dnsmasq configuration, modify their supported persistent configuration rather
 than editing a generated runtime file.
 
-Before applying, back up persistent and effective configuration, ensure no
+For that dnsmasq path, back up persistent and effective configuration, ensure no
 unrelated edits are pending, validate the proposed dnsmasq configuration, and
 prepare rollback for just the new owned reservations/tag. Check the reviewed
 baseline again before committing. Reload only the DHCP/DNS service, then
@@ -185,6 +187,14 @@ verify it is running and the effective rules contain exactly the intended
 additions. Preserve the previous phone and all unrelated DHCP blocks. If
 post-commit validation fails, use the prepared scoped rollback; do not restore
 an entire old configuration over someone else's changes.
+
+For Kea HA, follow the [coordinated reservation procedure](static-phone-addresses.md#kea-ha-configuration)
+instead: update the site's canonical generator input and all configured peers,
+preserve phone-scoped forced option 150, and retain live lease databases.
+UCI edits or a dnsmasq reload alone do not apply Kea reservations. Verify the
+selected phone's ACK, including its real mask and TFTP address, before checking
+boot/profile retrieval and both line registrations. These are required checks,
+not results implied by the examples.
 
 ## 4. Prepare the PBX and a bounded TFTP window
 
