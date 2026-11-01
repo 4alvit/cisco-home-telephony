@@ -168,17 +168,26 @@ requires separately enrolled phone `/32` sources, explicit two-way routes and
 narrow rules inside the VPN. VPN membership alone grants no telephony access;
 this exception is not installed by the current deployment scripts.
 
-DHCP stays on the existing router. Within the phone scope, set Cisco option
-**150 = 192.168.50.10** (the TFTP IP), after confirming the selected address.
-For dnsmasq this is usually `dhcp-option=tag:phones,150,192.168.50.10`, but the
+DHCP stays with the site's existing DHCP service, outside this deployment.
+Identify its actual owner: dnsmasq may provide only DNS while Kea HA answers
+DHCPv4. Within the phone scope, preserve forced Cisco option **150 =
+192.168.50.10** (the example TFTP IP), after confirming the selected address.
+For a confirmed dnsmasq DHCP owner, the effective rule is typically
+`dhcp-option-force=tag:phones,150,192.168.50.10`, but the
 `phones` tag must actually be assigned to the intended MAC addresses/range: do
 not blindly paste this line into global configuration. For one test phone you
-can set Alternate TFTP manually. Do not run a second DHCP server on the LAN.
+can set Alternate TFTP manually. For Kea HA, use the site's canonical generator
+and coordinated update of every configured peer; UCI/dnsmasq edits alone do not
+apply those reservations. Preserve the phone-specific equivalent of forced
+option 150 and the current lease databases. Do not add an independent DHCP server
+alongside the existing service.
 
 Reserve a stable address for each physical phone outside the dynamic pool.
-Follow the [OpenWrt/dnsmasq address runbook](static-phone-addresses.md) when
+Follow the [DHCP address runbook](static-phone-addresses.md) when
 assigning or moving addresses: the gateway callback source, Asterisk ACLs and
-persistent host firewall must agree with DHCP.
+persistent host firewall must agree with DHCP. Verify the selected phone's ACK
+(address, real mask, gateway, DNS and option 150), TFTP/profile retrieval and boot;
+the Kubernetes rollout does not apply or validate these DHCP changes.
 
 ## 5. Deliver firmware to the selected node
 
