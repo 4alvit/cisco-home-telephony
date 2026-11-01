@@ -94,7 +94,7 @@ def render(deployment, secret, config, source_files, dialplan):
         'command': ['python3', '-B', CODE_PATH + '/phone_announce.py', '--config', CONFIG_PATH],
         'securityContext': {'allowPrivilegeEscalation': False, 'readOnlyRootFilesystem': True,
                             'capabilities': {'drop': ['ALL']}},
-        'resources': {'requests': {'cpu': '20m', 'memory': '64Mi'},
+        'resources': {'requests': {'cpu': '10m', 'memory': '64Mi'},
                       'limits': {'cpu': '1', 'memory': '256Mi'}},
         'readinessProbe': {'exec': {'command': probe}, 'initialDelaySeconds': 3, 'periodSeconds': 5},
         'livenessProbe': {'exec': {'command': probe}, 'initialDelaySeconds': 20, 'periodSeconds': 20},
