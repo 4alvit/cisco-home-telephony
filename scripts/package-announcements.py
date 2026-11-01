@@ -15,7 +15,8 @@ CLI = tuple('scripts/' + name for name in (
     'cisco.py', 'cisco_http.py', 'cisco_player.py', 'cisco_library.py',
     'cisco_media_source.py', 'cisco_lifesize.py', 'cisco_announce.py'))
 SERVICE = tuple('containers/asterisk/' + name for name in (
-    'phone_announce.py', 'phone_announce_agi.py', 'dial_audio.py', 'phone_gateway.py'))
+    'phone_announce.py', 'phone_announce_agi.py', 'dial_audio.py', 'phone_gateway.py',
+    'phone_notifications.py'))
 SHARED = ('docs/cli-announcements.md', 'docs/cli-installation.md',
           'docs/cli-lifesize.md', 'docs/cli.md', 'docs/cli-music.md',
           'docs/existing-endpoints.md', 'docs/phone-gateway.md',
@@ -28,7 +29,9 @@ SHARED = ('docs/cli-announcements.md', 'docs/cli-installation.md',
           'deploy/cisco-cli.announcements.example.json', 'RELEASING.md')
 RUNTIME = SERVICE + ('scripts/render_announcements.py', 'scripts/package-announcements.py',
     'deploy/announcement-dialplan.conf', 'deploy/announcements.example.json',
-    'deploy/dial-audio.example.json', 'docs/dial-audio-services.md') + SHARED
+    'deploy/dial-audio.example.json', 'docs/dial-audio-services.md',
+    'examples/automatic-notifications.example.json', 'examples/cisco_notifications.yaml',
+    'docs/automatic-notifications.md', 'docs/diagrams/automatic-notifications.svg') + SHARED
 
 
 def git(*args):

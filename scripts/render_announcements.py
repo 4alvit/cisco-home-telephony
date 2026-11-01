@@ -12,7 +12,8 @@ import stat
 ROOT = Path(__file__).resolve().parents[1]
 CODE_PATH = '/opt/cisco-announcements'
 CONFIG_PATH = '/etc/cisco-announcements/config.json'
-SOURCES = ('phone_announce.py', 'phone_announce_agi.py', 'dial_audio.py', 'phone_gateway.py')
+SOURCES = ('phone_announce.py', 'phone_announce_agi.py', 'dial_audio.py', 'phone_gateway.py',
+           'phone_notifications.py')
 
 
 def require(condition, reason):

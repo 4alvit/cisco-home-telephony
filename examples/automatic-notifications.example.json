@@ -1,0 +1,16 @@
+{
+  "notifications": {
+    "enabled": false,
+    "speech_enabled": false,
+    "sources": ["general", "doorbell"],
+    "screen_destinations": ["201", "203"],
+    "echo_destinations": [],
+    "cooldown_seconds": 60,
+    "max_event_age_seconds": 90,
+    "quiet_hours": {
+      "start": "22:00",
+      "end": "08:00",
+      "timezone": "Etc/UTC"
+    }
+  }
+}

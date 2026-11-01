@@ -107,6 +107,11 @@ def camera_preview_options(value):
 
 def validate(config):
     require(config.get('persistent_enabled') is True, 'explicit_persistent_mode_required', 400)
+    if 'notifications' in config:
+        try:
+            app_module('phone_notifications').validate_config(config['notifications'])
+        except (ValueError, TypeError):
+            raise Refused('bad_notifications', 400) from None
     if 'media_player' in config:
         try:
             app_module('phone_player').options(config['media_player'])
@@ -434,6 +439,10 @@ class Gateway:
             self.db.execute('INSERT OR IGNORE INTO preferences VALUES (?, 0, 0)', (phone,))
         self.db.commit()
 
+        self.notifications = None
+        if 'notifications' in config:
+            self.notifications = app_module('phone_notifications').Dispatcher(
+                config['notifications'], self, directory)
         self.player = None
         if config.get('media_player', {}).get('enabled'):
             # Pass this module's helpers explicitly (also works in script mode).
@@ -1196,6 +1205,7 @@ class Gateway:
                 {'id': phone['id'], 'lines': phone['lines'], 'room': phone.get('room'),
                  **self.preference(phone['id']),
                  'motion_image': self.motion_image_admission(phone),
+                 'notification': self.motion_image_admission(phone),
                  'dnd_pending': phone['id'] in self.dnd_pending,
                  'alert': self.latest_alert(phone['id']),
                  'media': media[phone['id']],
@@ -1204,7 +1214,7 @@ class Gateway:
                  'channels': [{'name': item['Channel'], 'uniqueid': item.get('Uniqueid'),
                                'state': item.get('ChannelStateDesc'), 'line': item['Channel'].split('/')[1].split('-')[0]}
                               for item in own_channels(phone, channels)],
-                 'capabilities': ['dial', 'intercom', 'answer', 'hangup', 'speaker_toggle', 'hardware_volume', 'message', 'image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop'] + (['media'] if supported or media[phone['id']]['state'] in ('buffering', 'playing') else []) + (['voice'] if any(
+                 'capabilities': ['dial', 'intercom', 'answer', 'hangup', 'speaker_toggle', 'hardware_volume', 'message', 'notification', 'image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop'] + (['media'] if supported or media[phone['id']]['state'] in ('buffering', 'playing') else []) + (['voice'] if any(
                      profile.phone_id == phone['id'] for profile in self._voice_profiles) else [])}
                 for phone in self.phones.values()]}
 
@@ -1363,8 +1373,13 @@ class Gateway:
         # Keep the API's existing input limit, but honor the handset XML schema.
         # A longer Title makes 7945G reject the entire page with XML Error [4].
         title = text(body.get('title', 'Home phone'), 48)[:32]
-        if action == 'message':
+        if action in ('message', 'notification'):
             root = ET.Element('CiscoIPPhoneText')
+            if action == 'notification':
+                app_id = 'notification_' + secrets.token_hex(16)
+                root.set('appId', app_id)
+                root.set('onAppFocusGained',
+                         f'App:Close:1:{body["idle_close_seconds"]}:{app_id}')
             ET.SubElement(root, 'Title').text = title
             ET.SubElement(root, 'Prompt').text = 'Press Exit to return'
             ET.SubElement(root, 'Text').text = text(body.get('text'), 2000)
@@ -1404,7 +1419,7 @@ class Gateway:
         ET.SubElement(key, 'Position').text = '1'
         uri = self.resource(phone, ET.tostring(root, encoding='utf-8', xml_declaration=True), 'text/xml; charset=utf-8')
         # Manual text foregrounds the page after call/voice admission;
-        # images retain the phone's native idle-only delivery.
+        # images and automatic text retain the phone's native idle-only delivery.
         execute(phone, uri, priority=0 if action == 'message' else 2)
 
     @staticmethod
@@ -1512,7 +1527,7 @@ class Gateway:
     def mutate(self, phone_id, action, body):
         volume_deadline = time.monotonic() + 15 if action == 'hardware_volume' else None
         require(phone_id in self.phones, 'unknown_phone', 404)
-        require(action in ('dial', 'intercom', 'answer', 'hangup', 'speaker', 'hardware_volume', 'message', 'image', 'motion_image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop', 'media_play', 'media_stop')
+        require(action in ('dial', 'intercom', 'answer', 'hangup', 'speaker', 'hardware_volume', 'message', 'notification', 'image', 'motion_image', 'dnd', 'autoanswer', 'ring', 'alert', 'alert_stop', 'media_play', 'media_stop')
                 or self.player is not None and action in app_module('phone_player').ACTIONS,
                 'unknown_action', 404)
         require(isinstance(body, dict), 'json_object_required', 400)
@@ -1533,13 +1548,23 @@ class Gateway:
                     r'PJSIP/' + re.escape(body['line']) + r'-[0-9a-f]+', body['channel'])
                     and isinstance(body['uniqueid'], str)
                     and re.fullmatch(r'[0-9]+\.[0-9]+', body['uniqueid']), 'invalid_media_identity', 400)
-        if action == 'motion_image':
+        if action == 'notification':
+            require({'idempotency_key', 'text'} <= set(body) <= {
+                'idempotency_key', 'text', 'title', 'line', 'idle_close_seconds'},
+                'invalid_notification_request', 400)
+            text(body['text'], 2000)
+            text(body.get('title', 'Home phone'), 48)
+            require(body['text'].strip() and all(
+                not any(0xD800 <= ord(char) <= 0xDFFF or ord(char) in (0xFFFE, 0xFFFF)
+                        for char in value)
+                for value in (body['text'], body.get('title', 'Home phone'))), 'bad_text', 400)
+        if action in ('motion_image', 'notification'):
             body = dict(body)
             body.setdefault('idle_close_seconds', 45)
             require(type(body['idle_close_seconds']) is int and body['idle_close_seconds'] == 45,
                     'bad_idle_close_seconds', 400)
         if 'idle_close_seconds' in body:
-            require(action in ('image', 'motion_image'), 'idle_close_image_only', 400)
+            require(action in ('image', 'motion_image', 'notification'), 'idle_close_image_only', 400)
             require(type(body['idle_close_seconds']) is int
                     and 10 <= body['idle_close_seconds'] <= 120,
                     'bad_idle_close_seconds', 400)
@@ -1590,7 +1615,7 @@ class Gateway:
             # Validate PBX compatibility before even pausing hands-free voice.
             with AMI(self.config['ami']) as ami:
                 require(self.media_supported(ami, [body['source']]), 'media_unavailable')
-        if action == 'motion_image':
+        if action in ('motion_image', 'notification'):
             with self.reserve_motion_image(phone):
                 return self._mutate_reserved(phone, action, body, line)
         # Ordinary calls first retire only a supervised leg, then retain the
@@ -1650,9 +1675,9 @@ class Gateway:
             require(all(endpoints.get(endpoint) not in (None, 'Unavailable', 'Invalid') for endpoint in phone['lines']),
                     'phone_unavailable', 503, before_mutation=True)
             owned = own_channels(phone, channels)
-            if action in ('message', 'image', 'motion_image'):
+            if action in ('message', 'notification', 'image', 'motion_image'):
                 require(not owned, 'phone_busy')
-                if action == 'motion_image':
+                if action in ('motion_image', 'notification'):
                     require(all(endpoints.get(endpoint) == 'Not in use' for endpoint in phone['lines']),
                             'phone_busy')
                     require(not self.preference(phone['id'])['dnd'] and phone['id'] not in self.dnd_pending,
@@ -1907,6 +1932,21 @@ class Handler(BaseHTTPRequestHandler):
         require(source in gateway.config['api_clients'], 'forbidden', 403)
         require(len(self.headers.get_all('Authorization', [])) == 1
                 and constant(self.headers.get('Authorization', ''), 'Bearer ' + gateway.config['api_token']), 'forbidden', 403)
+        if self.path == '/v1/notifications':
+            require(self.command == 'POST', 'not_found', 404)
+            require(gateway.notifications is not None, 'notifications_not_configured', 503)
+            require(self.headers.get('Content-Type', '').split(';')[0] == 'application/json',
+                    'json_required', 400)
+            try:
+                data = json.loads(self.body(16384), object_pairs_hook=voice_object)
+            except (ValueError, UnicodeError):
+                raise Refused('invalid_json', 400) from None
+            require(isinstance(data, dict), 'json_object_required', 400)
+            dry_run = data.pop('dry_run', False)
+            require(type(dry_run) is bool, 'invalid_dry_run', 400)
+            # Dispatcher owns its separate durable claims and does not hold
+            # the gateway lock while calling the existing delivery paths.
+            return self.reply(200, gateway.notifications.dispatch(data, dry_run=dry_run))
         endpoint_match = re.fullmatch(r'/v1/endpoints/(2[0-9]{2})(?:/(call|hangup|dnd))?', self.path)
         if endpoint_match:
             extension, action = endpoint_match.groups()

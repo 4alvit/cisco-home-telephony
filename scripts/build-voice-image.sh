@@ -48,6 +48,7 @@ files = (
     'containers/asterisk/phone_voice_display.py',
     'containers/asterisk/phone_camera_preview.py',
     'containers/asterisk/phone_gateway.py',
+    'containers/asterisk/phone_notifications.py',
     'containers/asterisk/phone_player.py',
     'containers/asterisk/media_runtime.py',
     'containers/asterisk/radio.py',
