@@ -76,6 +76,10 @@ class RenderGatewayTests(unittest.TestCase):
         self.assertTrue(pod['hostNetwork'])
         self.assertEqual(pod['dnsPolicy'], 'ClusterFirstWithHostNet')
         self.assertFalse(pod['automountServiceAccountToken'])
+        self.assertEqual(pod['tolerations'], [
+            {'key': 'node.kubernetes.io/not-ready', 'operator': 'Exists', 'effect': 'NoExecute'},
+            {'key': 'node.kubernetes.io/unreachable', 'operator': 'Exists', 'effect': 'NoExecute'},
+        ])
         terms = pod['affinity']['nodeAffinity'][
             'requiredDuringSchedulingIgnoredDuringExecution']['nodeSelectorTerms']
         self.assertEqual(terms[0]['matchFields'][0]['values'], ['example-node'])

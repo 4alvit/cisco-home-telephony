@@ -2,6 +2,7 @@
 """Render Kubernetes JSON (valid YAML) without cluster access or secret output."""
 import argparse
 import base64
+import copy
 import hashlib
 import importlib.util
 import ipaddress
@@ -198,6 +199,36 @@ def binary_secret(namespace, prefix, files):
         "type": "Opaque", "immutable": True, "data": data}
 
 
+def fixed_node_tolerations(existing=None):
+    """Keep fixed-node services running when only the control-plane link fails.
+
+    These singletons cannot fail over to another node. Replace the admission
+    controller's finite NoExecute defaults, retaining unrelated operator rules.
+    A finite wildcard rule would still evict the Pod: refuse it rather than
+    silently broadening the operator's policy for every node taint.
+    """
+    keys = ("node.kubernetes.io/not-ready", "node.kubernetes.io/unreachable")
+    if existing is None:
+        existing = []
+    if not isinstance(existing, list) or any(not isinstance(row, dict) for row in existing):
+        raise ValueError("invalid_existing_tolerations")
+    result = []
+    for row in existing:
+        effect = row.get("effect", "")
+        key = row.get("key", "")
+        matches = (row.get("operator", "Equal") == "Exists"
+                   or row.get("value", "") == "")
+        if effect == "NoExecute" and key in keys and matches:
+            continue
+        if ("tolerationSeconds" in row and effect in ("", "NoExecute")
+                and matches and (key in keys or
+                    (not key and row.get("operator") == "Exists"))):
+            raise ValueError("finite_wildcard_toleration_conflicts_with_fixed_node_recovery")
+        result.append(copy.deepcopy(row))
+    result.extend({"key": key, "operator": "Exists", "effect": "NoExecute"} for key in keys)
+    return result
+
+
 def pod_base(site):
     result = {"hostNetwork": True, "dnsPolicy": "ClusterFirstWithHostNet", "automountServiceAccountToken": False,
         "terminationGracePeriodSeconds": 45,
@@ -217,6 +248,7 @@ def render_core(site, configs):
     ns = site["namespace"]
     name, config = secret(ns, "asterisk-config", configs)
     spec = pod_base(site)
+    spec["tolerations"] = fixed_node_tolerations()
     spec["securityContext"].update({"runAsNonRoot": True, "runAsUser": 10001, "runAsGroup": 10001, "fsGroup": 10001})
     spec["containers"] = [{"name": "asterisk", "image": site["asterisk_image"], "imagePullPolicy": "IfNotPresent",
         "securityContext": {"allowPrivilegeEscalation": False, "readOnlyRootFilesystem": True, "capabilities": {"drop": ["ALL"]}},
@@ -300,6 +332,8 @@ def _render_tftp(site, configs, wallpaper=None, *, profiles_only=False):
     name, config = secret(ns, "cisco-profiles" if profiles_only else "cisco-provision", configs)
     spec = pod_base(site)
     spec["restartPolicy"] = "Always" if profiles_only else "Never"
+    if profiles_only:
+        spec["tolerations"] = fixed_node_tolerations()
     spec["initContainers"] = [{"name": "stage", "image": site["tftp_image"], "command": ["/bin/sh", "-ec", """
         mkdir -p /served/root
         for f in /firmware/*; do

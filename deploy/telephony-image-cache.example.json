@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "platform": "linux/amd64",
+  "archives": [
+    {
+      "path": "/var/lib/rancher/k3s/agent/images/cisco-telephony.tar",
+      "sha256": "REPLACE_WITH_APPROVED_ARCHIVE_SHA256",
+      "images": [
+        "localhost/cisco-home-telephony/asterisk@sha256:REPLACE_WITH_APPROVED_MANIFEST_SHA256",
+        "localhost/cisco-home-telephony/tftp@sha256:REPLACE_WITH_APPROVED_MANIFEST_SHA256",
+        "localhost/cisco-home-telephony/voice-wake@sha256:REPLACE_WITH_APPROVED_MANIFEST_SHA256"
+      ]
+    }
+  ]
+}

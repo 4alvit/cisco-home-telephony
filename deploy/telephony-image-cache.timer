@@ -1,0 +1,11 @@
+[Unit]
+Description=Check approved telephony image availability after boot and every two minutes
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=120
+AccuracySec=10
+Unit=telephony-image-cache.service
+
+[Install]
+WantedBy=timers.target

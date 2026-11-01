@@ -1,4 +1,5 @@
 import importlib.util
+import copy
 import hashlib
 import json
 import os
@@ -49,6 +50,39 @@ class K3sSafetyTests(unittest.TestCase):
         self.assertFalse(pod["automountServiceAccountToken"])
         self.assertTrue(pod["securityContext"]["runAsNonRoot"])
         self.assertEqual(pod["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0]["matchFields"][0]["values"], ["test-node"])
+
+    def test_fixed_node_service_outlasts_default_partition_eviction_window(self):
+        pod = render.render_core(fixture(), configs())["items"][-1]["spec"]["template"]["spec"]
+        self.assertEqual(pod["tolerations"], [
+            {"key": "node.kubernetes.io/not-ready", "operator": "Exists", "effect": "NoExecute"},
+            {"key": "node.kubernetes.io/unreachable", "operator": "Exists", "effect": "NoExecute"},
+        ])
+        # Bounded firmware work is deliberately outside this persistent-service policy.
+        firmware = render.render_tftp(fixture(), {"SEP000000000001.cnf.xml": "<device/>"})
+        self.assertNotIn("tolerations", firmware["items"][-1]["spec"]["template"]["spec"])
+
+    def test_fixed_node_tolerations_replace_finite_defaults_without_mutating_other_rules(self):
+        existing = [
+            {"key": "dedicated", "operator": "Equal", "value": "voice", "effect": "NoSchedule"},
+            {"key": "maintenance", "operator": "Exists", "effect": "NoExecute", "tolerationSeconds": 60},
+            {"key": "node.kubernetes.io/unreachable", "operator": "Exists", "effect": "NoExecute", "tolerationSeconds": 300},
+            {"key": "node.kubernetes.io/not-ready", "effect": "NoExecute", "tolerationSeconds": 300},
+        ]
+        before = copy.deepcopy(existing)
+        result = render.fixed_node_tolerations(existing)
+        self.assertEqual(result[:2], existing[:2])
+        self.assertEqual(result[2:], render.fixed_node_tolerations())
+        self.assertEqual(render.fixed_node_tolerations(result), result)
+        result[0]["value"] = "changed"
+        self.assertEqual(existing, before)
+
+    def test_finite_wildcard_cannot_silently_defeat_outage_tolerance(self):
+        for row in ({"operator": "Exists", "effect": "NoExecute", "tolerationSeconds": 300},
+                    {"key": "node.kubernetes.io/unreachable", "operator": "Exists", "tolerationSeconds": 300}):
+            with self.subTest(row=row), self.assertRaisesRegex(ValueError, "finite_wildcard"):
+                render.fixed_node_tolerations([row])
+        with self.assertRaisesRegex(ValueError, "invalid_existing_tolerations"):
+            render.fixed_node_tolerations([None])
 
     def test_credentials_change_secret_and_old_revision_is_restorable(self):
         before = render.render_core(fixture(), configs())
