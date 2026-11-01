@@ -129,6 +129,37 @@ class GatewaySharedReservationTests(unittest.TestCase):
         ami.assert_not_called()
         self.sent.assert_not_called()
 
+    def test_automatic_notification_holds_external_voice_fence_during_display(self):
+        self.attach_idle_supervisor()
+        attempts = []
+
+        def display(_phone, action, body):
+            self.assertEqual(action, 'notification')
+            self.assertEqual(body['idle_close_seconds'], 45)
+            try:
+                self.fixture.start(self.wake)
+            except wake_fixture.control.ControlError as error:
+                attempts.append(error.reason)
+
+        with mock.patch.object(self.gateway, 'notify', side_effect=display):
+            self.gateway.mutate('201', 'notification', {
+                'idempotency_key': 'notification-reserved', 'text': 'One event'})
+        self.assertEqual(attempts, ['voice_phone_busy'])
+        self.assertEqual(self.fixture.launches, [])
+        self.fixture.start(self.wake)
+        self.assertEqual(len(self.fixture.launches), 1)
+
+    def test_automatic_notification_never_preempts_active_external_voice(self):
+        self.attach_idle_supervisor()
+        self.fixture.start(self.wake)
+        with mock.patch.object(gateway, 'AMI') as ami:
+            with self.assertRaises(gateway.Refused) as caught:
+                self.gateway.mutate('201', 'notification', {
+                    'idempotency_key': 'notification-external-busy', 'text': 'One event'})
+        self.assertEqual(caught.exception.reason, 'voice_phone_busy')
+        ami.assert_not_called()
+        self.sent.assert_not_called()
+
     def test_motion_display_failure_releases_both_ownership_fences(self):
         supervisor = self.attach_idle_supervisor()
         with mock.patch.object(self.gateway, 'notify', side_effect=OSError('synthetic timeout')):

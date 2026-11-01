@@ -1,0 +1,72 @@
+# Optional Home Assistant package. All addresses, tokens and device mappings
+# belong in private configuration. See docs/automatic-notifications.md.
+# This consumer does not subscribe to all notify calls or create any producer.
+rest_command:
+  cisco_forward_notification:
+    url: !secret cisco_notifications_url
+    method: post
+    headers:
+      Authorization: !secret cisco_gateway_authorization
+    content_type: application/json
+    timeout: 60
+    # Keep notification as one mapping. Rendering individual text fields as
+    # native templates can convert a message such as "123" into an integer.
+    payload: >-
+      {{ dict(notification, dry_run=dry_run | default(false)) | to_json }}
+
+automation:
+  - id: cisco_forward_selected_text_notifications
+    alias: "Notifications: forward selected text to local devices"
+    description: >-
+      Optional delivery after the original notification. The gateway owns the
+      private destination allowlist, freshness checks and durable deduplication.
+      Never automatically retry an uncertain result.
+    triggers:
+      - trigger: event
+        event_type: cisco_notification_requested
+    conditions:
+      - condition: template
+        value_template: >-
+          {% set event = trigger.event.data.get('notification', trigger.event.data)
+             if trigger.event.data is mapping else {} %}
+          {{ event is mapping and event.source is defined
+            and event.title is defined and event.message is defined }}
+    actions:
+      - action: rest_command.cisco_forward_notification
+        data:
+          notification: >-
+            {% set event = trigger.event.data.get('notification', trigger.event.data) %}
+            {{ {
+              'source': event.source,
+              'event_id': event.get('event_id', trigger.event.context.id ~ ':' ~ as_timestamp(trigger.event.time_fired)),
+              'event_at': event.get('event_at', as_timestamp(trigger.event.time_fired)),
+              'title': event.title,
+              'message': event.message
+            } }}
+        response_variable: forwarding_result
+        continue_on_error: true
+      - if:
+          - condition: template
+            value_template: >-
+              {% if forwarding_result is not defined or forwarding_result is not mapping %}
+                {{ true }}
+              {% else %}
+                {% set content = forwarding_result.get('content') %}
+                {{ forwarding_result.get('status') != 200
+                  or content is not mapping
+                  or content.get('status') not in ['ok'] }}
+              {% endif %}
+        then:
+          - action: system_log.write
+            data:
+              level: warning
+              logger: homeassistant.cisco_notifications
+              message: >-
+                Optional device notification forwarding failed or was partly
+                refused. Inspect gateway status; do not retry automatically.
+            continue_on_error: true
+    mode: parallel
+    max: 4
+    max_exceeded: silent
+    trace:
+      stored_traces: 0

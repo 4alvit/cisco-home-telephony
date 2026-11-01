@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="780" viewBox="0 0 1200 780" role="img" aria-labelledby="title desc">
+  <title id="title">Automatic notifications: one event, guarded device delivery</title>
+  <desc id="desc">The original Home Assistant notification runs first. An explicitly selected copy reaches the existing gateway through a separate event consumer. Private source and device rules, durable duplicate prevention, freshness checks and device idle checks guard Cisco text screens and optional direct Echo speech. Offline or busy devices are skipped without replay or SIP fallback.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#0b1630"/><stop offset="1" stop-color="#162747"/></linearGradient>
+    <linearGradient id="cyan" x2="1" y2="1"><stop stop-color="#10b7ce"/><stop offset="1" stop-color="#1674bd"/></linearGradient>
+    <linearGradient id="violet" x2="1" y2="1"><stop stop-color="#865fe8"/><stop offset="1" stop-color="#5f48b4"/></linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#83a4c9"/></marker>
+    <style>
+      text{font-family:Arial;fill:#edf5ff}
+      .title{font-size:30px;font-weight:700}.subtitle{font-size:17px;fill:#b8cce5}
+      .heading{font-size:21px;font-weight:700}.body{font-size:16px;fill:#d2e2f3}
+      .small{font-size:14px;fill:#c3d5ed}.badge{font-size:13px;font-weight:700;letter-spacing:1px}
+      .line{fill:none;stroke:#83a4c9;stroke-width:3;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="780" rx="24" fill="url(#bg)"/>
+  <text x="48" y="61" class="title">One notification. The right devices.</text>
+  <text x="48" y="93" class="subtitle">Existing Home Assistant delivery first · explicitly selected local copies</text>
+
+  <rect x="48" y="132" width="340" height="148" rx="18" fill="url(#cyan)"/>
+  <text x="70" y="166" class="badge">01 / ORIGINAL DELIVERY</text>
+  <text x="70" y="201" class="heading">Home Assistant notification</text>
+  <text x="70" y="233" class="body">Keep mobile, browser and TV routes.</text>
+  <text x="70" y="258" class="body">A failed optional copy cannot block them.</text>
+
+  <path d="M 388 207 H 438" class="line"/>
+  <rect x="449" y="132" width="703" height="148" rx="18" fill="#203755" stroke="#375678"/>
+  <text x="473" y="166" class="badge">02 / OPT-IN COPY</text>
+  <text x="473" y="201" class="heading">also_devices → separate event consumer</text>
+  <text x="473" y="233" class="body">Original event ID + time + source category + title + message</text>
+  <text x="473" y="258" class="body">One copy per event · separate from also_chrome · no retry loop</text>
+
+  <path d="M 801 280 V 317" class="line"/>
+  <rect x="48" y="331" width="1104" height="142" rx="18" fill="#163c3d" stroke="#277c72"/>
+  <text x="72" y="365" class="badge" fill="#8defcd">03 / EXISTING GATEWAY · POST /v1/notifications</text>
+  <text x="72" y="405" class="heading">Private routing + durable claims before delivery</text>
+  <text x="72" y="437" class="body">Allowed sources · physical-device deduplication · event expiry · cooldown · fresh device state</text>
+  <rect x="866" y="355" width="261" height="37" rx="18" fill="#245b51"/>
+  <text x="886" y="379" class="small">No message text in delivery history</text>
+
+  <path d="M 331 473 V 516" class="line"/>
+  <path d="M 866 473 V 516" class="line"/>
+  <rect x="48" y="530" width="534" height="150" rx="18" fill="#1b4161" stroke="#2d7fa1"/>
+  <text x="72" y="566" class="badge">04A / CISCO SCREEN</text>
+  <text x="72" y="601" class="heading">Idle text notification</text>
+  <text x="72" y="633" class="body">One physical handset · app idle timeout</text>
+  <text x="72" y="658" class="body">Skip offline, busy, DND or active-alert devices.</text>
+
+  <rect x="618" y="530" width="534" height="150" rx="18" fill="url(#violet)"/>
+  <text x="642" y="566" class="badge">04B / CONVERTED ECHO</text>
+  <text x="642" y="601" class="heading">Optional direct announcement</text>
+  <text x="642" y="633" class="body">Configured HA voice · speech opt-in · quiet hours</text>
+  <text x="642" y="658" class="body">Atomic idle guard · no fallback SIP call</text>
+
+  <rect x="48" y="707" width="1104" height="43" rx="12" fill="#0c1930"/>
+  <text x="70" y="735" class="small">Missed or uncertain delivery is not replayed. No call interruption, microphone activation or delayed catch-up.</text>
+</svg>

@@ -71,8 +71,10 @@ class GatewayTests(unittest.TestCase):
             {'extension': '210', 'room': None, 'online': False}])
         self.assertEqual(set(listing['phones'][0]), {
             'id', 'lines', 'room', 'dnd', 'autoanswer', 'dnd_pending', 'alert', 'online', 'channels', 'capabilities',
-            'motion_image', 'media'})
+            'motion_image', 'notification', 'media'})
         self.assertEqual(listing['phones'][0]['motion_image'], {'eligible': True, 'reason': None})
+        self.assertEqual(listing['phones'][0]['notification'], {'eligible': True, 'reason': None})
+        self.assertIn('notification', listing['phones'][0]['capabilities'])
         encoded = json.dumps(listing)
         for private in ('a' * 48, 'b' * 48, 'u' * 24, 'p' * 24, 'c' * 64,
                         '192.168.50.', 'SEP001122334455'):
@@ -387,6 +389,78 @@ class GatewayTests(unittest.TestCase):
                     self.assertLessEqual(len(document.findtext('Prompt')), 32)
                     if action == 'message':
                         self.assertEqual(document.findtext('Text'), body['text'])
+
+    def test_automatic_notification_is_idle_only_scoped_and_idempotent(self):
+        self.server.dnd_pending.clear()
+        body = {'idempotency_key': 'notification-event-01', 'title': 'A' * 48,
+                'text': 'A literal <message> & Unicode: Привет!'}
+        result = self.server.mutate('201', 'notification', body)
+        self.assertEqual(result['status'], 'accepted')
+        push = self.send.call_args
+        self.assertEqual(push.kwargs, {'priority': 2})
+        path = gateway.parse.urlsplit(push.args[1]).path
+        document = ET.fromstring(self.server.resources[('201', path)][1])
+        self.assertEqual(document.tag, 'CiscoIPPhoneText')
+        self.assertEqual(document.findtext('Text'), body['text'])
+        self.assertEqual(document.findtext('Title'), 'A' * 32)
+        app_id = document.get('appId')
+        self.assertRegex(app_id, r'^notification_[0-9a-f]{32}$')
+        self.assertEqual(document.get('onAppFocusGained'), f'App:Close:1:45:{app_id}')
+        self.assertEqual(document.findtext('SoftKeyItem/URL'), 'SoftKey:Exit')
+        self.assertEqual(document.findall('.//ExecuteItem'), [])
+        self.assertEqual(self.server.mutate('201', 'notification', body), result)
+        self.assertEqual(self.send.call_count, 1)
+        self.assertEqual(FakeAMI.calls, [])
+        self.assertNotIn(body['text'], self.server.db.execute(
+            'SELECT response FROM operations WHERE key=?', (body['idempotency_key'],)).fetchone()[0])
+
+    def test_automatic_notification_rechecks_busy_dnd_alert_and_availability(self):
+        body = {'idempotency_key': 'notification-guard', 'text': 'One event'}
+        for reason in ('dnd', 'dnd_pending', 'channel', 'endpoint', 'offline', 'alert'):
+            with self.subTest(reason=reason):
+                self.server.db.execute('UPDATE preferences SET dnd=?', (reason == 'dnd',))
+                self.server.dnd_pending = {'201'} if reason == 'dnd_pending' else set()
+                FakeAMI.channels = ([{'Channel': 'PJSIP/202-abcd', 'Uniqueid': 'call'}]
+                                    if reason == 'channel' else [])
+                FakeAMI.endpoints['202'] = ('In use' if reason == 'endpoint' else
+                                            'Unavailable' if reason == 'offline' else 'Not in use')
+                alerts = [{'phone': '201', 'state': 'ringing'}] if reason == 'alert' else []
+                with patch.object(self.server, 'reconcile_alerts'), \
+                     patch.object(self.server, 'alerts', return_value=alerts):
+                    with self.assertRaises(gateway.Refused):
+                        self.server.mutate('201', 'notification', body)
+        self.send.assert_not_called()
+        self.assertEqual(self.server.resources, {})
+
+    def test_automatic_notification_rejects_invalid_payload_before_any_io(self):
+        invalid = [
+            {}, {'text': ''}, {'text': ' \t\n'}, {'text': 'x' * 2001},
+            {'text': '\ud800'}, {'text': '\ufffe'}, {'text': 'x', 'title': '\udfff'},
+            {'text': 'x', 'number': '600'}, {'text': 'x', 'title': 'x' * 49},
+            *({'text': 'x', 'idle_close_seconds': seconds} for seconds in
+              (None, True, 44, 46, '45', 45.0)),
+        ]
+        for values in invalid:
+            with self.subTest(values=repr(values)), patch.object(gateway, 'AMI') as ami:
+                with self.assertRaises(gateway.Refused):
+                    self.server.mutate('201', 'notification', {
+                        'idempotency_key': 'notification-invalid', **values})
+                ami.assert_not_called()
+        self.send.assert_not_called()
+        self.assertEqual(self.server.resources, {})
+        self.assertEqual(self.server.db.execute('SELECT count(*) FROM operations').fetchone()[0], 0)
+
+    def test_automatic_notification_unknown_outcome_never_resends(self):
+        self.server.dnd_pending.clear()
+        self.send.side_effect = OSError('response lost')
+        body = {'idempotency_key': 'notification-unknown', 'text': 'One event'}
+        with self.assertRaises(OSError):
+            self.server.mutate('201', 'notification', body)
+        with self.assertRaisesRegex(gateway.Refused, 'previous_action_outcome_unknown'):
+            self.server.mutate('201', 'notification', body)
+        self.assertEqual(self.send.call_count, 1)
+        self.assertEqual(self.send.call_args.kwargs, {'priority': 2})
+        self.assertEqual(FakeAMI.calls, [])
 
     def test_foreground_message_still_rejects_a_call_on_either_line(self):
         for line in ('201', '202'):

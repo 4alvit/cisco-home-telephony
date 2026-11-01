@@ -50,13 +50,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends libopus-dev \
     && cp /tmp/opus-source.tar.gz /stage/usr/share/doc/asterisk-opus-open-source/source.tar.gz
 FROM ${DEBIAN_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates libedit2 libssl3 libxml2 libuuid1 libsqlite3-0 libncurses6 libopus0 libunbound8 python3 python3-pil ffmpeg \
+    ca-certificates tzdata libedit2 libssl3 libxml2 libuuid1 libsqlite3-0 libncurses6 libopus0 libunbound8 python3 python3-pil ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 10001 asterisk && useradd -u 10001 -g 10001 -M -s /usr/sbin/nologin asterisk
 COPY --from=build /stage/ /
 COPY radio.py phone_services.py dial_audio.py radio-catalog.json /var/lib/asterisk/agi-bin/
 COPY phone_gateway.py /usr/local/lib/cisco-phone-gateway.py
-COPY phone_apps.py phone_apps_ha.py phone_camera_preview.py phone_voice_display.py /usr/local/lib/
+COPY phone_apps.py phone_apps_ha.py phone_camera_preview.py phone_voice_display.py phone_notifications.py /usr/local/lib/
 COPY phone_player.py media_runtime.py radio.py radio-catalog.json /usr/local/lib/
 RUN chmod 0555 /var/lib/asterisk/agi-bin/radio.py /var/lib/asterisk/agi-bin/phone_services.py \
     /var/lib/asterisk/agi-bin/dial_audio.py \

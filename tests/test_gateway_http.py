@@ -6,7 +6,7 @@ import tempfile
 import threading
 import unittest
 from urllib.parse import urlencode
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from test_phone_gateway import FakeAMI, config, gateway
 
 
@@ -49,6 +49,37 @@ class HTTPTests(unittest.TestCase):
             self.gateway.config['api_clients'] = ['192.168.50.11']
             headers['X-Forwarded-For'] = '192.168.50.11'
             self.assertEqual(self.request(self.api, '/v1/phones', headers=headers)[0], 403)
+
+    def test_notifications_ingress_authentication_framing_and_dry_run(self):
+        dispatcher = Mock()
+        dispatcher.dispatch.return_value = {'status': 'ok', 'accepted': []}
+        self.gateway.notifications = dispatcher
+        headers = {'Authorization': 'Bearer ' + config()['api_token'],
+                   'Content-Type': 'application/json'}
+        event = {'source': 'general', 'event_id': 'event-12345', 'event_at': 123,
+                 'message': 'A text with "quotes" and <tags>.', 'dry_run': True}
+        body = json.dumps(event)
+        self.assertEqual(self.request(self.api, '/v1/notifications', 'POST', body)[0], 403)
+        self.assertEqual(self.request(self.api, '/v1/notifications', headers=headers)[0], 404)
+        for bad in ('[]', '{', '{"dry_run":true,"dry_run":false}', '{"dry_run":1}'):
+            self.assertEqual(self.request(self.api, '/v1/notifications', 'POST', bad, headers)[0], 400)
+        dispatcher.dispatch.assert_not_called()
+        status, raw, cache = self.request(self.api, '/v1/notifications', 'POST', body, headers)
+        self.assertEqual((status, cache), (200, 'no-store'))
+        self.assertEqual(json.loads(raw), {'status': 'ok', 'accepted': []})
+        event.pop('dry_run')
+        dispatcher.dispatch.assert_called_once_with(event, dry_run=True)
+        self.gateway.notifications = None
+        self.assertEqual(self.request(self.api, '/v1/notifications', 'POST', body, headers)[0], 503)
+
+    def test_notification_configuration_is_opt_in_and_validated(self):
+        self.assertIsNone(self.gateway.notifications)
+        value = config()
+        value['notifications'] = {'enabled': 'yes'}
+        with self.assertRaises(gateway.Refused):
+            gateway.validate(value)
+        value['notifications'] = {}
+        self.assertEqual(gateway.validate(value), value)
 
     def test_cisco_actual_auth_fields_and_device_identity(self):
         fields = {'UserID': self.phone['username'], 'Password': self.phone['password'], 'devicename': self.phone['device']}

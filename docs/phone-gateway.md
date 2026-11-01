@@ -129,8 +129,8 @@ automatically after recovery.
 All API requests require `Authorization: Bearer <private-token>` from a configured
 HA source. `GET /v1/phones` returns stable primary IDs, assigned lines, live AMI
 registration/call state, PBX DND, auto-answer, the latest `alert` and capability names. It does not
-return credentials. The `motion_image` object reports current voice-guard
-eligibility (`eligible` and `reason`); it does not override the separate online,
+return credentials. The `motion_image` and `notification` objects report current voice-guard
+eligibility (`eligible` and `reason`); these do not override the separate online,
 call, DND or alert checks. Every mutation is a JSON POST to
 `/v1/phones/<primary-line>/<action>` with a unique `idempotency_key`.
 
@@ -168,6 +168,22 @@ call, DND or alert checks. Every mutation is a JSON POST to
   `Priority=0` to foreground its page, replacing a visible menu or motion image.
   Existing fresh call and voice-ownership checks still apply. The plain text
   page issues no call, speaker or audio commands.
+- `notification`: `text` (1–2000 characters), optional `title` (1–48 characters,
+  shortened to 32 for the screen) and optional owned `line`. This is the passive
+  text route for automatic forwarding. It is separately advertised as the
+  `notification` capability; do not substitute manual `message` on older
+  gateways. The gateway rechecks both phone lines, DND including pending writes,
+  active alerts, and voice ownership before dispatch. It never interrupts an
+  assistant, places a call, operates the speaker, or plays a sound. Native
+  `Priority=2` leaves a busy phone interface alone. Each text page receives a
+  unique application ID and a scoped native close request after 45 seconds of
+  application idle time. Optional `idle_close_seconds` must therefore be the
+  integer `45`. Interaction can delay closing; acceptance does not prove display.
+  Forwarders must use a stable per-event, per-phone `idempotency_key`, drop stale
+  events, and avoid automatic retries after an unknown outcome. The gateway
+  does not persist message text in its operation journal. An accepted page is
+  held in memory for up to 120 seconds so the exact phone can fetch it.
+  Other request fields and blank/invalid XML text are rejected before any I/O.
 - `image`: `title`, `image_base64`; PNG/JPEG up to2MiB and16million source pixels.
   Images retain native idle-only `Priority=2` delivery.
   Optional `idle_close_seconds` is an integer from 10 to 120. It assigns a unique

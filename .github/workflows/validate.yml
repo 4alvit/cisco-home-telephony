@@ -54,7 +54,7 @@ jobs:
         run: |
           python3 -m venv .venv
           .venv/bin/python -m pip install --disable-pip-version-check \
-            'numpy>=1.26,<3' Pillow -r voice_assistant/requirements-websocket.txt
+            'numpy>=1.26,<3' Pillow PyYAML Jinja2 -r voice_assistant/requirements-websocket.txt
           if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
             sudo apt-get update
             sudo apt-get install -y --no-install-recommends ffmpeg

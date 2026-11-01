@@ -300,6 +300,11 @@ installation of the existing integration and diagrams live in the public
 repository. It is managed through the existing
 [organization Terraform](https://github.com/4alvit/terraform-github-ha-homelab/blob/main/asterisk-telephony.tf).
 
+[Automatic text notifications](docs/automatic-notifications.md) adds explicitly
+selected copies to idle Cisco screens and optional direct announcements on
+converted Echo devices. Its HA package and private-configuration sample keep
+screen delivery and speech separately configurable.
+
 For Assist, the image includes an Opus transcoder built from source: Cisco uses
 G.711 while native Home Assistant VoIP uses Opus. AMI is disabled by default;
 `deploy/site.ha.example.json` shows how to enable it explicitly.
