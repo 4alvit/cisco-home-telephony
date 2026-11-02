@@ -11,12 +11,15 @@ SPEC.loader.exec_module(security)
 
 
 def report():
-    return {'SchemaVersion': 2, 'ArtifactType': 'container_image', 'Results': [
+    return {'SchemaVersion': 2, 'ArtifactType': 'container_image',
+            'Metadata': {'OS': {'Family': 'debian', 'Name': '13.7'}}, 'Results': [
         {'Class': 'os-pkgs', 'Type': 'debian', 'Packages': [
-            {'Name': name, 'Version': version, 'Release': release}
+            {'Name': name, 'Version': version, 'Release': release,
+             'Epoch': security.EXACT_EPOCHS.get(name, 0)}
             for name, (version, release) in security.EXACT_PACKAGES.items()]},
         {'Class': 'lang-pkgs', 'Type': 'python-pkg', 'Packages': [
-            {'Name': 'aiohttp', 'Version': '3.14.0'}]},
+            {'Name': 'aiohttp', 'Version': '3.14.0'},
+            {'Name': 'Pillow', 'Version': '13.0.0'}]},
     ]}
 
 
@@ -53,7 +56,7 @@ class ImageSecurityTests(unittest.TestCase):
         self.assertFalse(security.verify(data)['passed'])
 
     def test_all_exact_native_fixes_are_required(self):
-        for index in range(3):
+        for index in range(len(security.EXACT_PACKAGES)):
             with self.subTest(index=index):
                 data = report(); data['Results'][0]['Packages'][index]['Release'] = 'old'
                 self.assertFalse(security.verify(data)['passed'])
@@ -61,6 +64,64 @@ class ImageSecurityTests(unittest.TestCase):
                 self.assertFalse(security.verify(data)['passed'])
                 data = report(); data['Results'][0]['Packages'].append(copy.deepcopy(data['Results'][0]['Packages'][index]))
                 self.assertFalse(security.verify(data)['passed'])
+
+    def test_asterisk_profile_requires_native_and_python_inventory(self):
+        data = report()
+        data['Results'].pop()
+        with self.assertRaises(ValueError):
+            security.verify(data, profile='asterisk')
+        with self.assertRaises(ValueError):
+            security.verify(data)
+        data = report()
+        data['Results'][1]['Vulnerabilities'] = [
+            {'VulnerabilityID': 'CVE-example', 'PkgName': 'example', 'Severity': 'HIGH'}]
+        self.assertFalse(security.verify(data, profile='asterisk')['passed'])
+
+    def test_asterisk_requires_one_reviewed_upstream_pillow(self):
+        self.assertTrue(security.verify(report(), profile='asterisk')['passed'])
+        for mutation in ('missing', 'outdated', 'duplicate', 'debian'):
+            with self.subTest(mutation=mutation):
+                data = report()
+                packages = data['Results'][1]['Packages']
+                pillow = next(p for p in packages if p['Name'] == 'Pillow')
+                if mutation == 'missing': packages.remove(pillow)
+                if mutation == 'outdated': pillow['Version'] = '11.1.0'
+                if mutation == 'duplicate': packages.append(copy.deepcopy(pillow))
+                if mutation == 'debian':
+                    data['Results'][0]['Packages'].append({'Name': 'python3-pil', 'Version': '11.1.0',
+                                                            'Release': '5+deb13u4', 'SrcName': 'pillow'})
+                self.assertFalse(security.verify(data, profile='asterisk')['passed'])
+
+    def test_epoch_is_part_of_the_reviewed_ffmpeg_package_identity(self):
+        data = report()
+        package = next(p for p in data['Results'][0]['Packages'] if p['Name'] == 'ffmpeg')
+        package.pop('Epoch')
+        self.assertFalse(security.verify(data)['passed'])
+
+    def test_old_mbedtls_is_rejected_even_if_scanner_reports_no_advisory(self):
+        data = report()
+        data['Results'][0]['Packages'].append({'Name': 'libmbedcrypto7', 'Version': '2.28.3',
+                                                'Release': '1', 'SrcName': 'mbedtls'})
+        result = security.verify(data)
+        self.assertFalse(result['passed'])
+        self.assertTrue(any('EOL Mbed TLS' in finding for finding in result['blocking_findings']))
+
+    def test_unreviewed_distribution_or_eol_metadata_is_rejected(self):
+        for value in (None, {}, {'Family': 'debian', 'Name': '12.15'},
+                      {'Family': 'debian', 'Name': '13.7', 'EOSL': True},
+                      {'Family': 'alpine', 'Name': '13.7'}, {'Family': 'debian', 'Name': '13-unknown'}):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                data = report()
+                data['Metadata']['OS'] = value
+                security.verify(data)
+
+    def test_malformed_package_names_and_versions_fail_cleanly(self):
+        for key in ('Name', 'Version'):
+            for value in (1, {}, [], True, None, ''):
+                with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                    data = report()
+                    data['Results'][0]['Packages'][0][key] = value
+                    security.verify(data)
 
     def test_incomplete_evidence_fails_closed(self):
         mutations = [lambda x: x.pop('Results'), lambda x: x.update(Results=[]),

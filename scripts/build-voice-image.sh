@@ -15,12 +15,12 @@ docker info >/dev/null
 if [[ -n "${PYTHON_IMAGE:-}" ]]; then
     base=$PYTHON_IMAGE
 else
-    digest=$(docker buildx imagetools inspect python:3.12-slim-bookworm --format '{{.Manifest.Digest}}')
+    digest=$(docker buildx imagetools inspect python:3.12-slim-trixie --format '{{.Manifest.Digest}}')
     [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo 'Could not resolve Python digest' >&2; exit 1; }
-    base="python:3.12-slim-bookworm@$digest"
+    base="python:3.12-slim-trixie@$digest"
 fi
-[[ "$base" =~ ^python:3\.(11|12)-slim-bookworm@sha256:[0-9a-f]{64}$ ]] || {
-    echo 'PYTHON_IMAGE must be an official Python 3.11/3.12 slim-bookworm digest reference' >&2
+[[ "$base" =~ ^python:3\.(11|12)-slim-trixie@sha256:[0-9a-f]{64}$ ]] || {
+    echo 'PYTHON_IMAGE must be an official Python 3.11/3.12 slim-trixie digest reference' >&2
     exit 2
 }
 
@@ -84,7 +84,7 @@ for relative in files:
 PY
 
 printf 'Pinned base: %s\n' "$base"
-printf 'Debian package snapshot: 20261019T000000Z\n'
+printf 'Debian package snapshot: 20261101T000000Z\n'
 docker build --platform "$platform" --build-arg "PYTHON_IMAGE=$base" \
     -f "$context/containers/voice/Dockerfile" -t "$prefix/voice:pilot" "$context"
 bash scripts/smoke-voice-image.sh "$prefix/voice:pilot"

@@ -67,6 +67,13 @@ jobs:
             | tee .build/wake-build.log
           tail -n 1 .build/wake-build.log > .build/wake-image-artifacts/receipt.json
           python3 -c 'import json; r=json.load(open(".build/wake-image-artifacts/receipt.json")); assert r["smoke_passed"] and not r["private_models_included"]'
+      - name: Verify the shared media contract in the final wake image
+        run: |
+          docker run --rm --pull never --network none --read-only \
+            --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges \
+            --pids-limit 128 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+            --entrypoint python3 -i cisco-wake-ci/voice-wake:pilot - < tests/test_ffmpeg_runtime_contract.py
       - name: Scan the complete wake runtime image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

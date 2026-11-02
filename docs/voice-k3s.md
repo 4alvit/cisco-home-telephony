@@ -91,9 +91,9 @@ bash scripts/build-voice-image.sh cisco-home-ci
 ```
 
 The build script tags `PREFIX/voice:pilot`, runs the smoke check automatically,
-and never pushes it. Its default base is `python:3.12-slim-bookworm`, resolved
+and never pushes it. Its default base is `python:3.12-slim-trixie`, resolved
 to an immutable digest before building. `PYTHON_IMAGE` can select a reviewed
-official Python 3.11 or 3.12 `slim-bookworm@sha256:...` reference. The locked
+official Python 3.11 or 3.12 `slim-trixie@sha256:...` reference. The locked
 runtime supports those two Python versions on Linux amd64 and arm64;
 `BUILD_PLATFORM` defaults to `linux/amd64` and can select `linux/arm64`.
 The build context contains only approved public source and runtime files.

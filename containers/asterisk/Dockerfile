@@ -1,7 +1,46 @@
 # syntax=docker/dockerfile:1
 # Supply a verified Debian image digest; scripts/build-images.sh resolves it.
 ARG DEBIAN_IMAGE
-FROM ${DEBIAN_IMAGE} AS build
+FROM ${DEBIAN_IMAGE} AS distribution
+ARG DEBIAN_IMAGE
+LABEL org.opencontainers.image.base.name="${DEBIAN_IMAGE}" \
+      io.cisco-home-telephony.debian.snapshot="20261101T000000Z"
+# Both compilation and runtime resolve packages from the same reviewed snapshot.
+# Debian slim has no CA bundle. Bootstrap it from the frozen archive over HTTP;
+# APT still verifies Debian Release signatures and package checksums. All later
+# archive transfers use HTTPS with the installed CA bundle.
+RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
+    && rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
+    && printf '%s\n' \
+       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261101T000000Z trixie main' \
+       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261101T000000Z trixie-updates main' \
+       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261101T000000Z trixie-security main' \
+       > /etc/apt/sources.list \
+    && apt-get -o Acquire::Retries=3 update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && sed -i 's|http://snapshot.debian.org|https://snapshot.debian.org|g' /etc/apt/sources.list \
+    && rm -rf /var/lib/apt/lists/*
+# Debian's Pillow package still carries reviewed critical findings. Stage the
+# hash-locked upstream wheel with the SAME Debian interpreter as the runtime.
+# Installers and their dependencies exist only in this disposable build stage.
+FROM distribution AS pillow-build
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+COPY pillow.lock /tmp/pillow.lock
+RUN python3 -I - <<'PYINSTALL'
+from pathlib import Path
+import subprocess
+import sys
+import sysconfig
+assert sys.version_info[:2] == (3, 13), 'Reviewed Pillow wheel requires CPython 3.13'
+site = Path(sysconfig.get_path('platlib'))
+assert site.is_relative_to('/usr/local/lib') and str(site) in sys.path, 'Unexpected Debian import path'
+stage = Path('/pillow-stage') / site.relative_to('/')
+subprocess.run([sys.executable, '-I', '-m', 'pip', '--isolated', '--disable-pip-version-check',
+                'install', '--no-cache-dir', '--no-deps', '--no-compile', '--only-binary=:all:',
+                '--require-hashes', '--target', str(stage), '-r', '/tmp/pillow.lock'], check=True)
+PYINSTALL
+FROM distribution AS build
 ARG ASTERISK_VERSION=22.11.0
 ARG ASTERISK_SHA256=3bd5ee040509a3d3cd9b1ba9520c18e6ec0a7e7981ca68c457dcd36ba3c54d94
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -48,12 +87,32 @@ RUN apt-get update && apt-get install -y --no-install-recommends libopus-dev \
     && mkdir -p /stage/usr/share/doc/asterisk-opus-open-source \
     && cp /build/opus-source/LICENSE /build/opus-source/README.md /stage/usr/share/doc/asterisk-opus-open-source/ \
     && cp /tmp/opus-source.tar.gz /stage/usr/share/doc/asterisk-opus-open-source/source.tar.gz
-FROM ${DEBIAN_IMAGE}
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates tzdata libedit2 libssl3 libxml2 libuuid1 libsqlite3-0 libncurses6 libopus0 libunbound8 python3 python3-pil ffmpeg \
+FROM distribution
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+    ca-certificates tzdata libedit2 libxml2 libuuid1 libsqlite3-0 libncurses6 libopus0 libunbound8 python3 \
+    ffmpeg=7:7.1.5-0+deb13u1 libmbedcrypto16=3.6.6-0.1~deb13u1 \
+    libbrotli1=1.1.0-2+deb13u1 libexpat1=2.9.0-1~deb13u1 \
+    libssh-4=0.11.5-0+deb13u1 libssl3t64=3.5.7-1~deb13u3 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 10001 asterisk && useradd -u 10001 -g 10001 -M -s /usr/sbin/nologin asterisk
 COPY --from=build /stage/ /
+COPY --from=pillow-build /pillow-stage/ /
+COPY pillow.lock /usr/share/cisco-home-telephony/pillow.lock
+# Validate the staged extension with the real final interpreter, offline and
+# isolated. No PYTHONPATH, activation script or interpreter wrapper is needed.
+RUN --network=none python3 -I - <<'PYCHECK'
+import importlib.metadata
+import importlib.util
+from pathlib import Path
+import sysconfig
+import PIL
+from PIL import Image
+assert importlib.metadata.version('Pillow') == PIL.__version__ == '13.0.0'
+assert Path(PIL.__file__).is_relative_to(sysconfig.get_path('platlib'))
+assert all(importlib.util.find_spec(name) is None for name in ('pip', 'ensurepip'))
+assert Image.new('RGB', (8, 8), (10, 20, 30)).resize((4, 4)).getpixel((0, 0)) == (10, 20, 30)
+PYCHECK
+RUN --network=none python3 -c "import PIL; from PIL import Image; assert PIL.__version__ == '13.0.0'; assert Image.new('RGB', (2, 2)).size == (2, 2)"
 COPY radio.py phone_services.py dial_audio.py radio-catalog.json /var/lib/asterisk/agi-bin/
 COPY phone_gateway.py /usr/local/lib/cisco-phone-gateway.py
 COPY phone_apps.py phone_apps_ha.py phone_camera_preview.py phone_voice_display.py phone_notifications.py /usr/local/lib/
