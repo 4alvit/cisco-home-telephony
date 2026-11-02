@@ -107,7 +107,14 @@ class Phone:
         if body:
             rows.append('Content-Type: application/sdp')
         rows += ['Content-Length: ' + str(len(body)), '', body]
-        self.sip.sendto('\r\n'.join(rows).encode(), address)
+        response = '\r\n'.join(rows).encode()
+        self.sip.sendto(response, address)
+        # Keep one response for the original INVITE, only after a successful
+        # send. The radio fixture also borrows this method without a call map.
+        call = getattr(self, 'calls', {}).get(h['call-id'])
+        if (message.startswith('INVITE ') and call is not None
+                and call.get('invite_transaction') == (h['call-id'], h['cseq'], h['via'])):
+            call['invite_response'] = response
 
     def listen(self):
         try:
@@ -126,11 +133,20 @@ class Phone:
                     need(address[0] == '127.0.0.1', 'unexpected non-loopback SIP source')
                     with self.lock:
                         if method == 'INVITE':
+                            transaction = (h['call-id'], h['cseq'], h['via'])
                             call = self.calls.setdefault(h['call-id'], {'request':message, 'address':address,
                                 'first_invite':time.monotonic(), 'invites':0, 'cancel':None, 'bye':None,
-                                'answer':None, 'reject':None, 'ack':None})
+                                'answer':None, 'reject':None, 'ack':None,
+                                'invite_transaction':transaction, 'invite_response':None})
                             call['invites'] += 1
-                            self.reply(message, address, '180 Ringing')
+                            if (call['invite_transaction'] == transaction
+                                    and call['invite_response'] is not None):
+                                # Full Via includes both branch and sent-by.
+                                # Bypass scenario overrides when replaying, so
+                                # old traffic cannot create new 302 evidence.
+                                self.sip.sendto(call['invite_response'], address)
+                            else:
+                                self.reply(message, address, '180 Ringing')
                         elif method == 'CANCEL':
                             call = self.calls[h['call-id']]
                             call['cancel'] = time.monotonic()
