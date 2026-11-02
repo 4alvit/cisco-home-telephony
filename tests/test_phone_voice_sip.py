@@ -2,7 +2,6 @@
 import asyncio
 from dataclasses import replace
 from pathlib import Path
-import struct
 import sys
 import time
 from types import SimpleNamespace

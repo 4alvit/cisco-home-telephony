@@ -3,10 +3,8 @@ import hashlib
 import importlib.util
 import io
 import json
-import os
 from pathlib import Path
 import struct
-import sys
 import tempfile
 import unittest
 from unittest import mock

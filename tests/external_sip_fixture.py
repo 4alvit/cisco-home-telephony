@@ -1,6 +1,5 @@
 """Loopback-only mock SIP peer, run inside a Docker --network none container."""
 import json
-import re
 import socket
 import time
 

@@ -1,10 +1,10 @@
-import copy
 import importlib.util
 import io
 import math
 from pathlib import Path
 import shutil
 import socket
+import ssl
 import struct
 import subprocess
 import tempfile
@@ -41,6 +41,26 @@ class Connection:
 
 
 class RuntimeValidation(unittest.TestCase):
+    def test_https_requires_tls12_and_verified_hostname_before_wrapping(self):
+        context = ssl.create_default_context()
+        context.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
+        connection = Mock()
+        connection.getresponse.return_value = Response()
+        raw_socket = Mock()
+        address = (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('8.8.8.8', 443))
+        with patch.object(media.socket, 'getaddrinfo', return_value=[address]), \
+                patch.object(media.socket, 'socket', return_value=raw_socket), \
+                patch.object(media.http.client, 'HTTPConnection', return_value=connection), \
+                patch.object(media.ssl, 'create_default_context', return_value=context), \
+                patch.object(context, 'wrap_socket', return_value=raw_socket) as wrap:
+            opened, _ = media.open_media(SOURCE['url'])
+        self.assertIs(opened, connection)
+        self.assertEqual(context.minimum_version, ssl.TLSVersion.TLSv1_2)
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+        wrap.assert_called_once_with(raw_socket, server_hostname='audio.example')
+        raw_socket.connect.assert_called_once_with(('8.8.8.8', 443))
+
     def test_validation_has_no_network_and_preserves_url_as_data(self):
         source = {'url': 'https://audio.example/a%20b.mp3?token=$(id)&x=`touch`',
                   'title': 'Name', 'artist': 'Artist', 'album': 'Album', 'duration': 90}

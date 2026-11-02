@@ -1,5 +1,4 @@
 """Offline gateway voice adapters: fake supervisor, listeners and phone I/O."""
-import copy
 import contextlib
 from email.message import Message
 import io

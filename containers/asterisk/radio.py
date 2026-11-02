@@ -119,7 +119,9 @@ def open_stream(station, url=None, content_types=None, purpose="stream", metadat
                 try:
                     sock.connect(address)
                     if p.scheme == "https":
-                        sock = ssl.create_default_context().wrap_socket(sock, server_hostname=p.hostname)
+                        context = ssl.create_default_context()
+                        context.minimum_version = ssl.TLSVersion.TLSv1_2
+                        sock = context.wrap_socket(sock, server_hostname=p.hostname)
                     conn.sock = sock
                     break
                 except OSError as exc:

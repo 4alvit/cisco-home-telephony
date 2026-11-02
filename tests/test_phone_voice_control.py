@@ -1344,15 +1344,17 @@ class SubprocessHandleTests(unittest.TestCase):
                 fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 self.assertEqual(handle.read_result(), b"")
             finally:
-                release.touch()
-                if handle is not None and handle.poll() is None:
-                    handle.kill()
-                    handle.process.wait(timeout=0.5)
-                if handle is not None:
-                    handle._done.wait(0.25)
-                for descriptor in (owner, contender):
-                    if descriptor is not None:
-                        os.close(descriptor)
+                try:
+                    release.touch()
+                    if handle is not None and handle.poll() is None:
+                        handle.kill()
+                        handle.process.wait(timeout=0.5)
+                    if handle is not None:
+                        handle._done.wait(0.25)
+                finally:
+                    for descriptor in (owner, contender):
+                        if descriptor is not None:
+                            os.close(descriptor)
 
 
 class ControlCLIValidationTests(ControlFixture):
