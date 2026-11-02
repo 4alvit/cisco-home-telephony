@@ -313,8 +313,8 @@ codec set requires new fixtures and a fresh security review.
 
 The required contexts are `validate`, `images` and `Wake gate`, all emitted by
 GitHub Actions. `validate` holds the fast checks and usually finishes in about
-three minutes; `images` builds the voice and PBX containers, scans the voice
-image, rejects actionable vulnerabilities and runs the isolated container
+three minutes; `images` builds the voice and PBX containers, scans both runtime
+images, rejects actionable vulnerabilities and runs the isolated container
 smokes, which takes about nine minutes whenever the pull request changes
 anything an image contains. The two jobs are independent and both
 are required, so a failing test is reported long before the builds finish while

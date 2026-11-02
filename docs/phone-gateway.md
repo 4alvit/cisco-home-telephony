@@ -294,9 +294,13 @@ Originate. Different identities, unrelated ownership, missing IDs and wrong
 lines still abort setup. See the
 [Asterisk iterator contract](https://github.com/asterisk/asterisk/blob/22.11.0/include/asterisk/astobj2.h#L1753-L1764).
 
-The isolated regression fixture supports `--repeat 5` to run five independent
+The isolated regression fixture runs with `--repeat 10` in CI: ten independent
 network-disabled PBX containers. Every attempt must pass, including a fresh
 source and destination redirect refusal; a later success cannot erase a failure.
+The historical ownership refusal in
+[issue #57](https://github.com/4alvit/cisco-home-telephony/issues/57) remains
+unattributed. Successful repetitions are regression evidence, not proof of that
+old failure's cause; retain its bounded ownership diagnostics if it recurs.
 
 DND, busy phones, active alerts, a sibling-line call, or an unexpected channel
 prevent setup. Persistent auto-answer preferences are unchanged. A failed or
