@@ -297,10 +297,20 @@ lines still abort setup. See the
 The isolated regression fixture runs with `--repeat 10` in CI: ten independent
 network-disabled PBX containers. Every attempt must pass, including a fresh
 source and destination redirect refusal; a later success cannot erase a failure.
+Its simulated phone retains the last successfully sent response to each call's
+original INVITE transaction, matched by Call-ID, CSeq and Via. A retransmission
+replays those same bytes, including a final answer or redirect, without consulting
+the next scenario's redirect setting. Replaying an old redirect cannot count as a
+fresh redirect in the next scenario. This is a bounded test-fixture behavior, not
+a complete SIP user-agent implementation.
+
 The historical ownership refusal in
 [issue #57](https://github.com/4alvit/cisco-home-telephony/issues/57) remains
-unattributed. Successful repetitions are regression evidence, not proof of that
-old failure's cause; retain its bounded ownership diagnostics if it recurs.
+unattributed: its original log has no raw AMI snapshot and the refusal occurred
+before either simulated phone received Speaker. The separate INVITE replay fix
+does not explain that refusal. Successful repetitions are regression evidence,
+not proof of that old failure's cause; retain its bounded ownership diagnostics
+if it recurs.
 
 DND, busy phones, active alerts, a sibling-line call, or an unexpected channel
 prevent setup. Persistent auto-answer preferences are unchanged. A failed or
