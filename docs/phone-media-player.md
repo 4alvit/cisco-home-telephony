@@ -178,3 +178,39 @@ integration and private configuration when testing an image-only rollback.
 
 Manually dialing a radio number retains the legacy radio behavior and exact-call
 Stop. Start playback from HA or MA to use the richer controlled player.
+
+
+## Expanded radio sources and mixed phone groups
+
+The [curated radio catalog](radio-and-alarms.md#station-numbers) assigns 701–722
+to 22 sources. A Cisco controlled player can select a catalog number or an
+approved public HTTP(S) audio URL. Publish each new station in both the PBX
+radio selection and the gateway `services`/`dial_allowlist`; deploy the matching
+`radio.py` and catalog to both processes. Updating only the Home Assistant
+selector leaves a number that the gateway or PBX cannot resolve.
+
+LifeSize's numeric SIP radio path uses these same curated extensions. It does
+not implement Cisco's XML-controlled route-699 player protocol: do not advertise
+pause, seek or arbitrary URL playback for that endpoint. A station change must
+end the existing owned radio call and wait for idle before dialing the new
+number. The card can expose a supported Stop action and station shortcuts.
+
+A mixed group starts one session per selected endpoint. It is not synchronized
+multiroom audio; codecs, buffering and start time can differ. Keep the controlled
+player's configured four-session limit, and apply the same conservative limit
+in the group selector. Do not silently truncate a larger group or interrupt
+an unrelated call. Offline/busy endpoints need a per-endpoint result rather than
+a false whole-group success. The original finite call limits and hangup cleanup
+continue to apply.
+
+For a code-only catalog update, an installation already using immutable
+ConfigMap code mounts may mount `radio.py` and `radio-catalog.json` at their
+existing paths in both PBX and gateway. Use hash-named immutable ConfigMaps and
+replacement configuration Secrets, preserving unrelated keys. Such mounts are
+part of the Deployment, so they survive a pod replacement. A `subPath` update
+requires a rollout; a dialplan reload alone does not install new mounted code.
+Check the PBX has zero active calls before the rollout, keep previous referenced
+resources until readiness passes, then verify installed file hashes, all new
+routes and passive audio decoding. No phone call or speaker output is needed
+for the passive probe. A later normal image build contains the same source and
+can replace the overlay after those checks.

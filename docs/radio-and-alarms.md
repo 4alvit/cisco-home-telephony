@@ -10,7 +10,7 @@ numbers. All features on this page are disabled unless explicitly enabled.
 
 ## Printable reference
 
-The [four-page English phone reference](../output/pdf/cisco-phone-reference.pdf)
+The [English phone reference](../output/pdf/cisco-phone-reference.pdf)
 contains the generic phone-number layout, radio stations, Home Assistant
 controls, the optional **621** incoming group and **641** saved-alarm toggle,
 and optional external test routes including **803** The Test Call. Optional
@@ -41,13 +41,13 @@ dialing are unchanged.
 
 The versioned [catalog](../containers/asterisk/radio-catalog.json) contains the
 stream entry points and the exact host policies. The broadcaster pages below
-are the sources, not third-party stream aggregators. Each station was decoded
-to nonzero 8 kHz PCM by the real worker on **2026-10-17**; availability can change.
+are the sources, not third-party stream aggregators. The original 701–710 verification is recorded below; the 711–722 expansion
+uses the 16 kHz worker. Availability can change.
 
 - **701 — Matryoshka Radio London** (`matryoshka`), Russian-language music and
   programmes. [Official station](https://matryoshka.fm/). Its HTTPS entry point
-  redirects to rotating `nNN-euN.rcs.revma.com` HTTP nodes. This is the only
-  catalog entry that permits HTTP; transport integrity is consequently weaker.
+  redirects to rotating `nNN-euN.rcs.revma.com` HTTP nodes. HTTP transport
+  has weaker integrity than HTTPS.
   The catalog restricts that hostname pattern and checks every resolved IP.
 - **702 — Echo online** (`echo`), Russian-language talk/news.
   [Official Echo](https://echofm.online/). This is the current online service,
@@ -78,8 +78,31 @@ has programmes for older children. All three routes are deployed with the
 updated worker and private station selection, and are available as named
 destinations in Home Assistant.
 
-There is no station audio in this repository, archive, proxy endpoint, or
-download library. Use the original broadcasts under each provider's terms.
+The expanded catalog also includes these opt-in destinations:
+
+- **711 — Mega Dance Radio** (`mega-dance`), [official station](https://www.megadanceradio.hu/).
+- **712 — Kavkaz Hit** (`kavkaz-hit`), [official station and embedded player](https://kavkazhit.com/).
+- **713 — Europa Plus** (`europa-plus`), [official station](https://europaplus.ru/).
+- **714 — 1.FM Baroque Music** (`baroque`), [station page](https://www.1.fm/station/baroque).
+- **715 — Radio Swiss Classic** (`swiss-classic`), [official stream directory](https://www.radioswissclassic.ch/de/empfang/internet).
+- **716 — Radio Swiss Jazz** (`swiss-jazz`), [official stream directory](https://www.radioswissjazz.ch/de/empfang/internet).
+- **717 — Sanctuary Dark Electro** (`sanctuary-dark`), [official listening page](https://www.sanctuaryradio.com/site/mainlisten.html).
+- **718 — Chante France** (`chante-france`), [official station](https://www.chantefrance.com/).
+- **719 — Mix 104.9 Darwin** (`mix-1049`), [official station](https://www.mix1049.com.au/).
+- **720 — RT1 Black Beats** (`rt1-black`), [official player](https://rt1.radio/).
+- **721 — Radio Krasnodar 107** (`radio-krasnodar`), [official station](https://radio107.ru/).
+- **722 — White noise** (`white-noise`), a finite [12-hour recording](https://archive.org/details/whitenoise12hours), subject to the same shorter call limit as radio.
+
+Mega Dance, Europa Plus and Radio Krasnodar require plain HTTP, respectively
+on ports 8000, 8052 and 8000; Kavkaz Hit uses HTTPS on 8017. These are exact
+per-station exceptions in the reviewed catalog. Adding a port does not allow
+other hosts, local addresses, credentials in a URL, or HTTPS downgrades.
+Every redirect is checked again. Normal stations remain limited to their
+scheme's default port. RT1 uses both `frontend.streamonkey.net` and its narrowly
+matched edge hosts; permitting only the final edge breaks some requests.
+
+There is no station audio stored in this repository, proxy endpoint, or
+local download library. Use the original broadcasts under each provider's terms.
 Programmes, adverts and availability remain controlled by the broadcaster.
 
 ## Enable and verify
@@ -91,7 +114,13 @@ network, image or HA fields with an example:
 {
   "radio": {
     "enabled": true,
-    "stations": ["matryoshka", "echo", "bob-rock", "bob-metal", "bob-gothic", "soma-poptron", "radyo-viva", "deti-toddlers", "deti-lullabies", "deti-songs"],
+    "stations": [
+      "matryoshka", "echo", "bob-rock", "bob-metal", "bob-gothic",
+      "soma-poptron", "radyo-viva", "deti-toddlers", "deti-lullabies", "deti-songs",
+      "mega-dance", "kavkaz-hit", "europa-plus", "baroque", "swiss-classic",
+      "swiss-jazz", "sanctuary-dark", "chante-france", "mix-1049", "rt1-black",
+      "radio-krasnodar", "white-noise"
+    ],
     "max_seconds": 1800,
     "max_calls": 2
   },
@@ -127,7 +156,7 @@ python3 scripts/check_radio_streams.py --station echo
 ```
 
 The last command contacts one broadcaster and decodes a few seconds without
-placing a call or writing audio. `--all` explicitly probes all ten stations.
+placing a call or writing audio. `--all` explicitly probes all catalog entries (currently 22).
 The command without an option lists the catalog and performs no network
 fetch. Diagnostics contain station IDs, PCM frame counts, signal peaks and
 success state, not redirect tokens, caller details, or raw stream content.
@@ -141,7 +170,7 @@ for immediate number recognition. That step need not change their firmware
 or credentials. Keep the per-phone source guards and normal
 [provisioning cleanup](adding-phones.md) procedure.
 
-Before that optional template refresh, use **on-hook predial** for 708–710:
+Before that optional template refresh, use **on-hook predial** for new numbers:
 leave the handset down and Speaker/Headset off, enter the complete number,
 then press the **Dial** softkey. Do not press a line key first. Cisco documents
 this procedure in the [7945G/7965G user guide](https://www.cisco.com/en/US/docs/voice_ip_comm/cuipph/7965g_7945g/6_1/english/user/guide/65enu61.pdf)
@@ -164,6 +193,19 @@ idle window. The generator removes stale runtime radio configuration and
 routes. Do not remove or regenerate unrelated secret files.
 
 ## Live network verification
+
+On **2026-11-02**, all twelve added stations (711–722) produced 201 nonzero
+16 kHz PCM frames each in passive tests using the candidate worker from the
+running PBX network. Every decoder exited and every worker stopped. Mega Dance
+needed a retry after a transient DNS failure. RT1 initially exposed an additional
+redirect host; its exact official frontend was added before the successful run.
+The expanded catalog and worker were then deployed to both PBX and gateway
+using immutable code/configuration resources. Both became Ready, their file
+hashes matched the reviewed source, all twelve routes were loaded, and the
+gateway published 22 radio destinations while retaining the four-player limit.
+These checks created no phone calls and do not claim audible output on every
+physical endpoint. The existing dated checks below retain their narrower scope.
+
 
 On **2026-10-17**, all seven catalog stations also passed a passive probe inside
 our running Asterisk pod, using its installed worker and FFmpeg 5.1.9. Each
@@ -217,8 +259,10 @@ public/private address results. It connects to the checked address, verifies
 TLS hostname/certificate where HTTPS is used, and validates up to three
 redirects against the station's immutable host policy. Site configuration
 cannot add URLs or hosts. The HTTP client does not use proxy environment
-variables. Outbound DNS and TCP 443 are needed; Matryoshka additionally needs
-TCP 80 to its approved CDN. Do not open inbound internet ports.
+variables. Outbound DNS and TCP 443 are needed. HTTP stations additionally need
+TCP 80, 8000 or 8052 as listed above, and Kavkaz Hit needs TCP 8017. The worker
+connects to the catalog-approved port, including its explicit HTTP Host port;
+it never falls back silently to port 80/443. Do not open inbound internet ports.
 
 FFmpeg receives audio bytes on standard input with its protocol whitelist set
 to `pipe`, a fixed MP3/AAC demuxer and no shell. It cannot follow a playlist URL

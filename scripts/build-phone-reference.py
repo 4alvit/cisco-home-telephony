@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the English, four-page US Letter phone reference. Requires reportlab."""
+"""Build the English US Letter phone reference with paginated radio stations. Requires reportlab."""
 import argparse
 import json
 from pathlib import Path
@@ -33,7 +33,7 @@ def title(c, kicker, heading, subtitle):
 
 def footer(c, page):
     c.setStrokeColor(HexColor('#D7E1E7')); c.line(42, 44, 570, 44)
-    paragraph(c, 'Cisco 7945G  |  Home telephony  |  English reference  |  17 October 2026', 42, 29, 490, 8, 10, GRAY)
+    paragraph(c, 'Cisco 7945G  |  Home telephony  |  English reference  |  2 November 2026', 42, 29, 490, 8, 10, GRAY)
     c.setFont('Helvetica-Bold', 9); c.drawRightString(570, 29, str(page))
 
 
@@ -63,6 +63,9 @@ def main():
     args = parser.parse_args()
     target = Path(args.output); target.parent.mkdir(parents=True, exist_ok=True)
     stations = json.loads((ROOT/'containers/asterisk/radio-catalog.json').read_text())['stations']
+    station_rows = [(v['extension'],v['name'],v['genre']) for v in sorted(stations.values(), key=lambda v:int(v['extension']))]
+    radio_pages = [station_rows[i:i+11] for i in range(0, len(station_rows), 11)]
+    controls_page = 2 + len(radio_pages)
     c = canvas.Canvas(str(target), pagesize=(612,792), pageCompression=1)
     c.setTitle('Cisco home phones - dial guide and Home Assistant controls')
     c.setAuthor('Cisco Home Telephony')
@@ -83,14 +86,16 @@ def main():
           ('641','Toggle saved alarm','Enable/disable your saved alarm. Requires phone services.')]
     table(c,rows,462,32)
     block(c,'Mac SIP client - 209', 'Use the configured SIP account over TCP. Keep the Mac awake and the app running to receive calls. Group 620 contains Cisco phones; group 621 may include a Mac if configured. Number 641 controls saved alarms for physical Cisco phones only.',178,BLUE)
-    paragraph(c,'Radio: page 2. Alarms and controls: page 3. External tests and CLI: page 4. These are example line assignments; check your local directory.',42,82,528,9,12,GRAY)
+    paragraph(c,f'Radio: pages 2-{controls_page-1}. Alarms and controls: page {controls_page}. External tests and CLI: page {controls_page+1}. These are example line assignments; check your local directory.',42,82,528,9,12,GRAY)
     footer(c,1);c.showPage()
-    title(c, 'RADIO ON DEMAND', 'Music & radio', 'Dial a station, listen, then hang up. Streams run only while a call is active.')
-    rows=[(v['extension'],v['name'],v['genre']) for v in sorted(stations.values(),key=lambda v:int(v['extension']))]
-    table(c,rows,631,38)
-    block(c,'Children\'s channels 708-710', '708: toddler music. 709: lullabies. 710: children\'s songs. Type the full three-digit number, then press Dial. Only stations enabled by your administrator appear in the live directory.',190,BLUE)
-    paragraph(c,'Radio needs Internet access. The default call limit is 30 minutes; an administrator can set up to 2 hours. Hang up to stop. An unavailable stream gives a short tone and ends the call. Echo online is the current online service, not the former Moscow FM broadcast.',42,102,528,9,12,GRAY)
-    footer(c,2);c.showPage()
+    for index, rows in enumerate(radio_pages):
+        title(c, 'RADIO ON DEMAND', f'Music & radio ({index+1}/{len(radio_pages)})',
+              'Dial a station, listen, then hang up. Streams run only while a call is active.')
+        table(c, rows, 631, 34)
+        block(c, 'Choose the full station number',
+              'Type the full three-digit number, then press Dial. Only stations enabled by your administrator appear in the live directory. Children\'s channels: 708 toddlers, 709 lullabies, 710 children\'s songs.', 190, BLUE)
+        paragraph(c, 'Radio needs Internet access. The default call limit is 30 minutes; an administrator can set up to 2 hours. Hang up to stop. An unavailable stream gives a short tone and ends the call. The 722 white-noise recording is subject to the same call limit.', 42, 102, 528, 9, 12, GRAY)
+        footer(c, 2+index); c.showPage()
     title(c, 'CONTROL FROM HOME ASSISTANT', 'Calls, alarms & messages', 'Updated alerts require the matching gateway and Home Assistant integration.')
     y=640
     y=block(c,'Set an alarm for selected days', 'Choose the time and weekdays in the Home Assistant timezone, then enable the alarm. One recurring alarm slot is shared by both lines of a physical phone. Alerts keep ringing until manually answered, rejected or stopped; they never auto-answer.',y)
@@ -100,7 +105,7 @@ def main():
     y=block(c,'Do Not Disturb and auto-answer', 'Gateway DND blocks new calls and alerts without cancelling saved schedules. It is separate from the phone\'s native DND icon. Optional auto-answer applies to normal calls. Timers and alarms always require manual dismissal.',y)
     y=block(c,'Send text, photos or still sprites', 'Send a text page or a local PNG/JPEG through the integration. Pictures fit the 298 x 156 Services pane. Press Exit to return. These are local screen notifications, not mobile SMS/MMS; animation and video are not supported.',y)
     paragraph(c,'For voice assistant 630, discover each phone in HA, enable Allow calls and select its voice pipeline. The Russian Baya pipeline must be configured explicitly.',42,85,528,9,12,GRAY)
-    footer(c,3);c.showPage()
+    footer(c,controls_page);c.showPage()
     title(c, 'OPTIONAL SERVICES AND THE COMMAND LINE', 'External tests & CLI', 'Service routes appear in the live catalog only when enabled and allowed.')
     rows=[('801','Callcentric peer','Optional configured peer; not a universal public test number.'),
           ('802','SIP2SIP echo test','Requires a configured SIP2SIP route to test service 4444.'),
@@ -111,7 +116,7 @@ def main():
     y=block(c,'Call or connect both speakers', 'cisco 213 220 places a normal call. cisco 213 intercom 220 (alias drop-in) requests speaker answer on two distinct idle Cisco phones. Both must be available, with DND off and no active alerts. End with cisco 213 hangup.',y)
     y=block(c,'Timers and weekday alarms from the CLI', 'cisco 213 timer start 5 rings in five minutes. cisco 213 alarm set 07:30 --days weekdays --enable saves a weekday alarm in the HA timezone. Scheduling needs the optional private HA configuration; check cisco 213 schedule first.',y)
     paragraph(c,'Free SIP-to-SIP service is not free PSTN calling. These example external routes provide no emergency service. Keep accounts, real room labels and exported contacts private. Setup and troubleshooting: github.com/4alvit/cisco-home-telephony',42,91,528,9,12,GRAY)
-    footer(c,4);c.save()
+    footer(c,controls_page+1);c.save()
     print(target)
 
 
