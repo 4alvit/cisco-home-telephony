@@ -197,7 +197,10 @@ routes. Do not remove or regenerate unrelated secret files.
 On **2026-11-02**, all twelve added stations (711–722) produced 201 nonzero
 16 kHz PCM frames each in passive tests using the candidate worker from the
 running PBX network. Every decoder exited and every worker stopped. Mega Dance
-needed a retry after a transient DNS failure. RT1 initially exposed an additional
+initially passed only after another DNS lookup; subsequent diagnosis found
+inconsistent upstream DNS/security-filter answers, so that result does not
+establish reliable playback for this station. See the DNS troubleshooting note
+below. RT1 initially exposed an additional
 redirect host; its exact official frontend was added before the successful run.
 The expanded catalog and worker were then deployed to both PBX and gateway
 using immutable code/configuration resources. Both became Ready, their file
@@ -290,6 +293,27 @@ This uses Asterisk's [AudioSocket channel driver](https://github.com/asterisk/as
 [AudioSocket framing](https://docs.asterisk.org/Configuration/Channel-Drivers/AudioSocket/)
 and [AGI application](https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/Dialplan_Applications/AGI/),
 plus FFmpeg's [protocol whitelist and pipe protocol](https://ffmpeg.org/ffmpeg-protocols.html).
+
+### Intermittent DNS or early playback failure
+
+A station can pass a one-off PCM probe and still fail on the next request with
+`socket.gaierror` / `EAI_NONAME`. In a multi-node cluster, compare A, AAAA and
+CNAME answers from each DNS backend and its upstream resolver. One path may
+return the broadcaster's address while another returns a security sinkhole or
+no usable address. Check the failing workload's resolver configuration rather
+than assuming a successful lookup from another host proves the path is healthy.
+
+An AGI process completing with exit status zero also does not prove playback:
+check `RADIOSTATUS`, decoded frames and the AudioSocket lifetime. A connection
+that closes before audio arrives can indicate a source-resolution failure even
+when the local port, codec and phone registration are working.
+
+Preserve the station's hostname policy, checked-address connection and TLS
+verification. Do not hardcode a working IP, disable TLS, switch resolvers or
+retry until a security filter is bypassed. Investigate the upstream discrepancy
+through the network's normal administration process; meanwhile mark the
+station unreliable. A replacement broadcaster URL needs independent verification
+against its official site and the same policy checks before deployment.
 
 ## Timers and weekday alarms: ring until manually stopped
 
