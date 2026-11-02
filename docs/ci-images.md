@@ -157,11 +157,11 @@ pinned Trivy 0.74.0.
 every HIGH/CRITICAL OS finding with a distributor fix, incomplete inventories,
 and a remaining runtime `pip` installation. It also requires Debian 13, the
 exact reviewed multimedia/security packages, and the absence of Mbed TLS 2.x.
-The default `voice` profile requires both Debian and Python inventories. The
-`asterisk` profile requires the Debian inventory and applies the same blocking
-rules to every language package the scanner discovers; distribution-packaged
-Python does not necessarily produce a separate language inventory. Full JSON
-and CycloneDX SBOMs remain available as CI artifacts even when the gate fails.
+Both the default `voice` profile and the `asterisk` profile require Debian and
+Python package inventories and apply the same vulnerability rules. The PBX
+profile additionally requires exactly one upstream Pillow 13.0.0 package and
+rejects a remaining Debian Pillow copy. Full JSON and CycloneDX SBOMs remain
+available as CI artifacts even when the gate fails.
 Passing this gate does **not** mean an image has no reported vulnerabilities.
 
 ### Supported multimedia dependency closure
@@ -216,6 +216,49 @@ artwork-rejection and ONNX/import checks remain required. The native Asterisk
 fixture also checks registration, real media and exact fresh-dialog intercom
 redirect behavior; it never calls household devices. No live deployment is
 part of this qualification.
+
+### PBX image processing and auditable Pillow installation
+
+The first Trixie PBX candidate still used Debian `python3-pil` 11.1.0. Its scan
+reported six CRITICAL Pillow findings without a distributor fixed version.
+The OS-only rule therefore passed, but the candidate was not accepted:
+upstream fixes were already available. The PBX now uses Pillow 13.0.0, matching
+the voice runtime's reviewed version. For example, upstream identifies 13.0.0
+as the fix for the
+[multi-frame storage vulnerability](https://github.com/python-pillow/Pillow/security/advisories/GHSA-v9pv-5gc8-w2m6)
+and the
+[scaled JPEG decoder vulnerability](https://github.com/python-pillow/Pillow/security/advisories/GHSA-8g5g-8vmr-9782).
+A missing distributor fix is not permission to ignore an available, compatible
+application dependency update.
+
+[`containers/asterisk/pillow.lock`](../containers/asterisk/pillow.lock) pins the
+CPython 3.13 Linux AMD64 and ARM64 binary wheels by SHA-256. A separate build
+stage uses the same Debian Python interpreter to install that locked package
+into its standard platform-library directory. Only the staged Pillow runtime
+is copied into the final image; `pip`, `ensurepip` and the Debian `python3-pil`
+package are absent. Runtime users do not need a virtual environment, an
+activation command, or a `PYTHONPATH` override.
+
+Keep the wheel's `dist-info`, `RECORD` and package metadata. They make the
+actual installed Pillow version auditable and discoverable in the full-image
+language inventory; copying only native extension files would hide part of the
+dependency evidence. The security gate requires that inventory and rejects an
+old or duplicate Pillow installation. Binary installation and a green scan
+still require the final-image behavior checks.
+
+The shared media contract imports the shipped image adapters and exercises
+real synthetic PNG and JPEG data through them. It checks EXIF orientation,
+resizing, PNG output, removal of EXIF/ICC metadata, and rejection of an
+unsupported format. It also verifies Pillow 13.0.0 metadata and absence of
+runtime installers. Phone transport is replaced with an in-process test
+capture; no HA request, screen update, call or speaker action occurs. Audio
+codec, `ffprobe`, filter, artwork-isolation and wake inference checks remain
+required alongside these image checks.
+
+The CycloneDX report describes the scanner's discovered dependency inventory.
+Custom compiled Asterisk and its Opus module also need their pinned source,
+build provenance and native smoke evidence: absence of a component from a
+package scanner is not evidence that the component has no vulnerabilities.
 
 ### Historical Bookworm qualification
 

@@ -18,7 +18,8 @@ def report():
              'Epoch': security.EXACT_EPOCHS.get(name, 0)}
             for name, (version, release) in security.EXACT_PACKAGES.items()]},
         {'Class': 'lang-pkgs', 'Type': 'python-pkg', 'Packages': [
-            {'Name': 'aiohttp', 'Version': '3.14.0'}]},
+            {'Name': 'aiohttp', 'Version': '3.14.0'},
+            {'Name': 'Pillow', 'Version': '13.0.0'}]},
     ]}
 
 
@@ -64,16 +65,32 @@ class ImageSecurityTests(unittest.TestCase):
                 data = report(); data['Results'][0]['Packages'].append(copy.deepcopy(data['Results'][0]['Packages'][index]))
                 self.assertFalse(security.verify(data)['passed'])
 
-    def test_asterisk_profile_requires_os_and_checks_any_language_findings(self):
+    def test_asterisk_profile_requires_native_and_python_inventory(self):
         data = report()
         data['Results'].pop()
-        self.assertTrue(security.verify(data, profile='asterisk')['passed'])
+        with self.assertRaises(ValueError):
+            security.verify(data, profile='asterisk')
         with self.assertRaises(ValueError):
             security.verify(data)
         data = report()
         data['Results'][1]['Vulnerabilities'] = [
             {'VulnerabilityID': 'CVE-example', 'PkgName': 'example', 'Severity': 'HIGH'}]
         self.assertFalse(security.verify(data, profile='asterisk')['passed'])
+
+    def test_asterisk_requires_one_reviewed_upstream_pillow(self):
+        self.assertTrue(security.verify(report(), profile='asterisk')['passed'])
+        for mutation in ('missing', 'outdated', 'duplicate', 'debian'):
+            with self.subTest(mutation=mutation):
+                data = report()
+                packages = data['Results'][1]['Packages']
+                pillow = next(p for p in packages if p['Name'] == 'Pillow')
+                if mutation == 'missing': packages.remove(pillow)
+                if mutation == 'outdated': pillow['Version'] = '11.1.0'
+                if mutation == 'duplicate': packages.append(copy.deepcopy(pillow))
+                if mutation == 'debian':
+                    data['Results'][0]['Packages'].append({'Name': 'python3-pil', 'Version': '11.1.0',
+                                                            'Release': '5+deb13u4', 'SrcName': 'pillow'})
+                self.assertFalse(security.verify(data, profile='asterisk')['passed'])
 
     def test_epoch_is_part_of_the_reviewed_ffmpeg_package_identity(self):
         data = report()

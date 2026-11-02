@@ -22,6 +22,7 @@ EXACT_PACKAGES = {'libbrotli1': ('1.1.0', '2+deb13u1'),
                   'ffmpeg': ('7.1.5', '0+deb13u1')}
 EXACT_EPOCHS = {'ffmpeg': 7}
 PROFILES = ('voice', 'asterisk')
+PBX_PILLOW_VERSION = '13.0.0'
 HIGH_SEVERITIES = {"HIGH", "CRITICAL"}
 SEVERITIES = {"UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"}
 
@@ -46,6 +47,7 @@ def verify(report, *, profile="voice"):
     package_counts = Counter()
     libraries = {name: [] for name in EXACT_PACKAGES}
     blocked = []
+    pillow_packages = []
     severity_counts = Counter()
     unfixed_os = []
     for result in results:
@@ -65,6 +67,12 @@ def verify(report, *, profile="voice"):
             if kind == "os-pkgs" and (package["Name"].startswith("libmbed")
                     or package.get("SrcName") == "mbedtls") and package["Version"].startswith("2."):
                 blocked.append("EOL Mbed TLS 2.x must not be present: " + package["Name"])
+            if profile == "asterisk":
+                if kind == "lang-pkgs" and package["Name"].lower() == "pillow":
+                    pillow_packages.append(package)
+                if kind == "os-pkgs" and (package["Name"] in {"python3-pil", "python3-pil.imagetk"}
+                        or package.get("SrcName") == "pillow"):
+                    blocked.append("Unreviewed Debian Pillow copy must not be present: " + package["Name"])
             if kind == "os-pkgs" and package["Name"] in EXACT_PACKAGES:
                 libraries[package["Name"]].append(package)
             if kind == "lang-pkgs" and package["Name"].lower() == "pip":
@@ -84,14 +92,12 @@ def verify(report, *, profile="voice"):
                     blocked.append(label)
                 else:
                     unfixed_os.append(label)
-    required = {("os-pkgs", "debian")}
-    if profile == "voice":
-        # Debian-packaged Python in the PBX may have no separately discovered
-        # language packages. Any discovered language findings still use the
-        # same blocking policy for both profiles.
-        required.add(("lang-pkgs", "python-pkg"))
+    required = {("os-pkgs", "debian"), ("lang-pkgs", "python-pkg")}
     if not required <= inventory:
         raise ValueError("Missing required package inventories for " + profile)
+    if profile == "asterisk" and (len(pillow_packages) != 1
+            or pillow_packages[0]["Version"] != PBX_PILLOW_VERSION):
+        blocked.append("Expected exactly one upstream Pillow " + PBX_PILLOW_VERSION)
     for name, expected in EXACT_PACKAGES.items():
         packages = libraries[name]
         if (len(packages) != 1 or
