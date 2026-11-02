@@ -1,5 +1,5 @@
 # Optional wake inference closure; exact PyPI metadata checked 2026-10-19.
-# CPython 3.11/3.12, Debian bookworm Linux amd64/arm64, binary wheels only.
+# CPython 3.11/3.12, Debian 13 (trixie) Linux amd64/arm64, binary wheels only.
 # Keep the validated NumPy / ONNX Runtime pair; no model download package.
 # Resolve all four platform/interpreter combinations when updating this lock.
 

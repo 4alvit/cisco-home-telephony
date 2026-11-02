@@ -13,3 +13,12 @@ docker run --rm --pull never --network none --read-only \
     --cap-drop ALL --security-opt no-new-privileges \
     --user 10001:10001 --pids-limit 64 --memory 512m --cpus 1 \
     --entrypoint python3 "$image_id" /opt/voice/smoke.py
+
+# The voice image also runs the shared phone media player, not only speech.
+# Exercise its real decoder/probe/filter contract with public synthetic inputs.
+docker run --rm --pull never --network none --read-only \
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=64m \
+    --cap-drop ALL --security-opt no-new-privileges \
+    --user 10001:10001 --pids-limit 128 --memory 512m --cpus 1 \
+    --entrypoint python3 -i "$image_id" - \
+    < "$(dirname "$0")/../tests/test_ffmpeg_runtime_contract.py"

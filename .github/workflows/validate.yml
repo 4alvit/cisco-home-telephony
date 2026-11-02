@@ -172,6 +172,43 @@ jobs:
       - name: Build both PBX images and verify binary versions
         if: steps.scope.outputs.images == 'true'
         run: bash scripts/build-images.sh cisco-home-ci
+      - name: Verify the shared media contract in the final PBX image
+        if: steps.scope.outputs.images == 'true'
+        run: |
+          docker run --rm --pull never --network none --read-only \
+            --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges \
+            --pids-limit 128 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+            --entrypoint python3 -i cisco-home-ci/asterisk:22.11.0 - < tests/test_ffmpeg_runtime_contract.py
+      - name: Scan the complete PBX runtime image
+        id: pbx_scan
+        if: steps.scope.outputs.images == 'true'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          image-ref: cisco-home-ci/asterisk:22.11.0
+          format: json
+          output: asterisk-trivy.json
+          scanners: vuln
+          list-all-pkgs: true
+          ignore-unfixed: false
+          exit-code: '0'
+      - name: Export complete PBX image SBOM
+        if: steps.scope.outputs.images == 'true'
+        run: trivy convert --format cyclonedx --output asterisk-sbom.cdx.json asterisk-trivy.json
+      - name: Reject actionable PBX image vulnerabilities
+        if: steps.scope.outputs.images == 'true'
+        run: python3 scripts/verify_voice_security.py asterisk-trivy.json --profile asterisk
+      - name: Preserve complete PBX image security evidence
+        if: ${{ !cancelled() && steps.pbx_scan.outcome != 'skipped' && steps.scope.outputs.images == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: asterisk-security-evidence
+          path: |
+            asterisk-trivy.json
+            asterisk-sbom.cdx.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Verify firewall policies in disconnected network namespaces
         if: steps.scope.outputs.images == 'true'
         run: |
@@ -206,8 +243,9 @@ jobs:
           docker image save cisco-home-ci/tftp:bookworm | gzip -1 > .build/image-artifacts/tftp-amd64.tar.gz
           docker image inspect cisco-home-ci/asterisk:22.11.0 cisco-home-ci/tftp:bookworm > .build/image-artifacts/images.json
           printf '{"source_commit":"%s","run_id":"%s","platform":"linux/amd64"}\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" > .build/image-artifacts/source.json
+          cp asterisk-trivy.json asterisk-sbom.cdx.json .build/image-artifacts/
           cd .build/image-artifacts
-          sha256sum asterisk-amd64.tar.gz tftp-amd64.tar.gz images.json source.json > SHA256SUMS
+          sha256sum asterisk-amd64.tar.gz tftp-amd64.tar.gz images.json source.json asterisk-trivy.json asterisk-sbom.cdx.json > SHA256SUMS
           total_bytes=$(du -sb . | cut -f1)
           printf 'Verified PBX image artifact size: %s bytes (limit: 400 MiB; only PBX exported)\n' "$total_bytes"
           test "$total_bytes" -lt $((400 * 1024 * 1024))

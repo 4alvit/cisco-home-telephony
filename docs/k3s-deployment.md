@@ -75,10 +75,12 @@ image artifacts.
 Asterisk is pinned to **22.11.0 LTS**, announced by the official site; the source
 archive SHA-256 is pinned in the Dockerfile. This checks that the reviewed HTTPS
 archive has not changed; it is not a claim that a separate GPG signature was
-verified. The Debian `bookworm-slim` base is resolved to a digest before the
-build. APT dependencies come from the current Debian repository, so builds are
-not bit-for-bit reproducible. Final deployment image references must include
-digests.
+verified. The Asterisk `trixie-slim` and TFTP `bookworm-slim` bases are each
+resolved to a digest before the build. Asterisk's APT inputs use the reviewed
+Debian snapshot described in [image qualification](ci-images.md); TFTP retains
+its existing distribution repositories. Record the selected base digests for
+repeat builds. This is not a claim of bit-for-bit reproducibility. Final
+deployment image references must include digests.
 
 ```bash
 # On an amd64 builder for voice-node. This command does not push.

@@ -18,7 +18,7 @@ history. See [the voice coordinator](local-voice-assistant.md) and
 Requirements: Docker, Git and Python 3 on the build host. The base must be the
 verified manual voice image from the corresponding source commit, identified
 by an immutable registry digest. The optional layer supports CPython 3.11 and
-3.12 on Debian bookworm, `linux/amd64` and `linux/arm64`.
+3.12 on Debian 13 (trixie), `linux/amd64` and `linux/arm64`.
 
 From the repository root:
 

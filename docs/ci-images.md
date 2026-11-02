@@ -148,22 +148,82 @@ artifact in GitHub Actions. The first home deployment artifact was deleted after
 both images had been transferred and verified.
 
 
-## Voice image security qualification
+## Runtime image security qualification
 
-Both the manual voice build and its optional wake child scan the **finished
-image**, including all OS and language packages, with pinned Trivy 0.74.0.
+The manual voice image, its optional wake child and the Asterisk image scan the
+**finished image**, including all discovered OS and language packages, with
+pinned Trivy 0.74.0.
 `scripts/verify_voice_security.py` rejects every HIGH/CRITICAL language finding,
 every HIGH/CRITICAL OS finding with a distributor fix, incomplete inventories,
-and a remaining runtime `pip` installation. It also requires the exact reviewed
-Debian security updates below. Full JSON and CycloneDX SBOMs accompany exported
-voice images and remain available as CI artifacts even when the gate fails.
+and a remaining runtime `pip` installation. It also requires Debian 13, the
+exact reviewed multimedia/security packages, and the absence of Mbed TLS 2.x.
+The default `voice` profile requires both Debian and Python inventories. The
+`asterisk` profile requires the Debian inventory and applies the same blocking
+rules to every language package the scanner discovers; distribution-packaged
+Python does not necessarily produce a separate language inventory. Full JSON
+and CycloneDX SBOMs remain available as CI artifacts even when the gate fails.
 Passing this gate does **not** mean an image has no reported vulnerabilities.
+
+### Supported multimedia dependency closure
+
+The runtime upgrade for [issue #48](https://github.com/4alvit/cisco-home-telephony/issues/48)
+uses official Debian 13 (`trixie`) bases and the signed Debian package snapshot
+`20261101T000000Z`. The manual voice image retains Python 3.12 and its existing
+hash-locked wheels; the wake image inherits that base. Asterisk is compiled and
+run on the same Debian distribution, whose system Python is 3.13. TFTP has no
+multimedia dependency and retains its independent Bookworm base and tag.
+
+Build helpers resolve each official base tag to a digest before building and
+print that exact input. The runtime image labels retain the base reference and
+package-snapshot date. For a repeat build, supply the recorded
+`PYTHON_IMAGE`, `ASTERISK_DEBIAN_IMAGE` and `TFTP_DEBIAN_IMAGE` digest references.
+Do not reuse a Bookworm digest for the Trixie voice or Asterisk build. Updating
+the package snapshot, base digest or Python locks is a dependency change that
+requires the same final-image qualification again.
+
+The reviewed package identities are:
+
+- `ffmpeg=7:7.1.5-0+deb13u1`.
+- `libmbedcrypto16=3.6.6-0.1~deb13u1`.
+- `libbrotli1=1.1.0-2+deb13u1`.
+- `libexpat1=2.9.0-1~deb13u1`.
+- `libssh-4=0.11.5-0+deb13u1`.
+- `libssl3t64=3.5.7-1~deb13u3`.
+
+This replaces the unsupported Bookworm Mbed TLS branch with the supported
+distribution dependency; it does not delete shared libraries to make a scan
+smaller. Debian's [CVE-2025-47917 record](https://security-tracker.debian.org/tracker/CVE-2025-47917)
+tracks the affected Bookworm branch and the Trixie fix. Debian publishes the
+distribution's support period in its [Trixie release information](https://www.debian.org/releases/trixie/).
+Mbed TLS 3.6 is an upstream LTS branch with support promised through at least
+March 2027 in the [upstream release policy](https://github.com/Mbed-TLS/mbedtls/blob/development/BRANCHES.md).
+Recheck that branch and Debian's package-specific support before then; a
+distribution's overall lifetime does not guarantee support for every package.
+
+The baseline at `7c167c1` contained 298 Debian packages in each voice image and
+used `ffmpeg → libavformat59 → librist4 → libmbedcrypto7 2.28.3-1`.
+Compare the complete baseline and replacement package inventories, not just
+vulnerability totals: additions, removals, ABI package renames and version
+changes all matter. The exact candidate run's JSON, CycloneDX SBOM and gate
+summary are the release evidence. A passing scan does not replace review of
+remaining unfixed findings, and package-finding counts are not unique-CVE
+counts.
+
+The shared final-image media contract exercises actual MP3, AAC, Ogg Vorbis,
+Ogg Opus, FLAC and PCM WAV decoding, `ffprobe` duration/metadata, seeking and
+radio gain filters in a network-disabled container. Existing voice-codec,
+artwork-rejection and ONNX/import checks remain required. The native Asterisk
+fixture also checks registration, real media and exact fresh-dialog intercom
+redirect behavior; it never calls household devices. No live deployment is
+part of this qualification.
+
+### Historical Bookworm qualification
 
 The 2026-10-24 review of `v0.1.0-beta.21` examined wake image configuration
 `sha256:e7509a4e8a039f13a1010658c0dd918c154215922cb5bd9582315e3a50b1f87c`
 from source `2f64ffbb2b74d89a0256b7742a5df3c39438aea5`. Its complete scan
-reported seven fixable HIGH OS package findings. The next build uses the
-2026-10-24 Debian snapshot and explicitly installs:
+reported seven fixable HIGH OS package findings. The subsequent Bookworm build
+used the 2026-10-24 Debian snapshot and explicitly installed:
 
 - `libbrotli1=1.0.9-2+deb12u1`: CVE-2026-111497.
 - `libexpat1=2.5.0-1+deb12u5`: CVE-2025-59375 and CVE-2026-77214.
@@ -214,9 +274,10 @@ Recheck the new image and distributor advisories before each release:
   retain the distro findings and this version discrepancy rather than
   silently overriding the scanner. Neither operation is an application path.
 - [CVE-2025-7458](https://security-tracker.debian.org/tracker/CVE-2025-7458),
-  `libsqlite3-0`: crafted SQL with an overflowing ORDER BY clause. The voice
-  application neither executes SQL nor exposes an SQL input. Debian lists the
-  Bookworm issue as minor without a DSA.
+  `libsqlite3-0`: crafted SQL with an overflowing ORDER BY clause. Gateway
+  components use SQLite for local state; they do not expose a raw SQL input.
+  This is not a claim that the library is unused. Debian listed the Bookworm
+  issue as minor without a DSA.
 - [CVE-2026-6653](https://security-tracker.debian.org/tracker/CVE-2026-6653),
   `libxml2`: internal DTD/entity processing. Voice playback explicitly selects
   MP3, Ogg or FLAC demuxing, permits only the FFmpeg `pipe` protocol and does
@@ -244,9 +305,9 @@ samples. Real MP3/Vorbis/Opus/FLAC fixtures run on the host and inside the final
 voice image with networking disabled, a read-only root and no capabilities.
 
 This narrows decoder use; it does not remove the multimedia libraries or prevent
-all container-header parsing. The complete vulnerability inventory and the
-supported-library replacement follow-up in #48 remain necessary. Expanding the
-accepted codec set requires new fixtures and a fresh security review.
+all container-header parsing. The supported-distribution replacement above
+still requires a complete vulnerability inventory. Expanding the accepted
+codec set requires new fixtures and a fresh security review.
 
 ## Required pull-request checks
 

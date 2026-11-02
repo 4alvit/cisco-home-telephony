@@ -1,7 +1,26 @@
 # syntax=docker/dockerfile:1
 # Supply a verified Debian image digest; scripts/build-images.sh resolves it.
 ARG DEBIAN_IMAGE
-FROM ${DEBIAN_IMAGE} AS build
+FROM ${DEBIAN_IMAGE} AS distribution
+ARG DEBIAN_IMAGE
+LABEL org.opencontainers.image.base.name="${DEBIAN_IMAGE}" \
+      io.cisco-home-telephony.debian.snapshot="20261101T000000Z"
+# Both compilation and runtime resolve packages from the same reviewed snapshot.
+# Debian slim has no CA bundle. Bootstrap it from the frozen archive over HTTP;
+# APT still verifies Debian Release signatures and package checksums. All later
+# archive transfers use HTTPS with the installed CA bundle.
+RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
+    && rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
+    && printf '%s\n' \
+       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261101T000000Z trixie main' \
+       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261101T000000Z trixie-updates main' \
+       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261101T000000Z trixie-security main' \
+       > /etc/apt/sources.list \
+    && apt-get -o Acquire::Retries=3 update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && sed -i 's|http://snapshot.debian.org|https://snapshot.debian.org|g' /etc/apt/sources.list \
+    && rm -rf /var/lib/apt/lists/*
+FROM distribution AS build
 ARG ASTERISK_VERSION=22.11.0
 ARG ASTERISK_SHA256=3bd5ee040509a3d3cd9b1ba9520c18e6ec0a7e7981ca68c457dcd36ba3c54d94
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -48,9 +67,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends libopus-dev \
     && mkdir -p /stage/usr/share/doc/asterisk-opus-open-source \
     && cp /build/opus-source/LICENSE /build/opus-source/README.md /stage/usr/share/doc/asterisk-opus-open-source/ \
     && cp /tmp/opus-source.tar.gz /stage/usr/share/doc/asterisk-opus-open-source/source.tar.gz
-FROM ${DEBIAN_IMAGE}
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates tzdata libedit2 libssl3 libxml2 libuuid1 libsqlite3-0 libncurses6 libopus0 libunbound8 python3 python3-pil ffmpeg \
+FROM distribution
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+    ca-certificates tzdata libedit2 libxml2 libuuid1 libsqlite3-0 libncurses6 libopus0 libunbound8 python3 python3-pil \
+    ffmpeg=7:7.1.5-0+deb13u1 libmbedcrypto16=3.6.6-0.1~deb13u1 \
+    libbrotli1=1.1.0-2+deb13u1 libexpat1=2.9.0-1~deb13u1 \
+    libssh-4=0.11.5-0+deb13u1 libssl3t64=3.5.7-1~deb13u3 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 10001 asterisk && useradd -u 10001 -g 10001 -M -s /usr/sbin/nologin asterisk
 COPY --from=build /stage/ /

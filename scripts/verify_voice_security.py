@@ -10,22 +10,40 @@ import argparse
 import json
 from collections import Counter
 from pathlib import Path
+import re
 
-EXACT_PACKAGES = {'libbrotli1': ('1.0.9', '2+deb12u1'),
-                  'libexpat1': ('2.5.0', '1+deb12u5'),
-                  'libssh-gcrypt-4': ('0.10.6', '0+deb12u3')}
+# Exact Debian 13 packages from snapshot 20261101T000000Z. FFmpeg's epoch
+# is a separate Trivy field; checking only Version/Release would miss it.
+EXACT_PACKAGES = {'libbrotli1': ('1.1.0', '2+deb13u1'),
+                  'libexpat1': ('2.9.0', '1~deb13u1'),
+                  'libssh-4': ('0.11.5', '0+deb13u1'),
+                  'libssl3t64': ('3.5.7', '1~deb13u3'),
+                  'libmbedcrypto16': ('3.6.6', '0.1~deb13u1'),
+                  'ffmpeg': ('7.1.5', '0+deb13u1')}
+EXACT_EPOCHS = {'ffmpeg': 7}
+PROFILES = ('voice', 'asterisk')
 HIGH_SEVERITIES = {"HIGH", "CRITICAL"}
 SEVERITIES = {"UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"}
 
 
-def verify(report):
+def verify(report, *, profile="voice"):
+    if profile not in PROFILES:
+        raise ValueError("Unknown image security profile")
     if (not isinstance(report, dict) or report.get("SchemaVersion") != 2
             or report.get("ArtifactType") != "container_image"):
         raise ValueError("Expected a complete Trivy v2 container-image report")
+    metadata = report.get("Metadata")
+    operating_system = metadata.get("OS") if isinstance(metadata, dict) else None
+    if (not isinstance(operating_system, dict) or operating_system.get("Family") != "debian"
+            or not isinstance(operating_system.get("Name"), str)
+            or not re.fullmatch(r"13(?:\.[0-9]+)*", operating_system["Name"])
+            or operating_system.get("EOSL") is True):
+        raise ValueError("Reviewed Debian 13 runtime required; EOL/unknown OS evidence is rejected")
     results = report.get("Results")
     if not isinstance(results, list) or not results:
         raise ValueError("Missing image package results")
     inventory = set()
+    package_counts = Counter()
     libraries = {name: [] for name in EXACT_PACKAGES}
     blocked = []
     severity_counts = Counter()
@@ -38,10 +56,15 @@ def verify(report):
         if not isinstance(packages, list) or not packages:
             raise ValueError("Missing complete package inventory: use --list-all-pkgs")
         inventory.add((kind, result.get("Type")))
+        package_counts[kind] += len(packages)
         for package in packages:
-            if (not isinstance(package, dict) or not package.get("Name")
-                    or not package.get("Version")):
+            if (not isinstance(package, dict) or not isinstance(package.get("Name"), str)
+                    or not package["Name"] or not isinstance(package.get("Version"), str)
+                    or not package["Version"]):
                 raise ValueError("Malformed package inventory")
+            if kind == "os-pkgs" and (package["Name"].startswith("libmbed")
+                    or package.get("SrcName") == "mbedtls") and package["Version"].startswith("2."):
+                blocked.append("EOL Mbed TLS 2.x must not be present: " + package["Name"])
             if kind == "os-pkgs" and package["Name"] in EXACT_PACKAGES:
                 libraries[package["Name"]].append(package)
             if kind == "lang-pkgs" and package["Name"].lower() == "pip":
@@ -61,28 +84,39 @@ def verify(report):
                     blocked.append(label)
                 else:
                     unfixed_os.append(label)
-    if not {("os-pkgs", "debian"), ("lang-pkgs", "python-pkg")} <= inventory:
-        raise ValueError("Both Debian and Python package inventories are required")
+    required = {("os-pkgs", "debian")}
+    if profile == "voice":
+        # Debian-packaged Python in the PBX may have no separately discovered
+        # language packages. Any discovered language findings still use the
+        # same blocking policy for both profiles.
+        required.add(("lang-pkgs", "python-pkg"))
+    if not required <= inventory:
+        raise ValueError("Missing required package inventories for " + profile)
     for name, expected in EXACT_PACKAGES.items():
         packages = libraries[name]
         if (len(packages) != 1 or
-                (packages[0]["Version"], packages[0].get("Release")) != expected):
+                (packages[0]["Version"], packages[0].get("Release")) != expected
+                or packages[0].get("Epoch", 0) != EXACT_EPOCHS.get(name, 0)):
             blocked.append(f"Expected exactly {name} {expected[0]}-{expected[1]}")
     return {
         "passed": not blocked,
+        "profile": profile,
+        "operating_system": operating_system["Name"],
+        "package_counts": dict(sorted(package_counts.items())),
         "blocking_findings": sorted(blocked),
         "all_severity_counts": dict(sorted(severity_counts.items())),
         "unfixed_os_high_critical": sorted(unfixed_os),
-        "scope": "All language HIGH/CRITICAL; fixed OS HIGH/CRITICAL; exact Debian security package versions",
+        "scope": "All language HIGH/CRITICAL; fixed OS HIGH/CRITICAL; exact Debian 13 security package versions; no EOL Mbed TLS 2.x",
     }
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path)
+    parser.add_argument("--profile", choices=PROFILES, default="voice")
     args = parser.parse_args()
     try:
-        result = verify(json.loads(args.report.read_text()))
+        result = verify(json.loads(args.report.read_text()), profile=args.profile)
     except (OSError, ValueError) as error:
         parser.exit(1, f"Invalid container security evidence: {error}\n")
     print(json.dumps(result, indent=2))

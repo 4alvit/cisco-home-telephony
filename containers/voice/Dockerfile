@@ -2,19 +2,25 @@
 # an allowlisted context. No private checkout files enter the build context.
 ARG PYTHON_IMAGE
 FROM ${PYTHON_IMAGE}
+ARG PYTHON_IMAGE
+LABEL org.opencontainers.image.base.name="${PYTHON_IMAGE}" \
+      io.cisco-home-telephony.debian.snapshot="20261101T000000Z"
 
 # Freeze Debian package indexes as well as Python wheels. Updating this date is
 # an explicit dependency update; the base digest is recorded by the helper.
-RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
+RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
+    && rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
     && printf '%s\n' \
-       'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20261024T000000Z bookworm main' \
-       'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20261024T000000Z bookworm-updates main' \
-       'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20261024T000000Z bookworm-security main' \
+       'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20261101T000000Z trixie main' \
+       'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20261101T000000Z trixie-updates main' \
+       'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20261101T000000Z trixie-security main' \
        > /etc/apt/sources.list \
     && apt-get -o Acquire::Retries=3 update \
-    && apt-get install -y --no-install-recommends ffmpeg tzdata \
-       libbrotli1=1.0.9-2+deb12u1 libexpat1=2.5.0-1+deb12u5 \
-       libssh-gcrypt-4=0.10.6-0+deb12u3 \
+    && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends tzdata \
+       ffmpeg=7:7.1.5-0+deb13u1 libmbedcrypto16=3.6.6-0.1~deb13u1 \
+       libbrotli1=1.1.0-2+deb13u1 libexpat1=2.9.0-1~deb13u1 \
+       libssh-4=0.11.5-0+deb13u1 libssl3t64=3.5.7-1~deb13u3 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 cisco-voice \
     && useradd --uid 10001 --gid 10001 --no-create-home \

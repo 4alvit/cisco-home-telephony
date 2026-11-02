@@ -98,7 +98,8 @@ class VoiceImageHelperTests(unittest.TestCase):
         self.sources = renderer_sources()
         for relative in (*self.sources, CONTROL_SOURCE, HANDS_FREE_SOURCE, *SIP_SOURCES, *RECOVERY_SOURCES):
             self.write(relative, "# Synthetic source: " + relative + "\n")
-        for relative in (*IMAGE_FILES, "scripts/build-voice-image.sh", "scripts/smoke-voice-image.sh"):
+        for relative in (*IMAGE_FILES, "scripts/build-voice-image.sh", "scripts/smoke-voice-image.sh",
+                         "tests/test_ffmpeg_runtime_contract.py"):
             target = self.repo / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / relative, target)
@@ -182,18 +183,18 @@ class VoiceImageHelperTests(unittest.TestCase):
         build = self.only_call("build")
         self.assertEqual(build[build.index("--platform") + 1], "linux/amd64")
         self.assertEqual(build[build.index("--build-arg") + 1],
-                         "PYTHON_IMAGE=python:3.12-slim-bookworm@" + BASE_DIGEST)
+                         "PYTHON_IMAGE=python:3.12-slim-trixie@" + BASE_DIGEST)
         self.assertEqual(build[build.index("-f") + 1], str(context / "containers/voice/Dockerfile"))
         self.assertEqual(build[build.index("-t") + 1], "example.invalid/synthetic/voice:pilot")
         self.assertEqual(build[-1], str(context))
         self.assertEqual(self.only_call("image")[2], "example.invalid/synthetic/voice:pilot")
-        self.assertIn(IMAGE_ID, self.only_call("run"))
+        self.assertTrue(all(IMAGE_ID in call for call in self.calls() if call[0] == "run"))
         self.assertFalse(any(args[0] in {"push", "login", "pull"} for args in self.calls()))
 
     def test_explicit_official_digest_and_arm64_are_used_without_registry_lookup(self):
         for version in ("3.11", "3.12"):
             with self.subTest(version=version):
-                base = "python:" + version + "-slim-bookworm@" + BASE_DIGEST
+                base = "python:" + version + "-slim-trixie@" + BASE_DIGEST
                 result = self.build(PYTHON_IMAGE=base, BUILD_PLATFORM="linux/arm64")
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertFalse(any(args[0] == "buildx" for args in self.calls()))
@@ -202,10 +203,10 @@ class VoiceImageHelperTests(unittest.TestCase):
                 self.assertEqual(build[build.index("--build-arg") + 1], "PYTHON_IMAGE=" + base)
 
     def test_mutable_or_unapproved_base_image_never_builds(self):
-        for base in ("python:3.12-slim-bookworm", "example.invalid/python@" + BASE_DIGEST,
-                     "python:3.13-slim-bookworm@" + BASE_DIGEST,
-                     "python:3.12-slim-bookworm@sha256:" + "A" * 64,
-                     "python:3.12-slim-bookworm@sha256:1234"):
+        for base in ("python:3.12-slim-bookworm@" + BASE_DIGEST, "python:3.12-slim-trixie", "example.invalid/python@" + BASE_DIGEST,
+                     "python:3.13-slim-trixie@" + BASE_DIGEST,
+                     "python:3.12-slim-trixie@sha256:" + "A" * 64,
+                     "python:3.12-slim-trixie@sha256:1234"):
             with self.subTest(base=base):
                 result = self.build(PYTHON_IMAGE=base)
                 self.assertNotEqual(result.returncode, 0)
@@ -253,21 +254,23 @@ class VoiceImageHelperTests(unittest.TestCase):
     def test_smoke_uses_local_image_id_and_restricts_network_filesystem_and_privileges(self):
         result = self.run_helper("smoke-voice-image.sh", "example.invalid/synthetic/voice:pilot")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual([args[0] for args in self.calls()], ["image", "run"])
-        run = self.only_call("run")
-        for flag in ("--rm", "--read-only"):
-            self.assertIn(flag, run)
-        for flag, value in {
-            "--pull": "never", "--network": "none",
-            "--tmpfs": "/tmp:rw,nosuid,nodev,noexec,size=64m",
-            "--cap-drop": "ALL", "--security-opt": "no-new-privileges",
-            "--user": "10001:10001", "--pids-limit": "64", "--memory": "512m",
-            "--cpus": "1", "--entrypoint": "python3",
-        }.items():
-            self.assertEqual(run[run.index(flag) + 1], value)
-        self.assertEqual(run[-2:], [IMAGE_ID, "/opt/voice/smoke.py"])
-        for flag in ("--privileged", "--device", "--volume", "-v", "--mount", "--cap-add"):
-            self.assertNotIn(flag, run)
+        self.assertEqual([args[0] for args in self.calls()], ["image", "run", "run"])
+        runs = [call for call in self.calls() if call[0] == "run"]
+        for index, run in enumerate(runs):
+            with self.subTest(index=index):
+                for flag in ("--rm", "--read-only"):
+                    self.assertIn(flag, run)
+                for flag, value in {
+                    "--pull": "never", "--network": "none",
+                    "--tmpfs": "/tmp:rw,nosuid,nodev,noexec,size=64m",
+                    "--cap-drop": "ALL", "--security-opt": "no-new-privileges",
+                    "--user": "10001:10001", "--pids-limit": "64" if index == 0 else "128",
+                    "--memory": "512m", "--cpus": "1", "--entrypoint": "python3",
+                }.items():
+                    self.assertEqual(run[run.index(flag) + 1], value)
+                self.assertEqual(run[-2:], [IMAGE_ID, "/opt/voice/smoke.py" if index == 0 else "-"])
+                for flag in ("--privileged", "--device", "--volume", "-v", "--mount", "--cap-add"):
+                    self.assertNotIn(flag, run)
 
     def test_smoke_rejects_invalid_local_image_id_before_run(self):
         result = self.run_helper("smoke-voice-image.sh", "synthetic:pilot",
@@ -280,6 +283,60 @@ class VoiceImageHelperTests(unittest.TestCase):
         self.assertEqual(result.returncode, 8, result.stderr)
         self.assertNotIn("Built and smoke-tested locally:", result.stdout)
         self.assertEqual(list(self.tmp.iterdir()), [])
+
+
+class PbxBaseIsolationTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        for name in ('scripts', 'containers/asterisk', 'containers/tftp', 'bin', 'records'):
+            (self.root / name).mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / 'scripts/build-images.sh', self.root / 'scripts/build-images.sh')
+        for name in ('asterisk', 'tftp'):
+            (self.root / 'containers' / name / 'Dockerfile').write_text('# synthetic build context\n')
+        docker = self.root / 'bin/docker'
+        docker.write_text('#!' + sys.executable + '\n' + FAKE_DOCKER)
+        docker.chmod(0o755)
+        self.env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + os.environ['PATH'],
+                        VOICE_FAKE_RECORDS=str(self.root / 'records'), VOICE_FAKE_BASE_DIGEST=BASE_DIGEST)
+        for key in ('ASTERISK_DEBIAN_IMAGE', 'TFTP_DEBIAN_IMAGE', 'BUILD_PLATFORM', 'VOICE_FAKE_FAIL'):
+            self.env.pop(key, None)
+
+    def run_build(self, **env):
+        result = subprocess.run(['bash', 'scripts/build-images.sh', 'example.invalid/test'],
+                                cwd=self.root, env={**self.env, **env}, capture_output=True, text=True,
+                                timeout=15)
+        path = self.root / 'records/calls.jsonl'
+        calls = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+        return result, calls
+
+    def test_pbx_and_tftp_resolve_separate_distributions(self):
+        result, calls = self.run_build()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        resolves = [call[3] for call in calls if call[0] == 'buildx']
+        self.assertEqual(resolves, ['debian:trixie-slim', 'debian:bookworm-slim'])
+        builds = [call for call in calls if call[0] == 'build']
+        self.assertEqual([call[call.index('--build-arg') + 1] for call in builds], [
+            'DEBIAN_IMAGE=debian:trixie-slim@' + BASE_DIGEST,
+            'DEBIAN_IMAGE=debian:bookworm-slim@' + BASE_DIGEST])
+        self.assertEqual([call[-1] for call in builds], ['containers/asterisk', 'containers/tftp'])
+        self.assertFalse(any(call[0] in ('push', 'login') for call in calls))
+
+    def test_explicit_digest_replays_do_not_resolve_mutable_tags(self):
+        result, calls = self.run_build(ASTERISK_DEBIAN_IMAGE='debian:trixie-slim@' + BASE_DIGEST,
+                                       TFTP_DEBIAN_IMAGE='debian:bookworm-slim@' + BASE_DIGEST)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(call[0] == 'buildx' for call in calls))
+
+    def test_old_or_mutable_pbx_base_is_rejected_before_build(self):
+        for image in ('debian:bookworm-slim@' + BASE_DIGEST, 'debian:trixie-slim'):
+            with self.subTest(image=image):
+                log = self.root / 'records/calls.jsonl'
+                log.unlink(missing_ok=True)
+                result, calls = self.run_build(ASTERISK_DEBIAN_IMAGE=image)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(any(call[0] in ('build', 'run') for call in calls))
 
 
 if __name__ == "__main__":
