@@ -8,7 +8,6 @@ No configuration, endpoint, credential or audio input is accepted from users.
 from __future__ import annotations
 
 import argparse
-import asyncio
 import contextlib
 import fcntl
 import importlib.util

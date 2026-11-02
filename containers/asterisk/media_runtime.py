@@ -139,7 +139,9 @@ def open_media(url, allowed_origins=()):
                 try:
                     sock.connect(target)
                     if scheme == 'https':
-                        sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
+                        context = ssl.create_default_context()
+                        context.minimum_version = ssl.TLSVersion.TLSv1_2
+                        sock = context.wrap_socket(sock, server_hostname=host)
                     connection.sock = sock
                     break
                 except OSError:

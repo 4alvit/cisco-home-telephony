@@ -11,7 +11,6 @@ import os
 from pathlib import Path
 import re
 import secrets
-import socket
 import socketserver
 import stat
 import sys

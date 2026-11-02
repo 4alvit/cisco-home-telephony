@@ -1,5 +1,4 @@
 """HA adapter boundaries: identity, allowlists, no redirects and confirmations."""
-import copy
 import io
 import json
 from pathlib import Path

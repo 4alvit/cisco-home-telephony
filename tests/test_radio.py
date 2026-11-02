@@ -1,4 +1,3 @@
-import copy
 import importlib.util
 import io
 import json
@@ -7,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import ssl
 import struct
 import subprocess
 import sys
@@ -148,6 +148,29 @@ class RadioConfiguration(unittest.TestCase):
 
 
 class RadioIsolation(unittest.TestCase):
+    def test_https_requires_tls12_and_verified_hostname_before_wrapping(self):
+        context = ssl.create_default_context()
+        context.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
+        connection = Mock()
+        response = connection.getresponse.return_value
+        response.status = 200
+        response.getheader.side_effect = lambda name, default=None: {'Content-Type': 'audio/mpeg'}.get(name, default)
+        raw_socket = Mock()
+        address = (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('8.8.8.8', 443))
+        station = {'url': 'https://audio.example/live', 'hosts': ['audio.example']}
+        with patch.object(r.socket, 'getaddrinfo', return_value=[address]), \
+                patch.object(r.socket, 'socket', return_value=raw_socket), \
+                patch.object(r.http.client, 'HTTPConnection', return_value=connection), \
+                patch.object(r.ssl, 'create_default_context', return_value=context), \
+                patch.object(context, 'wrap_socket', return_value=raw_socket) as wrap:
+            opened, _ = r.open_stream(station)
+        self.assertIs(opened, connection)
+        self.assertEqual(context.minimum_version, ssl.TLSVersion.TLSv1_2)
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+        wrap.assert_called_once_with(raw_socket, server_hostname='audio.example')
+        raw_socket.connect.assert_called_once_with(('8.8.8.8', 443))
+
     def test_url_policy_rejects_cross_host_local_schemes_credentials_and_downgrades(self):
         station = r.catalog()["echo"]
         for url in ("file:///etc/passwd", "http://127.0.0.1/", "https://example.com/", station["url"].replace("https:", "http:"),

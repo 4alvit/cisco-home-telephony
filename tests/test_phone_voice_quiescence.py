@@ -1,5 +1,4 @@
 """Synthetic-only quiescence proofs; no phone, AMI or other network I/O."""
-import copy
 import io
 import json
 import os

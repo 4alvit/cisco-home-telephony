@@ -1,13 +1,11 @@
 """Strict, bounded Cisco callback and fixed-target controller behavior."""
 import contextlib
 import base64
-import copy
 import errno
 import importlib.util
 import http.client
 import io
 import json
-import os
 from pathlib import Path
 import socket
 import tempfile

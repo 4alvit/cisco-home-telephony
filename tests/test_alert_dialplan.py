@@ -1,5 +1,4 @@
 """Alert routing and readiness regression; live SIP behavior has its own isolated fixture."""
-import importlib.util
 import os
 from pathlib import Path
 import shlex

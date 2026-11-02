@@ -20,7 +20,6 @@ import os
 from pathlib import Path
 import socket
 import stat
-import struct
 import sys
 import tempfile
 import time

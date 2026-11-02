@@ -14,7 +14,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from voice_assistant.ha import AssistError, AssistTimeout, HAClient
-from voice_assistant.pipeline import PipelineStatus, main
+from voice_assistant.pipeline import main
 
 
 PIPELINE = {
