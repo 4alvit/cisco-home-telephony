@@ -37,7 +37,7 @@ def require(value, reason, status=400):
 def validate_config(value):
     require(isinstance(value, dict) and set(value) <= {
         'enabled', 'speech_enabled', 'sources', 'screen_destinations',
-        'echo_destinations', 'cooldown_seconds', 'max_event_age_seconds',
+        'speech_destinations', 'echo_destinations', 'cooldown_seconds', 'max_event_age_seconds',
         'quiet_hours', 'announcement'}, 'invalid_notification_config')
     value = dict(value)
     for name in ('enabled', 'speech_enabled'):
@@ -47,17 +47,20 @@ def validate_config(value):
     require(isinstance(sources, list) and len(sources) <= 32 and all(
         isinstance(x, str) and SOURCE.fullmatch(x) for x in sources)
         and len(set(sources)) == len(sources), 'invalid_notification_sources')
-    for name in ('screen_destinations', 'echo_destinations'):
+    for name in ('screen_destinations', 'speech_destinations', 'echo_destinations'):
         lines = value.setdefault(name, [])
         require(isinstance(lines, list) and len(lines) <= 20 and all(
             isinstance(x, str) and LINE.fullmatch(x) for x in lines)
-            or name == 'screen_destinations' and lines == ['*'],
+            or name in ('screen_destinations', 'speech_destinations') and lines == ['*'],
             'invalid_notification_destinations')
         require(len(set(lines)) == len(lines), 'duplicate_notification_destination')
         require(name != 'echo_destinations' or len(lines) <= 16,
                 'too_many_notification_echoes')
-    require(not set(value['screen_destinations']) & set(value['echo_destinations']),
-            'overlapping_notification_destinations')
+    for left, right in (('screen_destinations', 'speech_destinations'),
+                        ('screen_destinations', 'echo_destinations'),
+                        ('speech_destinations', 'echo_destinations')):
+        require(not set(value[left]) & set(value[right]),
+                'overlapping_notification_destinations')
     for name, default, low, high in (('cooldown_seconds', 60, 60, 86400),
                                     ('max_event_age_seconds', 90, 5, 120)):
         value.setdefault(name, default)
@@ -79,7 +82,7 @@ def validate_config(value):
             raise NotificationError('invalid_notification_timezone') from None
         value['quiet_hours'] = dict(quiet)
     endpoint = value.get('announcement')
-    require(not value['echo_destinations'] or endpoint is not None,
+    require(not (value['echo_destinations'] or value['speech_destinations']) or endpoint is not None,
             'notification_announcement_required')
     if endpoint is not None:
         require(isinstance(endpoint, dict) and set(endpoint) == {'base_url', 'token'},
@@ -211,19 +214,23 @@ class NoRedirect(request.HTTPRedirectHandler):
         raise NotificationError('announcement_redirect_refused', 503)
 
 
-def submit_announcement(config, body, timeout):
+def announcement_request(config, body, timeout, *, job_id=None, stop=False):
     opener = request.build_opener(request.ProxyHandler({}), NoRedirect())
-    req = request.Request(config['base_url'] + '/v1/announcements',
-                          data=json.dumps(body).encode(), headers={
-                              'Authorization': 'Bearer ' + config['token'],
-                              'Content-Type': 'application/json'})
+    path = '/v1/announcements'
+    if job_id is not None:
+        require(re.fullmatch(r'[0-9a-f]{32}', job_id), 'invalid_announcement_id')
+        path += '/' + job_id + ('/stop' if stop else '')
+    payload = {} if stop else body if job_id is None else None
+    req = request.Request(config['base_url'] + path,
+                          data=json.dumps(payload).encode() if payload is not None else None,
+                          headers={'Authorization': 'Bearer ' + config['token'],
+                                   'Content-Type': 'application/json'})
     try:
         with opener.open(req, timeout=min(5, timeout)) as response:
             require(response.status == 200, 'announcement_response_unknown', 503)
             raw = response.read(65537)
             require(len(raw) <= 65536, 'announcement_response_unknown', 503)
-            result = json.loads(raw)
-            return validate_announcement(result, body)
+            return validate_announcement(json.loads(raw), body)
     except error.HTTPError as exc:
         code = exc.code
         exc.close()
@@ -233,9 +240,24 @@ def submit_announcement(config, body, timeout):
         raise NotificationError('announcement_response_unknown', 503) from None
 
 
+def submit_announcement(config, body, timeout):
+    return announcement_request(config, body, timeout)
+
+
+def read_announcement(config, body, timeout):
+    return announcement_request(config, body, timeout,
+        job_id=hashlib.sha256(body['idempotency_key'].encode()).hexdigest()[:32])
+
+
+def stop_announcement(config, body, timeout):
+    return announcement_request(config, body, timeout,
+        job_id=hashlib.sha256(body['idempotency_key'].encode()).hexdigest()[:32], stop=True)
+
+
 def validate_announcement(result, body):
     expected_id = hashlib.sha256(body['idempotency_key'].encode()).hexdigest()[:32]
-    states = {'queued', 'submitting', 'submitted', 'playing', 'completed', 'skipped',
+    routes = body.get('expected_routes', {line: 'ha_satellite' for line in body['lines']})
+    states = {'queued', 'submitting', 'submitted', 'ringing', 'playing', 'completed', 'skipped',
               'failed', 'stopping', 'stopped', 'unknown'}
     terminal = {'completed', 'skipped', 'failed', 'stopped', 'unknown'}
     require(isinstance(result, dict) and result.get('id') == expected_id
@@ -247,23 +269,42 @@ def validate_announcement(result, body):
             and isinstance(result.get('recipients'), list)
             and len(result['recipients']) == len(body['lines']),
             'announcement_response_unknown', 503)
+    if 'sip' in routes.values():
+        require(type(result.get('expires_at')) in (int, float)
+                and math.isfinite(result['expires_at']) and result['expires_at'] > 0,
+                'announcement_response_unknown', 503)
     seen = set()
+    recipients = []
     for row in result['recipients']:
         require(isinstance(row, dict) and isinstance(row.get('line'), str)
                 and row['line'] in body['lines'] and row['line'] not in seen
-                and row.get('phone_id') == row['line'] and row.get('driver') == 'ha_satellite'
-                and 'channel' in row and row['channel'] is None
-                and 'uniqueid' in row and row['uniqueid'] is None
-                and row.get('status') in states,
+                and row.get('phone_id') == row['line'] and row.get('driver') == routes[row['line']]
+                and row.get('status') in states and 'channel' in row and 'uniqueid' in row,
                 'announcement_response_unknown', 503)
+        channel, unique = row['channel'], row['uniqueid']
+        if routes[row['line']] == 'ha_satellite':
+            require(channel is None and unique is None and row['status'] != 'ringing',
+                    'announcement_response_unknown', 503)
+        else:
+            require(routes[row['line']] == 'sip'
+                    and isinstance(row.get('caller_id'), str)
+                    and re.fullmatch(r'[0-9]{3,32}', row['caller_id'])
+                    and ((channel is None and unique is None)
+                        or (isinstance(channel, str) and re.fullmatch(
+                            r'PJSIP/' + row['line'] + r'-[A-Za-z0-9]+', channel)
+                            and isinstance(unique, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,160}', unique)))
+                    and (row['status'] not in ('ringing', 'playing') or channel is not None),
+                    'announcement_response_unknown', 503)
         require(result['status'] not in {'finished', 'stopped', 'failed'} or row['status'] in terminal,
                 'announcement_response_unknown', 503)
         seen.add(row['line'])
-    return {'id': expected_id, 'status': result['status'], 'recipients': [
-        {'line': row['line'], 'status': row['status']} for row in result['recipients']]}
+        recipients.append({name: row.get(name) for name in
+                           ('line', 'phone_id', 'driver', 'status', 'channel', 'uniqueid', 'caller_id')})
+    return {'id': expected_id, 'status': result['status'], 'recipients': recipients,
+            'expires_at': result.get('expires_at')}
 
 
-def screen_targets(inventory, destinations, now):
+def phone_targets(inventory, destinations, now, *, speech=False):
     require(isinstance(inventory, dict) and inventory.get('ami_fresh') is True,
             'notification_inventory_unavailable', 503)
     observed = inventory.get('observed_at')
@@ -293,7 +334,8 @@ def screen_targets(inventory, destinations, now):
                 and isinstance(row['channels'], list) and isinstance(row['capabilities'], list),
                 'notification_inventory_invalid', 503)
         guard = row.get('notification')
-        reason = ('notification_unavailable' if 'notification' not in row.get('capabilities', [])
+        capability = 'answer' if speech else 'notification'
+        reason = ('notification_unavailable' if capability not in row.get('capabilities', [])
                   else 'offline' if row.get('online') is not True
                   else 'dnd' if row.get('dnd') is not False or row.get('dnd_pending') is not False
                   else 'busy' if row.get('channels') != []
@@ -305,16 +347,26 @@ def screen_targets(inventory, destinations, now):
             skipped.append({'target': phone, 'reason': reason})
         else:
             allowed.append(phone)
+    return allowed, skipped, selected
+
+
+def screen_targets(inventory, destinations, now):
+    allowed, skipped, _ = phone_targets(inventory, destinations, now)
     return allowed, skipped
 
 
 class Dispatcher:
     def __init__(self, config, gateway, state_directory, *, clock=time.time,
-                 monotonic=time.monotonic, announcer=submit_announcement):
+                 monotonic=time.monotonic, announcer=submit_announcement,
+                 reader=read_announcement, stopper=stop_announcement,
+                 sleep=time.sleep, thread_factory=threading.Thread):
         self.config = validate_config(config)
         self.gateway, self.directory = gateway, state_directory
         self.clock, self.monotonic, self.announcer = clock, monotonic, announcer
         self.lock = threading.Lock()
+        self.reader, self.stopper = reader, stopper
+        self.sleep, self.thread_factory = sleep, thread_factory
+        self.worker = None
 
     def running(self):
         stopped = getattr(self.gateway, 'stopped', None)
@@ -338,6 +390,8 @@ class Dispatcher:
             self.fresh(event)
             acquired = self.lock.acquire(blocking=False)
             require(acquired, 'notification_dispatch_busy', 409)
+            require(self.worker is None or not self.worker.is_alive(),
+                    'notification_speech_busy', 409)
             deadline = self.monotonic() + MAX_SECONDS
             key = hashlib.sha256((event['source'] + '\0' + event['event_id']).encode()).hexdigest()
             digest = hashlib.sha256(json.dumps(event, sort_keys=True).encode()).hexdigest()
@@ -348,23 +402,29 @@ class Dispatcher:
             if quiet_now(cfg, self.clock()):
                 result['reason'] = 'quiet_hours'
                 return result
-            phones = []
-            if cfg['screen_destinations']:
+            phones, speakers = [], []
+            if cfg['screen_destinations'] or cfg['speech_destinations']:
                 try:
                     inventory = self.gateway.listing()
-                    phones, skipped = screen_targets(inventory, cfg['screen_destinations'], self.clock())
-                    require(not any(line in cfg['echo_destinations']
-                                    for row in inventory['phones'] for line in row['lines']),
-                            'overlapping_notification_destinations')
-                    result['skipped'].extend(skipped)
+                    phones, screen_skipped, screens = phone_targets(
+                        inventory, cfg['screen_destinations'], self.clock())
+                    speakers, speech_skipped, spoken = phone_targets(
+                        inventory, cfg['speech_destinations'], self.clock(), speech=True)
+                    require(not set(screens) & set(spoken) and not any(
+                        line in cfg['echo_destinations']
+                        for row in inventory['phones'] for line in row['lines']),
+                        'overlapping_notification_destinations')
+                    require(len(spoken) + len(cfg['echo_destinations']) <= 16,
+                            'too_many_notification_speakers')
+                    result['skipped'].extend(screen_skipped + speech_skipped)
                 except NotificationError as exc:
-                    if exc.reason == 'overlapping_notification_destinations':
+                    if exc.reason in ('overlapping_notification_destinations', 'too_many_notification_speakers'):
                         raise
-                    phones = []
-                    result['skipped'].append({'target': 'screens', 'reason': 'inventory_unavailable'})
+                    phones, speakers = [], []
+                    result['skipped'].append({'target': 'phones', 'reason': 'inventory_unavailable'})
                 except Exception:
-                    phones = []
-                    result['skipped'].append({'target': 'screens', 'reason': 'inventory_unavailable'})
+                    phones, speakers = [], []
+                    result['skipped'].append({'target': 'phones', 'reason': 'inventory_unavailable'})
             for phone in phones:
                 self.running()
                 self.fresh(event)
@@ -388,29 +448,32 @@ class Dispatcher:
                     known = getattr(exc, 'before_mutation', False) or getattr(exc, 'status', 500) < 500
                     result['skipped' if known else 'unknown'].append({
                         'target': phone, 'reason': 'gateway_refused' if known else 'delivery_unknown'})
-            echoes = []
-            for line in cfg['echo_destinations']:
+            speech = []
+            for line in speakers + cfg['echo_destinations']:
                 if not cfg['speech_enabled']:
                     result['skipped'].append({'target': line, 'reason': 'speech_disabled'})
                 elif not ledger.target(line, self.clock(), cfg['cooldown_seconds'], readonly=dry_run):
                     result['skipped'].append({'target': line, 'reason': 'cooldown'})
                 else:
-                    echoes.append(line)
-            if echoes:
+                    speech.append(line)
+            if speech:
                 self.running()
                 self.fresh(event)
                 require(not quiet_now(cfg, self.clock()), 'notification_quiet_hours', 409)
                 require(self.monotonic() < deadline, 'notification_deadline', 503)
                 if dry_run:
-                    result['eligible'].extend(echoes)
+                    result['eligible'].extend(speech)
                 else:
                     try:
                         request_body = {
                             'idempotency_key': 'notification-' + key,
-                            'lines': echoes, 'text': event['message'][:1000],
-                            'expected_routes': {line: 'ha_satellite' for line in echoes}}
+                            'lines': speech, 'text': event['message'][:1000],
+                            'expected_routes': {line: 'sip' if line in speakers else 'ha_satellite'
+                                                for line in speech}}
                         job = self.announcer(cfg['announcement'], request_body,
                             max(.1, deadline - self.monotonic()))
+                        if any(line in speakers for line in speech):
+                            self.start_answers(request_body, event['event_at'])
                         for row in job['recipients']:
                             if row['status'] in ('failed', 'skipped', 'stopped'):
                                 result['skipped'].append({'target': row['line'], 'job_id': job['id'],
@@ -422,7 +485,7 @@ class Dispatcher:
                                 result['accepted'].append({'target': row['line'], 'route': 'speech',
                                                            'job_id': job['id'], 'state': row['status']})
                     except Exception:
-                        result['unknown'].extend({'target': line, 'reason': 'delivery_unknown'} for line in echoes)
+                        result['unknown'].extend({'target': line, 'reason': 'delivery_unknown'} for line in speech)
             if result['unknown']:
                 result['status'] = 'partial' if result['accepted'] else 'refused'
         except NotificationError as exc:
@@ -435,6 +498,93 @@ class Dispatcher:
             if acquired:
                 self.lock.release()
         return result
+
+    def start_answers(self, body, event_at):
+        # The worker holds routing/identity metadata only, never message text.
+        observed = {key: value for key, value in body.items() if key != 'text'}
+        self.worker = self.thread_factory(target=self.answer_job, args=(observed, event_at),
+                                          name='notification-answer', daemon=True)
+        try:
+            self.worker.start()
+        except Exception:
+            try:
+                self.stopper(self.config['announcement'], observed, 5)
+            except Exception:
+                pass
+            raise
+
+    def answer_job(self, body, event_at):
+        deadline = self.monotonic() + 180
+        attempted = set()
+        pending = {line for line, route in body['expected_routes'].items() if route == 'sip'}
+        terminal = {'finished', 'failed', 'stopped'}
+        try:
+            while self.monotonic() < deadline:
+                self.running()
+                if pending:
+                    self.fresh({'event_at': event_at})
+                    require(not quiet_now(self.config, self.clock()), 'notification_quiet_hours')
+                job = self.reader(self.config['announcement'], body, 5)
+                if job['status'] in terminal:
+                    return
+                require(job['status'] != 'stopping' and job['expires_at'] > self.clock(),
+                        'announcement_no_longer_active')
+                for recipient in job['recipients']:
+                    if recipient['status'] in ('playing', 'completed', 'skipped', 'failed', 'stopped', 'unknown'):
+                        pending.discard(recipient['line'])
+                    if (recipient['driver'] != 'sip' or recipient['status'] != 'ringing'
+                            or recipient['line'] in attempted):
+                        continue
+                    # Only fresh, currently allowed notifications may open a microphone.
+                    self.running()
+                    self.fresh({'event_at': event_at})
+                    require(not quiet_now(self.config, self.clock()), 'notification_quiet_hours')
+                    current = self.reader(self.config['announcement'], body, 5)
+                    require(current['status'] not in terminal | {'stopping'}
+                            and current['expires_at'] > self.clock(), 'announcement_no_longer_active')
+                    row = next(item for item in current['recipients'] if item['line'] == recipient['line'])
+                    require(row['status'] == 'ringing' and all(row[key] == recipient[key]
+                        for key in ('channel', 'uniqueid', 'phone_id', 'caller_id')),
+                        'announcement_call_changed')
+                    self.answer_recipient(job['id'], row, event_at)
+                    attempted.add(row['line'])
+                    pending.discard(row['line'])
+                self.sleep(.35)
+            raise NotificationError('announcement_monitor_deadline')
+        except Exception:
+            # One bounded owned-job stop; native PBX timeouts remain the fallback.
+            # Never retry an uncertain answer or start another announcement.
+            try:
+                self.stopper(self.config['announcement'], body, 5)
+            except Exception:
+                pass
+
+    def answer_recipient(self, job_id, recipient, event_at):
+        inventory = self.gateway.listing()
+        require(isinstance(inventory, dict) and inventory.get('ami_fresh') is True
+                and type(inventory.get('observed_at')) in (int, float)
+                and 0 <= self.clock() - inventory['observed_at'] <= 5,
+                'notification_inventory_stale')
+        rows = [row for row in inventory.get('phones', []) if row.get('id') == recipient['phone_id']]
+        require(len(rows) == 1, 'announcement_phone_changed')
+        phone = rows[0]
+        require(recipient['line'] in phone.get('lines', []) and phone.get('dnd') is False
+                and phone.get('dnd_pending') is False and len(phone.get('channels', [])) == 1
+                and (phone.get('alert') is None or phone['alert'].get('state') == 'ended'),
+                'announcement_phone_changed')
+        call = phone['channels'][0]
+        require(call.get('line') == recipient['line'] and call.get('state') == 'Ringing'
+                and call.get('name') == recipient['channel'] and call.get('uniqueid') == recipient['uniqueid'],
+                'announcement_call_changed')
+        self.running()
+        self.fresh({'event_at': event_at})
+        require(not quiet_now(self.config, self.clock()), 'notification_quiet_hours')
+        key = 'announce-' + job_id + '-' + recipient['line']
+        response = self.gateway.answer_notification(phone['id'], {
+            'line': recipient['line'], 'channel': call['name'], 'uniqueid': call['uniqueid'],
+            'idempotency_key': key})
+        require(response.get('status') == 'accepted' and response.get('action_id') == key,
+                'announcement_answer_not_confirmed')
 
     def fresh(self, event):
         require(-5 <= self.clock() - event['event_at'] <= self.config['max_event_age_seconds'],

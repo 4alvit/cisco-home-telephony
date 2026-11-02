@@ -1524,6 +1524,57 @@ class Gateway:
                 'level_known': False, 'volume_level': None, 'audio_output': 'contextual',
                 'physical_context_verified': False}
 
+    def answer_notification(self, phone_id, body):
+        """Answer one owned announcement without interrupting another activity.
+
+        Internal dispatcher entry point, deliberately absent from the HTTP
+        action map. Unlike a manual answer, this may not suspend hands-free
+        operation. The final AMI snapshot must still identify the exact job.
+        """
+        require(phone_id in self.phones, 'unknown_phone', 404)
+        require(isinstance(body, dict) and set(body) == {
+            'idempotency_key', 'line', 'channel', 'uniqueid'},
+            'invalid_notification_answer', 400)
+        phone = self.phones[phone_id]
+        line, root = body['line'], body['idempotency_key']
+        require(isinstance(line, str) and line in phone['lines'],
+                'line_does_not_belong_to_phone', 400)
+        require(isinstance(root, str) and re.fullmatch(r'announce-[0-9a-f]{32}-' + line, root),
+                'invalid_notification_answer', 400)
+        require(isinstance(body['channel'], str) and re.fullmatch(
+            r'PJSIP/' + line + r'-[A-Za-z0-9]+', body['channel'])
+            and isinstance(body['uniqueid'], str) and re.fullmatch(
+                r'[A-Za-z0-9_.:-]{1,160}', body['uniqueid']),
+            'invalid_notification_answer', 400)
+
+        def operation():
+            require(not self.stopped.is_set(), 'notification_gateway_stopping', 503,
+                    before_mutation=True)
+            with self.reserve_motion_image(phone), AMI(self.config['ami']) as ami:
+                endpoints, channels = ami.snapshot()
+                self.reconcile_alerts(ami, channels)
+                require(not self.preference(phone_id)['dnd'] and phone_id not in self.dnd_pending,
+                        'do_not_disturb')
+                require(not any(row['phone'] == phone_id and row['state'] != 'ended'
+                                for row in self.alerts()), 'alert_already_active')
+                require(all(endpoints.get(endpoint) not in (None, 'Unavailable', 'Invalid')
+                            for endpoint in phone['lines']), 'phone_unavailable', 503,
+                        before_mutation=True)
+                owned = own_channels(phone, channels)
+                require(len(owned) == 1, 'exactly_one_selected_phone_channel_required')
+                channel = owned[0]
+                require(channel.get('Channel') == body['channel']
+                        and channel.get('Uniqueid') == body['uniqueid'], 'channel_identity_changed')
+                require({root, root + '-b'}.intersection(
+                    (channel.get('Uniqueid'), channel.get('Linkedid'))),
+                    'notification_call_not_owned')
+                require(not self.is_alert_channel(channel), 'alert_requires_manual_answer_or_stop')
+                require(channel.get('ChannelStateDesc') == 'Ringing', 'phone_not_ringing')
+                execute(phone, 'Key:Line' + str(phone['lines'].index(line) + 1))
+                return {'line': line, 'channel': body['channel'], 'uniqueid': body['uniqueid']}
+
+        return self.durable_operation(phone_id, 'notification_answer', body, operation)
+
     def mutate(self, phone_id, action, body):
         volume_deadline = time.monotonic() + 15 if action == 'hardware_volume' else None
         require(phone_id in self.phones, 'unknown_phone', 404)

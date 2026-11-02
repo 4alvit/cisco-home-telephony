@@ -2,8 +2,14 @@
   "notifications": {
     "enabled": false,
     "speech_enabled": false,
-    "sources": ["general", "doorbell"],
-    "screen_destinations": ["201", "203"],
+    "sources": [
+      "general",
+      "doorbell"
+    ],
+    "screen_destinations": [],
+    "speech_destinations": [
+      "*"
+    ],
     "echo_destinations": [],
     "cooldown_seconds": 60,
     "max_event_age_seconds": 90,
@@ -11,6 +17,10 @@
       "start": "22:00",
       "end": "08:00",
       "timezone": "Etc/UTC"
+    },
+    "announcement": {
+      "base_url": "http://127.0.0.1:18085",
+      "token": "REPLACE_WITH_EXISTING_PRIVATE_ANNOUNCEMENT_TOKEN"
     }
   }
 }

@@ -37,7 +37,7 @@ class Gateway:
         self.row = {'id': '201', 'lines': ['201', '202'], 'online': True,
                     'dnd': False, 'dnd_pending': False, 'channels': [], 'alert': None,
                     'notification': {'eligible': True, 'reason': None},
-                    'capabilities': ['notification']}
+                    'capabilities': ['notification', 'answer']}
         self.now = 1000
 
     def listing(self):
@@ -45,7 +45,27 @@ class Gateway:
 
     def mutate(self, phone, action, body):
         self.calls.append((phone, action, body))
-        return {'status': 'accepted'}
+        return {'status': 'accepted', 'action_id': body['idempotency_key']}
+
+    def answer_notification(self, phone, body):
+        return self.mutate(phone, 'notification_answer', body)
+
+
+class DeferredThread:
+    def __init__(self, *, target, args, **kwargs):
+        self.target, self.args, self.active = target, args, False
+
+    def start(self):
+        self.active = True
+
+    def is_alive(self):
+        return self.active
+
+    def run(self):
+        try:
+            self.target(*self.args)
+        finally:
+            self.active = False
 
 
 class Notifications(unittest.TestCase):
@@ -56,6 +76,8 @@ class Notifications(unittest.TestCase):
         self.gateway = Gateway()
         self.now = 1000
         self.jobs = []
+        self.stops = []
+        self.observations = []
 
     def announcer(self, target, body, timeout):
         self.jobs.append((target, body, timeout))
@@ -65,13 +87,246 @@ class Notifications(unittest.TestCase):
 
     def dispatcher(self, value=None, **kwargs):
         return module.Dispatcher(config() if value is None else value, self.gateway, self.directory,
-                                 clock=lambda: self.now, announcer=self.announcer, **kwargs)
+                                 clock=lambda: self.now, announcer=self.announcer,
+                                 thread_factory=DeferredThread, **kwargs)
 
     def echo_config(self, **changes):
         value = config(speech_enabled=True, echo_destinations=['223', '224'],
                        announcement={'base_url': 'http://127.0.0.1:18085', 'token': 'a' * 48})
         value.update(changes)
         return value
+
+    def speech_config(self, **changes):
+        return self.echo_config(screen_destinations=[], speech_destinations=['*'], **changes)
+
+    def job(self, status='ringing', **changes):
+        body = self.jobs[-1][1]
+        value = {'id': hashlib.sha256(body['idempotency_key'].encode()).hexdigest()[:32],
+                 'status': 'running', 'expires_at': 1180, 'recipients': [
+                    {'line': line, 'phone_id': line, 'driver': route, 'status': status if route == 'sip' else 'playing',
+                     'channel': 'PJSIP/' + line + '-abcd' if route == 'sip' else None,
+                     'uniqueid': '1000.1' if route == 'sip' else None, 'caller_id': '812345678'}
+                    for line, route in body['expected_routes'].items()]}
+        value.update(changes)
+        return value
+
+    def read_job(self, config, body, timeout):
+        self.assertNotIn('text', body)
+        self.assertTrue(self.observations, 'unexpected status read')
+        value = self.observations.pop(0)
+        if isinstance(value, Exception):
+            raise value
+        return copy.deepcopy(value)
+
+    def stop_job(self, config, body, timeout):
+        self.assertNotIn('text', body)
+        self.stops.append(body)
+
+    def speech_dispatcher(self, **changes):
+        dispatcher = self.dispatcher(self.speech_config(**changes), reader=self.read_job,
+                                     stopper=self.stop_job, sleep=lambda _: None)
+        self.assertTrue(dispatcher.dispatch(event())['accepted'])
+        self.assertIsNotNone(dispatcher.worker)
+        return dispatcher
+
+    def set_ringing(self):
+        self.gateway.row['channels'] = [{'name': 'PJSIP/201-abcd', 'uniqueid': '1000.1',
+                                         'state': 'Ringing', 'line': '201'}]
+
+    def test_cisco_and_echo_speech_share_one_synthesis_with_fixed_routes(self):
+        dispatcher = self.speech_dispatcher()
+        body = self.jobs[0][1]
+        self.assertEqual(body['lines'], ['201', '223', '224'])
+        self.assertEqual(body['expected_routes'], {'201': 'sip', '223': 'ha_satellite', '224': 'ha_satellite'})
+        self.assertEqual(body['text'], event()['message'])
+        self.assertEqual(self.gateway.calls, [])
+        self.assertEqual(dispatcher.dispatch(event(event_id='notification-0002'))['reason'],
+                         'notification_speech_busy')
+
+    def test_cisco_sibling_lines_deduplicate_to_primary_speech_line(self):
+        value = self.speech_config()
+        value['speech_destinations'] = ['201', '202']
+        result = self.dispatcher(value).dispatch(event(), dry_run=True)
+        self.assertEqual(result['eligible'], ['201', '223', '224'])
+        self.assertFalse(self.jobs)
+        self.assertFalse(self.directory.exists())
+
+    def test_speech_screen_alias_overlap_refuses_before_side_effects(self):
+        value = self.echo_config(screen_destinations=['201'], speech_destinations=['202'])
+        result = self.dispatcher(value).dispatch(event())
+        self.assertEqual(result['reason'], 'overlapping_notification_destinations')
+        self.assertFalse(self.jobs)
+        self.assertFalse(self.gateway.calls)
+
+    def test_speech_all_phones_honors_idle_dnd_alert_and_voice_guards(self):
+        for index, change in enumerate(({'dnd': True}, {'dnd_pending': True}, {'online': False},
+                {'channels': [{}]}, {'alert': {'state': 'ringing'}},
+                {'notification': {'eligible': False}}, {'capabilities': ['notification']})):
+            with self.subTest(change=change):
+                self.gateway = Gateway()
+                self.gateway.row.update(change)
+                result = self.dispatcher(self.speech_config()).dispatch(
+                    event(event_id=f'notification-{index:04}'), dry_run=True)
+                self.assertNotIn('201', result['eligible'])
+                self.assertEqual(len(result['skipped']), 1)
+                self.assertFalse(self.jobs)
+                self.assertFalse(self.gateway.calls)
+
+    def test_disabled_speech_never_starts_monitor_or_calls(self):
+        dispatcher = self.dispatcher(self.speech_config(speech_enabled=False))
+        result = dispatcher.dispatch(event())
+        self.assertEqual([row['reason'] for row in result['skipped']], ['speech_disabled'] * 3)
+        self.assertFalse(self.jobs)
+        self.assertIsNone(dispatcher.worker)
+
+    def test_owned_incoming_call_is_answered_once_without_global_autoanswer(self):
+        dispatcher = self.speech_dispatcher()
+        self.set_ringing()
+        ringing = self.job()
+        self.observations = [ringing, ringing, ringing, self.job(status='completed')]
+        self.observations[-1]['status'] = 'finished'
+        dispatcher.worker.run()
+        self.assertEqual(len(self.gateway.calls), 1)
+        phone, action, body = self.gateway.calls[0]
+        self.assertEqual((phone, action), ('201', 'notification_answer'))
+        self.assertEqual(body, {'line': '201', 'channel': 'PJSIP/201-abcd', 'uniqueid': '1000.1',
+                               'idempotency_key': 'announce-' + ringing['id'] + '-201'})
+        self.assertFalse(self.stops)
+        self.assertFalse(dispatcher.worker.is_alive())
+
+    def test_ambiguous_answer_is_not_repeated_and_only_owned_job_is_stopped(self):
+        dispatcher = self.speech_dispatcher()
+        self.set_ringing()
+        ringing = self.job()
+        self.observations = [ringing, ringing]
+        def fail(phone, body):
+            self.gateway.calls.append((phone, 'notification_answer', body))
+            raise OSError('private details')
+        self.gateway.answer_notification = fail
+        dispatcher.worker.run()
+        self.assertEqual(len(self.gateway.calls), 1)
+        self.assertEqual(len(self.stops), 1)
+        self.assertEqual(self.stops[0]['idempotency_key'], self.jobs[0][1]['idempotency_key'])
+        self.assertEqual(dispatcher.dispatch(event())['reason'], 'duplicate_event')
+
+    def test_changed_job_identity_refuses_answer_and_stops_owned_job(self):
+        dispatcher = self.speech_dispatcher()
+        self.set_ringing()
+        changed = self.job()
+        changed['recipients'][0]['uniqueid'] = '1000.2'
+        self.observations = [self.job(), changed]
+        dispatcher.worker.run()
+        self.assertFalse(self.gateway.calls)
+        self.assertEqual(len(self.stops), 1)
+
+    def test_changed_phone_call_dnd_or_alert_refuses_answer(self):
+        cases = [{'channels': [{'name': 'PJSIP/201-other', 'uniqueid': '1000.2',
+                               'state': 'Ringing', 'line': '201'}]},
+                 {'dnd': True}, {'dnd_pending': True}, {'alert': {'state': 'ringing'}}]
+        for changes in cases:
+            with self.subTest(changes=changes):
+                # Use a separate private ledger for each independent job.
+                self.directory = Path(self.temp.name) / ('private-' + str(len(self.jobs)))
+                self.gateway = Gateway()
+                dispatcher = self.speech_dispatcher()
+                self.set_ringing()
+                self.gateway.row.update(changes)
+                self.observations = [self.job(), self.job()]
+                dispatcher.worker.run()
+                self.assertFalse(self.gateway.calls)
+        self.assertEqual(len(self.stops), len(cases))
+
+    def test_stale_event_during_preparation_never_answers(self):
+        dispatcher = self.speech_dispatcher()
+        self.set_ringing()
+        self.now = 1091
+        self.gateway.now = self.now
+        self.observations = [self.job()]
+        dispatcher.worker.run()
+        self.assertFalse(self.gateway.calls)
+        self.assertEqual(len(self.stops), 1)
+
+    def test_stale_event_while_synthesizing_is_stopped_before_ringing(self):
+        dispatcher = self.speech_dispatcher()
+        self.observations = [self.job(status='queued')]
+        def advance(_):
+            self.now = 1091
+        dispatcher.sleep = advance
+        dispatcher.worker.run()
+        self.assertFalse(self.gateway.calls)
+        self.assertEqual(len(self.stops), 1)
+        self.assertFalse(self.observations)
+
+    def test_quiet_hours_beginning_during_preparation_prevents_answer(self):
+        dispatcher = self.speech_dispatcher()
+        dispatcher.config['quiet_hours'] = {'start': '00:17', 'end': '00:20', 'timezone': 'UTC'}
+        self.observations = [self.job(status='queued')]
+        dispatcher.sleep = lambda _: setattr(self, 'now', 1020)
+        dispatcher.worker.run()
+        self.assertFalse(self.gateway.calls)
+        self.assertEqual(len(self.stops), 1)
+
+    def test_thread_start_failure_stops_accepted_sip_job_once(self):
+        class BrokenThread(DeferredThread):
+            def start(self):
+                raise RuntimeError('cannot start')
+        dispatcher = self.dispatcher(self.speech_config(), stopper=self.stop_job)
+        dispatcher.thread_factory = BrokenThread
+        result = dispatcher.dispatch(event())
+        self.assertEqual(result['status'], 'refused')
+        self.assertEqual(len(result['unknown']), 3)
+        self.assertEqual(len(self.stops), 1)
+        self.assertFalse(self.gateway.calls)
+
+    def test_monitor_deadline_stops_once(self):
+        dispatcher = self.speech_dispatcher()
+        ticks = iter([0, 181])
+        dispatcher.monotonic = lambda: next(ticks)
+        dispatcher.worker.run()
+        self.assertEqual(len(self.stops), 1)
+        self.assertFalse(self.gateway.calls)
+
+    def test_gateway_stop_cancels_only_owned_job(self):
+        dispatcher = self.speech_dispatcher()
+        self.gateway.stopped.set()
+        dispatcher.worker.run()
+        self.assertFalse(self.gateway.calls)
+        self.assertEqual(len(self.stops), 1)
+        self.assertFalse(self.observations)
+
+    def test_read_error_stops_once_even_when_stop_is_ambiguous(self):
+        dispatcher = self.speech_dispatcher()
+        self.observations = [OSError('unavailable')]
+        def uncertain(*args):
+            self.stop_job(*args)
+            raise OSError('unavailable')
+        dispatcher.stopper = uncertain
+        dispatcher.worker.run()
+        self.assertFalse(self.gateway.calls)
+        self.assertEqual(len(self.stops), 1)
+
+    def test_aggregate_speech_target_limit_refuses_before_effects(self):
+        value = self.speech_config(echo_destinations=[str(n) for n in range(223, 239)])
+        result = self.dispatcher(value).dispatch(event())
+        self.assertEqual(result['reason'], 'too_many_notification_speakers')
+        self.assertFalse(self.jobs)
+        self.assertFalse(self.gateway.calls)
+
+    def test_sip_response_rejects_wrong_identity_channels_routes_and_expiry(self):
+        self.speech_dispatcher()
+        body = self.jobs[0][1]
+        value = self.job()
+        value['lines'] = body['lines']
+        self.assertEqual(module.validate_announcement(value, body)['recipients'][0]['status'], 'ringing')
+        for key, change in (('channel', 'PJSIP/202-other'), ('uniqueid', None),
+                            ('caller_id', 'private'), ('driver', 'ha_satellite'), ('phone_id', '202')):
+            with self.subTest(key=key), self.assertRaises(module.NotificationError):
+                corrupt = copy.deepcopy(value)
+                corrupt['recipients'][0][key] = change
+                module.validate_announcement(corrupt, body)
+        for expires in (None, True, float('inf'), float('nan'), -1):
+            with self.subTest(expires=expires), self.assertRaises(module.NotificationError):
+                module.validate_announcement(dict(value, expires_at=expires), body)
 
     def test_sibling_lines_deduplicated_and_xml_text_untouched(self):
         result = self.dispatcher().dispatch(event())

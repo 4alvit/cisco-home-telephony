@@ -1,7 +1,8 @@
-# Automatic text notifications
+# Automatic spoken notifications
 
-Selected Home Assistant notifications can also reach idle Cisco screens and
-converted Echo devices. The existing phone, browser or mobile notification runs
+Selected Home Assistant text notifications can be spoken on Cisco phones and
+converted Echo devices using the configured HA voice. Cisco screen copies are
+optional. The existing phone, browser or mobile notification runs
 first. The optional device copy has its own event consumer, so an unavailable
 phone cannot prevent the original notification.
 
@@ -15,7 +16,13 @@ capture every notification, or assign another SIP number to an Echo.
 
 ## What each device receives
 
-- **Cisco screen:** a plain-text notification on an eligible idle handset.
+- **Cisco speech:** the existing announcement service synthesizes the text with
+  the configured HA voice and calls an eligible idle handset. The gateway
+  answers only that announcement's verified incoming call on speakerphone.
+  The message plays once and Asterisk ends the call. Ordinary incoming calls
+  retain their existing auto-answer settings. A brief ring may occur while the
+  incoming call is verified.
+- **Optional Cisco screen:** a plain-text notification on an eligible idle handset.
   Both line numbers resolve to one physical handset. The notification page has
   an idle timeout, and ordinary calls keep priority. Existing motion-image
   notifications remain a separate path.
@@ -28,9 +35,11 @@ capture every notification, or assign another SIP number to an Echo.
   In particular, a device without a text screen does not receive a Cisco XML
   page.
 
-Speech is disabled by default. Enabling screen notifications does not enable
-speaker playback. Echo destinations may be configured while speech remains
-disabled, allowing installation and review during quiet hours.
+The public sample keeps forwarding and speech disabled until configured.
+`speech_enabled` controls speech on both Cisco and Echo devices. Screen
+delivery is a separate choice; it is not a substitute for spoken delivery.
+Speech destinations may be configured while speech remains disabled, allowing
+installation and review without sound.
 
 ## Configure the existing gateway
 
@@ -51,8 +60,14 @@ The following example contains fictional destinations:
   "notifications": {
     "enabled": false,
     "speech_enabled": false,
-    "sources": ["general", "doorbell"],
-    "screen_destinations": ["201", "203"],
+    "sources": [
+      "general",
+      "doorbell"
+    ],
+    "screen_destinations": [],
+    "speech_destinations": [
+      "*"
+    ],
     "echo_destinations": [],
     "cooldown_seconds": 60,
     "max_event_age_seconds": 90,
@@ -60,6 +75,10 @@ The following example contains fictional destinations:
       "start": "22:00",
       "end": "08:00",
       "timezone": "Etc/UTC"
+    },
+    "announcement": {
+      "base_url": "http://127.0.0.1:18085",
+      "token": "REPLACE_WITH_EXISTING_PRIVATE_ANNOUNCEMENT_TOKEN"
     }
   }
 }
@@ -73,19 +92,30 @@ Configured quiet hours suppress **both** screens and speech. They may cross
 midnight; their start and end must differ. Omit the optional `quiet_hours`
 object when all-day screen delivery is wanted, keeping `speech_enabled: false`
 to prevent audio. Quiet hours use the specified timezone rather than the HA
-server's assumed local time.
+server's assumed local time. These are admission checks, not a hard mute for
+an announcement already playing.
 
 `screen_destinations: ["*"]` explicitly includes every configured compatible
 Cisco handset, including those currently powered off. An offline device cannot
 receive a notification; it becomes eligible for a later new event when it
 returns. Missed notifications are not replayed.
-At most ten physical Cisco handsets and sixteen Echo recipients are supported
-per notification. Listing two lines on one Cisco handset still selects one
-physical screen.
+`speech_destinations: ["*"]` includes every configured compatible Cisco
+handset for spoken delivery, including those currently powered off. Explicit
+lines such as `["201", "203"]` select a subset. Sibling line numbers resolve to
+one physical phone and do not create two announcements. Set
+`screen_destinations: []` when the intended result is speech only. A physical
+phone must not appear in both screen and speech destination sets, even under
+different line numbers: overlapping modes are rejected instead of allowing a
+screen update and a call to compete. `speech_enabled: false` suppresses both
+Cisco and Echo speech without turning speech recipients into screen recipients.
 
-For Echo speech, configure `echo_destinations` with the existing mapped Echo
-extensions and the private `announcement` connection to the existing local
-announcement service. Reuse that service's actual address and bearer token:
+At most ten physical Cisco handsets and sixteen speech recipients in total
+are supported per notification. For example, a spoken group can contain ten
+Cisco phones and six Echo devices, or sixteen Echo devices alone. Configure
+`echo_destinations` with the existing mapped Echo extensions. Both speech
+routes need the private `announcement` connection to
+the existing local announcement service. Reuse that service's actual address
+and bearer token:
 
 ```json
 {
@@ -99,9 +129,19 @@ announcement service. Reuse that service's actual address and bearer token:
 This object belongs inside `notifications`. The announcement token and gateway
 API token have separate purposes. Do not publish either token. Do not expose
 the announcement service to the LAN just to support HA: HA talks to the
-gateway, and the gateway reaches the existing local service. The request pins
-Echo recipients to the `ha_satellite` route; no SIP fallback call is allowed.
-See [announcement routing](cli-announcements.md) for the adapter contract.
+gateway, and the gateway reaches the existing local service. Requests pin
+Cisco recipients to the `sip` route and Echo recipients to `ha_satellite`. An
+Echo cannot silently fall back to a SIP call. The existing announcement service
+must already map each configured extension to its physical device.
+
+For the sample above, replace the token, choose your timezone, and set both
+`enabled` and `speech_enabled` to `true` to speak selected notifications on all
+configured Cisco phones. Add existing Echo extensions to `echo_destinations`
+when those speakers should receive the same text. No CLI process must remain
+running: the gateway follows its own announcement job and issues one answer
+only after matching the incoming line, channel and unique call identity.
+Asterisk owns playback completion and hangup. See
+[announcement routing](cli-announcements.md) for the service and adapter setup.
 
 ## Install the Home Assistant consumer
 
@@ -248,8 +288,9 @@ maximum age is 90 seconds and the allowed range is 5–120 seconds.
 
 Titles contain 1–128 characters and messages 1–2000 characters; blank messages
 are refused. A Cisco screen uses the first 32 title characters and the full
-message. Echo speech uses the first 1000 message characters, without speaking
-the title. Put the essential information first. The Cisco page requests a
+message. Cisco and Echo speech use the first 1000 message characters, without
+speaking the title. Put the essential information first. The Cisco page
+requests a
 45-second **idle** timeout; interacting with the phone can affect dismissal,
 so this is not an exact wall-clock screen-clear guarantee.
 
@@ -268,16 +309,36 @@ it may be increased up to one day. Skipped/offline events are consumed rather
 than queued for later delivery.
 
 An accepted request means work was accepted; it does not prove that someone
-saw the screen or heard a message. Echo playback uses the announcement
-service's job state. Offline, busy, DND, active-alert and incompatible devices
-are skipped. Automatic forwarding never stops a call, enables a microphone,
-or waits for a device to become idle later.
+saw the screen or heard a message. Speech uses the announcement service's job
+state: Asterisk reports Cisco playback and the direct adapter reports Echo
+playback. Offline, busy, DND, active-alert and incompatible devices are skipped.
+Automatic forwarding never interrupts an existing call or waits for a busy
+device to become idle later. A Cisco announcement deliberately opens a short
+speakerphone call; its microphone may be active during that call. This is
+one-shot answering, not a change to persistent auto-answer or automute
+preferences. Echo speech uses direct playback without a SIP call.
 
 The API reports accepted, skipped and unknown recipients separately, with an
 overall `ok`, `partial` or `refused` status. Its `display_verified` and
 `playback_verified` fields remain `false`: transport acceptance is not
 physical observation. Work has a 45-second
 admission deadline; an already-started device operation may finish later.
+Cisco answering runs in a bounded background worker, so HA does not wait for
+the whole spoken message. Another event is refused while that worker is active;
+there is no backlog of announcements. This refusal is reported as
+`notification_speech_busy`, including for a dry run during an active worker.
+The worker is bounded to 180 seconds and never repeats an uncertain answer
+command or answers an unrelated ringing call. If the original event becomes
+stale before the call is answered, the owned announcement job is cancelled;
+it is not played later merely because the handset became available.
+
+Cisco and Echo speech recipients share one announcement job. Busy or offline
+recipients discovered before submission are skipped individually. After
+submission, a failed Cisco call-ownership check, refused answer or uncertain
+response makes the worker request one stop for the entire owned job. This can
+cut short playback already in progress on other Cisco or Echo recipients.
+The worker does not retry the answer or create a replacement announcement.
+
 The HA REST command has a 60-second timeout. A client timeout cannot establish
 that nothing happened, and must not trigger an automatic retry.
 
@@ -297,15 +358,17 @@ well as to the HA configuration and gateway state directory.
 
 1. Keep forwarding and speech disabled while preparing configuration. Validate
    the gateway configuration and HA package before enabling either route.
-2. Review allowed sources and physical destinations. Confirm Echo recipients
-   are direct announcement routes and do not duplicate another endpoint alias.
+2. Review allowed sources and physical destinations. Select Cisco phones in
+   `speech_destinations` and remove them from `screen_destinations`. Confirm
+   Echo recipients use direct announcement routes and do not duplicate aliases.
 3. Run the notification unit tests, including duplicate events, storage
    failures, stale events, busy devices and partial delivery. These tests use
    simulated transports and do not ring or speak on real devices.
-4. Enable screen delivery separately when ready. A real end-to-end delivery
-   test displays content on a handset; it is not a read-only health check.
-5. Enable speech only when wanted. An audible test is a separate deliberate
-   action, not part of installing the package or reloading HA.
+4. Use the dry-run action below to review destinations without a screen, call
+   or sound. Production speech requires both `enabled` and `speech_enabled`.
+5. An audible test is a separate deliberate action, not part of installing the
+   package or reloading HA. Optional screen delivery also changes a real device;
+   it is not a read-only health check.
 
 For a read-only target preview, the REST action accepts `dry_run: true`.
 The following is a Home Assistant script action using a newly created review
@@ -338,12 +401,19 @@ connectivity: that becomes a real notification.
 - **No forwarded copy:** verify that one producer sets `also_devices`, the
   event has its original identity/time, the source is allowed, forwarding is
   enabled, and HA can authenticate to `/v1/notifications`.
+- **Cisco shows text instead of speaking:** move that handset from
+  `screen_destinations` to `speech_destinations`, configure `announcement`, and
+  enable `speech_enabled`. A screen-only configuration does not speak.
 - **One handset receives nothing:** check fresh gateway capability and state,
-  DND, a call/alert, cooldown and screen eligibility. Listing both line numbers
-  does not request two copies.
-- **Screens work but Echo is silent:** `speech_enabled` is independent. Check
-  quiet hours, the existing announcement service and its direct-route
-  capability. Do not switch to a fallback phone call to bypass an idle guard.
+  DND, a call/alert, cooldown and the chosen delivery mode. Listing both line
+  numbers does not request two copies.
+- **Cisco rings without speaking:** inspect the returned announcement job,
+  the gateway's exact-call answer result and phone remote-control reachability.
+  Do not enable permanent auto-answer as a workaround or repeatedly resend the
+  event. An answer can be refused if the call changed or another call appeared.
+- **Speech is silent:** verify `speech_enabled`, quiet hours and the existing
+  announcement service. Echo additionally needs its direct-route capability.
+  Do not switch Echo to a fallback phone call to bypass an idle guard.
 - **Timeout or ambiguous result:** inspect recorded state before a new manual
   attempt. Do not regenerate IDs or retry automatically.
 - **Repeated source notifications:** ensure only one producer call forwards

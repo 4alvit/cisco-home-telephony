@@ -160,6 +160,43 @@ class GatewaySharedReservationTests(unittest.TestCase):
         ami.assert_not_called()
         self.sent.assert_not_called()
 
+    def test_automatic_speech_answer_never_preempts_active_external_voice(self):
+        self.attach_idle_supervisor()
+        self.fixture.start(self.wake)
+        root = 'announce-' + 'a' * 32 + '-201'
+        with mock.patch.object(gateway, 'AMI') as ami:
+            with self.assertRaises(gateway.Refused) as caught:
+                self.gateway.answer_notification('201', {
+                    'line': '201', 'idempotency_key': root,
+                    'channel': 'PJSIP/201-000000aa', 'uniqueid': '1234.56'})
+        self.assertEqual(caught.exception.reason, 'voice_phone_busy')
+        ami.assert_not_called()
+        self.sent.assert_not_called()
+
+    def test_automatic_speech_answer_fences_external_start_through_key_io(self):
+        self.attach_idle_supervisor()
+        root = 'announce-' + 'a' * 32 + '-201'
+        FakeAMI.channels = [{'Channel': 'PJSIP/201-000000aa', 'Uniqueid': '1234.56',
+                             'Linkedid': root, 'ChannelStateDesc': 'Ringing'}]
+        FakeAMI.endpoints['201'] = 'Ringing'
+        attempts = []
+
+        def answer(_phone, key):
+            self.assertEqual(key, 'Key:Line1')
+            try:
+                self.fixture.start(self.wake)
+            except wake_fixture.control.ControlError as error:
+                attempts.append(error.reason)
+
+        self.sent.side_effect = answer
+        self.gateway.answer_notification('201', {
+            'line': '201', 'idempotency_key': root,
+            'channel': 'PJSIP/201-000000aa', 'uniqueid': '1234.56'})
+        self.assertEqual(attempts, ['voice_phone_busy'])
+        self.assertEqual(self.fixture.launches, [])
+        self.fixture.start(self.wake)
+        self.assertEqual(len(self.fixture.launches), 1)
+
     def test_motion_display_failure_releases_both_ownership_fences(self):
         supervisor = self.attach_idle_supervisor()
         with mock.patch.object(self.gateway, 'notify', side_effect=OSError('synthetic timeout')):
