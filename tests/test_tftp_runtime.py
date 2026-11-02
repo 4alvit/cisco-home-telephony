@@ -100,6 +100,7 @@ sys.exit(int(os.environ.get('TFTP_TEST_EXIT', '0')))
                     try:
                         os.kill(pid, signal.SIGKILL)
                     except ProcessLookupError:
+                        # The synthetic child may already have exited; still reap its wrapper process.
                         pass
                 process.kill()
                 process.communicate(timeout=3)

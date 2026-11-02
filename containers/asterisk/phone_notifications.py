@@ -150,6 +150,7 @@ class Ledger:
                     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                     os.close(fd)
                 except FileExistsError:
+                    # A competing creator must still satisfy the identity and permission checks below.
                     pass
             info = path.lstat()
             require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
@@ -510,6 +511,7 @@ class Dispatcher:
             try:
                 self.stopper(self.config['announcement'], observed, 5)
             except Exception:
+                # Preserve the worker-start failure; the bounded stop attempt must not replace it.
                 pass
             raise
 
@@ -557,6 +559,7 @@ class Dispatcher:
             try:
                 self.stopper(self.config['announcement'], body, 5)
             except Exception:
+                # Do not retry an uncertain stop; the native PBX timeout remains the final bound.
                 pass
 
     def answer_recipient(self, job_id, recipient, event_at):

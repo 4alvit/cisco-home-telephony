@@ -47,6 +47,7 @@ def run_script(*args, timeout=45):
             try:
                 process.send_signal(signal.SIGINT)
             except ProcessLookupError:
+                # The child may already have exited; still drain and reap it below.
                 pass
             try:
                 process.communicate(timeout=8)
@@ -54,6 +55,7 @@ def run_script(*args, timeout=45):
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
+                    # The process group may have exited during escalation; still reap the owned process.
                     pass
                 process.communicate(timeout=5)
             raise
@@ -222,6 +224,69 @@ class FixtureSafetyTests(unittest.TestCase):
         self.assertEqual(summary["snapshot_observation"], {"checked": True, "remaining_count": 0})
         self.assertTrue(all(summary["cleanup"].values()), summary)
         self.assertEqual(summary["cleanup_errors"], [])
+
+    def test_nonexception_control_flow_propagates_after_fixture_cleanup(self):
+        for error in (KeyboardInterrupt(), SystemExit(7), GeneratorExit()):
+            with self.subTest(error=type(error).__name__):
+                coordinator = mock.Mock(summary={"success": False})
+                coordinator.setup_gateway.side_effect = error
+                with mock.patch.object(fixture, "FixtureCoordinator", return_value=coordinator):
+                    with self.assertRaises(type(error)) as caught:
+                        fixture.run_fixture(scenario="complete")
+                self.assertIs(caught.exception, error)
+                coordinator.cleanup.assert_called_once_with()
+                self.assertNotIn("error", coordinator.summary)
+
+    def test_cleanup_interrupt_is_rethrown_after_all_teardown_and_summary_steps(self):
+        for error in (KeyboardInterrupt(), SystemExit(7), GeneratorExit()):
+            with self.subTest(error=type(error).__name__):
+                original_connect = fixture.socket.socket.connect
+                coordinator = fixture.FixtureCoordinator("complete", 30)
+                completed = []
+                owner = mock.Mock()
+                owner._thread.is_alive.return_value = False
+                owner.close.side_effect = error
+                owner._thread.join.side_effect = lambda _timeout: completed.append("owner")
+                coordinator.gateway = mock.Mock(voice=owner)
+                coordinator.gateway.db.close.side_effect = lambda: completed.append("database")
+                child = mock.Mock()
+                child.poll.return_value = 0
+                coordinator.children = [child]
+                coordinator._reap_child = mock.Mock(side_effect=lambda _child: completed.append("child"))
+                coordinator.listener = mock.Mock()
+                coordinator.listener.shutdown.side_effect = lambda: completed.append("listener_shutdown")
+                coordinator.listener.server_close.side_effect = lambda: completed.append("listener_close")
+                coordinator.server_thread = mock.Mock(ident=1)
+                coordinator.server_thread.is_alive.return_value = True
+
+                def join_server(_timeout):
+                    completed.append("server")
+                    coordinator.server_thread.is_alive.return_value = False
+
+                coordinator.server_thread.join.side_effect = join_server
+                real_temporary_cleanup = coordinator.temporary.cleanup
+
+                def cleanup_then_interrupt():
+                    real_temporary_cleanup()
+                    completed.append("workspace")
+                    raise SystemExit(9)
+
+                coordinator.temporary.cleanup = cleanup_then_interrupt
+                try:
+                    with self.assertRaises(type(error)) as caught:
+                        coordinator.cleanup()
+                    self.assertIs(caught.exception, error, "The first interrupt must survive later cleanup errors")
+                    self.assertEqual(completed, ["child", "owner", "listener_shutdown",
+                                                 "listener_close", "server", "database", "workspace"])
+                    self.assertEqual(coordinator.summary["cleanup_errors"],
+                                     ["owner_close_failed", "workspace_cleanup_failed"])
+                    self.assertTrue(all(coordinator.summary["cleanup"].values()), coordinator.summary)
+                    self.assertFalse(coordinator.summary["success"])
+                    self.assertIn("elapsed_seconds", coordinator.summary)
+                    self.assertIs(fixture.socket.socket.connect, original_connect)
+                finally:
+                    coordinator.parent_guard.__exit__(None, None, None)
+                    real_temporary_cleanup()
 
     def test_retained_snapshot_is_observed_before_workspace_cleanup(self):
         coordinator = fixture.FixtureCoordinator("complete", 30)

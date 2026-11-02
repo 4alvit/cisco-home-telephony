@@ -586,6 +586,7 @@ class MediaReceiver:
                     try:
                         created_directory.rmdir()
                     except OSError:
+                        # Do not recursively remove a nonempty or replaced directory during frame cleanup.
                         pass
                 self.frames.clear()
             finally:

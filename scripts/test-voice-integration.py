@@ -723,12 +723,18 @@ class FixtureCoordinator:
     def cleanup(self):
         """Attempt every teardown step, retaining the original bounded order."""
         cleanup_errors = []
+        interruption = None
 
         def attempt(label, action):
+            nonlocal interruption
             try:
                 action()
-            except BaseException:
+            except BaseException as error:
                 cleanup_errors.append(label)
+                # Finish the remaining bounded teardown before propagating the
+                # first cancellation or process-exit request to the caller.
+                if not isinstance(error, Exception) and interruption is None:
+                    interruption = error
 
         if self.gateway and self.gateway.voice:
             attempt("owner_close_failed", self.gateway.voice.close)
@@ -766,6 +772,8 @@ class FixtureCoordinator:
         self.summary["launches"] = len(self.launches)
         self.summary["http_requests"] = self.requests
         self.summary["elapsed_seconds"] = round(time.monotonic() - self.started, 3)
+        if interruption is not None:
+            raise interruption
 
 
 def run_fixture(*, scenario="all", timeout_seconds=30.0):
@@ -783,9 +791,7 @@ def run_fixture(*, scenario="all", timeout_seconds=30.0):
         for selected_scenario in scenarios:
             fixture.run_scenario(selected_scenario)
         fixture.verify_owner_cleanup()
-    except BaseException as error:
-        if isinstance(error, (KeyboardInterrupt, SystemExit)):
-            raise
+    except Exception as error:
         fixture.summary["error"] = str(error) if isinstance(error, FixtureFailure) else type(error).__name__
     finally:
         fixture.cleanup()

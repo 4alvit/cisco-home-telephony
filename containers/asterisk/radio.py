@@ -358,6 +358,7 @@ class Call:
                     raise ValueError("unexpected AudioSocket message")
                 # Caller audio is deliberately discarded, never stored or transmitted.
         except (OSError, EOFError, ValueError):
+            # Transport EOF or invalid packets terminate playback through stop below.
             pass
         self.stop.set()
 

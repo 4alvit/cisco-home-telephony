@@ -244,6 +244,7 @@ class HandsFreeSupervisor:
                 try:
                     os.unlink(temporary)
                 except FileNotFoundError:
+                    # The temporary file may already have been renamed into its final location.
                     pass
 
     def _restore(self, entry):
@@ -266,6 +267,7 @@ class HandsFreeSupervisor:
             try:
                 self._persist(entry)
             except Exception:
+                # The entry stays blocked and faulted in this coordinator; persistence failure must not restart it.
                 pass
 
     def _view(self, entry, line):

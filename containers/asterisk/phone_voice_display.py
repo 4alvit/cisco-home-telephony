@@ -563,10 +563,12 @@ class _DisplayHTTPServer(HTTPServer):
         try:
             request.shutdown(socket.SHUT_RDWR)
         except OSError:
+            # Peer shutdown may race our close; still close the owned socket below.
             pass
         try:
             request.close()
         except OSError:
+            # Socket teardown is terminal even if the peer or descriptor is already gone.
             pass
 
     def process_request(self, request, client_address):
@@ -578,6 +580,7 @@ class _DisplayHTTPServer(HTTPServer):
                 request.send(b'HTTP/1.0 403 Forbidden\r\nConnection: close\r\n'
                              b'Content-Length: 0\r\nCache-Control: no-store\r\n\r\n')
             except OSError:
+                # The rejected client may disconnect before the best-effort denial is written.
                 pass
             self.close_connection(request)
             return

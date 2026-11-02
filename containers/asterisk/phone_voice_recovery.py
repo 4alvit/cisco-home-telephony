@@ -242,6 +242,7 @@ def status(manager, target, *, context, control):
     except control.ControlError as error:
         result['reason'] = error.reason
     except (OSError, ValueError, TypeError, KeyError):
+        # Unreadable or invalid state keeps recovery ineligible with its default reason.
         pass
     return result
 

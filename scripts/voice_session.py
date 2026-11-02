@@ -187,12 +187,14 @@ async def run_session(args, config, private, phone, voice):
             progress.publish('error' if progress.failed else 'stopped',
                              progress.failure_reason if progress.failed else 'shutdown')
         except Exception:
+            # Preserve the original cancellation even if publishing its final status fails.
             pass
         raise
     except Exception:
         try:
             progress.publish('error')
         except Exception:
+            # Preserve the original failure even if publishing its diagnostic status fails.
             pass
         raise
 

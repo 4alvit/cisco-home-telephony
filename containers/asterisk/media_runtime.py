@@ -277,6 +277,7 @@ def probe_file(file, fmt, stop=None):
                 if _number(duration, .001, MAX_SECONDS):
                     result['duration'] = duration
             except (TypeError, ValueError):
+                # Invalid optional duration metadata is ignored; no unvalidated duration is published.
                 pass
             tags = item.get('tags', {})
             if isinstance(tags, dict):
@@ -581,6 +582,7 @@ class MediaSession:
                         kind == 3 and (len(data) != 1 or data not in b'0123456789ABCD*#')):
                     raise MediaError('invalid_audio_packet')
         except (OSError, ValueError, EOFError):
+            # Transport EOF or invalid packets stop this session through stop_event below.
             pass
         self.stop_event.set()
 

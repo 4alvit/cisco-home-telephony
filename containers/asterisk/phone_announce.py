@@ -301,6 +301,7 @@ class Announcer:
                 try:
                     job.directory.rmdir()
                 except OSError:
+                    # Preserve unexpected directory contents rather than removing files we do not own.
                     pass
                 del self.jobs[key]
 

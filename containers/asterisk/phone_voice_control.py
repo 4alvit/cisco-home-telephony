@@ -982,6 +982,7 @@ class VoiceControl:
                 try:
                     s.handle.terminate()
                 except ProcessLookupError:
+                    # The owned process already exited; the ordinary completion path will reap it.
                     pass
                 except OSError:
                     s.error = 'voice_signal_failed'
@@ -1250,6 +1251,7 @@ class VoiceControl:
                 try:
                     os.unlink(temporary)
                 except OSError:
+                    # Temporary cleanup must not hide the preceding journal-write failure.
                     pass
 
     def _finish(self, s, raw):
@@ -1267,6 +1269,7 @@ class VoiceControl:
             _require(type(raw) is bytes and len(raw) <= MAX_REPORT and not s.handle.overflow)
             report = json.loads(raw, object_pairs_hook=_unique_object)
         except Exception:
+            # An invalid report stays untrusted and cannot supply cleanup proof below.
             pass
         if (s.profile.media_transport == 'xml_rtp'
                 and isinstance(report, dict) and 'cleanup_proof' in report):

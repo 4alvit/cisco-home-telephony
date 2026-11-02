@@ -152,6 +152,7 @@ class AssistantService:
             try:
                 self._on_event(VoiceEvent(phone_id, state, reason))
             except Exception:
+                # Observer failures must not prevent audio cleanup or lifecycle state changes.
                 pass
 
     def status(self, phone_id: str) -> VoiceEvent:

@@ -190,6 +190,7 @@ def perform(payload):
                 if isinstance(message, str) and message in HA_ERRORS:
                     reason = HA_ERRORS[message]
         except (ValueError, TypeError, OSError, RecursionError, http.client.HTTPException):
+            # Malformed optional error details retain the fixed, sanitized refusal reason.
             pass
         finally:
             exc.close()

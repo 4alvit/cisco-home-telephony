@@ -626,6 +626,7 @@ def terminate_owned(child_pid, descriptor):
                 # When the coordinator is PID1, an orphan may be adopted here.
                 os.waitpid(child_pid, os.WNOHANG)
             except ChildProcessError:
+                # The process may belong to another reaper; the group existence check still follows.
                 pass
             try:
                 os.killpg(child_pid, 0)
@@ -675,6 +676,7 @@ def invoke_wrapper(descriptor, timeout):
                     try:
                         child.wait(timeout=2)
                     except subprocess.TimeoutExpired:
+                        # The finally block kills and reaps the wrapper after owned-child cleanup.
                         pass
                 owned = descriptor.parent / "owned-child.json"
                 pending = list((descriptor.parent / "state").glob("run-*"))

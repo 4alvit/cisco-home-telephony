@@ -188,6 +188,7 @@ class AmiPort:
                         if self.rejected_setup is None:
                             self.rejected_setup = project_setup_rejection(self.root, channels, own)
                     except Exception:
+                        # Optional rejection diagnostics must not hide the authoritative call_changed error.
                         pass
                     raise BoundaryError('call_changed')
                 if own:
@@ -247,6 +248,7 @@ class AmiPort:
                 try:
                     task.result()
                 except Exception:
+                    # Consume the completed worker error, then propagate cancellation below.
                     pass
                 raise asyncio.CancelledError
             grant = task.result()

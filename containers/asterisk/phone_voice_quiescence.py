@@ -244,6 +244,7 @@ def _signal_group(process, sig):
     try:
         os.killpg(process.pid, sig)
     except ProcessLookupError:
+        # No process group remains to signal; subsequent completion checks still run.
         pass
 
 

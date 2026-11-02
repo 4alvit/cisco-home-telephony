@@ -186,7 +186,7 @@ class ServiceCatalogTests(unittest.TestCase):
 
     def test_known_service_codes_are_explicit_and_do_not_include_local_or_arbitrary_numbers(self):
         known = service_catalog.managed_numbers()
-        self.assertTrue({'600', '621', '641', '708', '710', '801', '802', '803'} <= known)
+        self.assertLessEqual({'600', '621', '641', '708', '710', '801', '802', '803'}, known)
         self.assertFalse({'201', '209', '880', '999'} & known)
 
 

@@ -149,6 +149,7 @@ class LoopbackLifecycleTests(unittest.IsolatedAsyncioTestCase):
             try:
                 await asyncio.wait_for(writer.wait_closed(), 1)
             except (ConnectionError, OSError):
+                # A reset during fixture shutdown must not skip closing the remaining resources.
                 pass
         self.stack.close()
 
@@ -448,6 +449,7 @@ class LoopbackLifecycleTests(unittest.IsolatedAsyncioTestCase):
             second.write(packet(1, TOKEN.bytes) + packet(0x12, b'\x02\x00' * 320))
             await second.drain()
         except ConnectionError:
+            # The replaced stream may already be closed; still release and verify the active session.
             pass
         self.port.release.set()
         report = await self.finished(task)
@@ -460,6 +462,7 @@ class LoopbackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         try:
             self.assertEqual(await asyncio.wait_for(second_reader.read(), 1), b'')
         except ConnectionError:
+            # Reset and EOF both establish closure of the rejected replacement stream.
             pass
         self.assertEqual(self.port.hangups, 1)
 

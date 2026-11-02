@@ -139,6 +139,7 @@ class _AiohttpWebSocket:
             async with _timeout(self._close_timeout):
                 await self._websocket.close()
         except (TimeoutError, asyncio.TimeoutError):
+            # A stalled close handshake must still release the owned HTTP session in finally.
             pass
         finally:
             # Also runs when a caller cancels the WebSocket close handshake.

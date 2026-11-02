@@ -403,6 +403,7 @@ def main():
                 if result.returncode == 0:
                     print(container + ":\n" + (result.stdout + result.stderr)[-6000:], file=sys.stderr)
             except (OSError, subprocess.SubprocessError):
+                # Optional diagnostic logs must not prevent container cleanup in finally.
                 pass
     finally:
         try:

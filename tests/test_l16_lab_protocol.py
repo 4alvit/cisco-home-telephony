@@ -231,7 +231,7 @@ class DiagnosticsTest(unittest.TestCase):
         self.assertEqual(result["ssrc_changes"], 1)
         self.assertEqual(result["frame_size_mismatches"], 1)
         self.assertEqual(result["malformed_packets"], 1)
-        self.assertTrue({"duplicate_packet", "ssrc_change", "frame_size", "malformed_rtp"} <= codes(result))
+        self.assertLessEqual({"duplicate_packet", "ssrc_change", "frame_size", "malformed_rtp"}, codes(result))
 
     def test_timing_jitter_tolerance_and_empty_capture_are_explicit(self):
         fixture = p.fixture_packets()

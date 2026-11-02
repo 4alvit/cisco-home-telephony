@@ -125,6 +125,7 @@ class FakeClient:
                           if item['queue_item_id'] != values['item_id_or_index']]
         else:
             raise AssertionError(command)
+        return None
 
 
 class AttendedTests(unittest.TestCase):
