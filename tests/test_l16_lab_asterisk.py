@@ -331,6 +331,39 @@ class WireAndLifecycleTest(unittest.TestCase):
             lab.AudioSocketPeer(b"x" * 640)
         listener.close.assert_called_once()
 
+    def test_audiosocket_shutdown_suppresses_only_expected_transport_failures(self):
+        for stopped, error, expected_error in (
+            (True, OSError("closed socket"), False),
+            (True, EOFError("closed stream"), False),
+            (False, OSError("unexpected transport failure"), True),
+            (True, RuntimeError("unexpected worker failure"), True),
+            (True, KeyboardInterrupt(), True),
+            (True, SystemExit(7), True),
+            (True, GeneratorExit(), True),
+        ):
+            with self.subTest(stopped=stopped, error=type(error).__name__):
+                peer = object.__new__(lab.AudioSocketPeer)
+                peer.stop = lab.threading.Event()
+                peer.error = None
+                peer.connection = None
+                connection = Mock()
+                peer.listener = Mock()
+                peer.listener.accept.return_value = (connection, ("127.0.0.1", 12345))
+
+                def fail_after_accept(_timeout):
+                    if stopped:
+                        peer.stop.set()
+                    raise error
+
+                connection.settimeout.side_effect = fail_after_accept
+                peer._serve()
+                if expected_error:
+                    self.assertEqual(peer.error, f"{type(error).__name__}: {error}")
+                else:
+                    self.assertIsNone(peer.error)
+                connection.close.assert_called_once_with()
+                peer.listener.close.assert_called_once_with()
+
     def test_audiosocket_close_before_connect_stops_worker(self):
         with patch.object(lab, "AUDIO_PORT", 0):
             peer = lab.AudioSocketPeer(b"x" * 640)

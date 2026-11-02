@@ -416,6 +416,7 @@ class VoiceDisplayTests(DisplayFixture):
                 try:
                     self.request(ref.stop_url)
                 except display.DisplayError:
+                    # A stopped fixture may reject stop again; still assert no retained frames or extra calls.
                     pass
                 self.assertEqual(len(calls), 1)
                 self.assertEqual(self.app.stats()['frames'], 0)
@@ -1021,6 +1022,7 @@ class VoiceDisplayServerControlTests(ServerFixture, unittest.TestCase):
                 while connection.recv(1024):
                     pass
             except ConnectionResetError:
+                # Reset is an allowed terminal transport outcome; verify the next request still works.
                 pass
         ref = self.camera_session(server)
         self.assertEqual(self.request(server, self.path(ref))[0], 200)
@@ -1049,6 +1051,7 @@ class VoiceDisplayServerControlTests(ServerFixture, unittest.TestCase):
                     excess.sendall(request)
                     self.assertEqual(excess.recv(1024), b'')
                 except ConnectionResetError:
+                    # An excess connection may be rejected by EOF or reset; neither may invoke the handler.
                     pass
             self.assertEqual(calls, [True])
         finally:

@@ -212,6 +212,7 @@ class AuthHandler(socketserver.BaseRequestHandler):
                 allowed = time.monotonic() < self.server.deadline and authorized(
                     self.server.config, self.client_address[0], *args)
         except (ValueError, UnicodeError, OSError):
+            # Invalid or incomplete authentication input keeps the default denial.
             pass
         payload = b"AUTHORIZED" if allowed else b"UNAUTHORIZED"
         response = (b"HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nCache-Control: no-store\r\n"
@@ -221,6 +222,7 @@ class AuthHandler(socketserver.BaseRequestHandler):
             self.request.settimeout(1)
             self.request.sendall(response)
         except OSError:
+            # A disconnected caller may not receive the response; do not retry the authorization exchange.
             pass
 
 
@@ -294,6 +296,7 @@ def screenshot_type(data):
         if root.tag in ("CiscoIPPhoneImage", "CiscoIPPhoneImageFile"):
             return ".xml"
     except ET.ParseError:
+        # Malformed XML falls through to the explicit unsupported-screenshot error.
         pass
     raise ValueError("phone did not return a supported screenshot")
 

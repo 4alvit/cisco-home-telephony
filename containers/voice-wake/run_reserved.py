@@ -246,6 +246,7 @@ class ReservedWakeControl(control.VoiceControl):
                                  "transport_stopped", "start_failed"):
                     reason = candidate
         except (ValueError, TypeError, KeyError):
+            # Invalid optional diagnostics retain the fixed failure reason before finalization.
             pass
         super()._finish(session, raw)
         cleanup = (session.cleanup_verified and session.lease_fd < 0

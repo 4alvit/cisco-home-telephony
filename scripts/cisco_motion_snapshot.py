@@ -341,6 +341,7 @@ class Claims:
                     fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
                     os.close(fd)
                 except FileExistsError:
+                    # A competing creator is allowed only if the following identity and mode checks pass.
                     pass
             info = self.path.lstat()
             require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
@@ -589,7 +590,6 @@ def supervise(argv, *, timeout=50):
     signals = (signal.SIGTERM, signal.SIGINT)
     previous_handlers = {sig: signal.getsignal(sig) for sig in signals}
     previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, signals)
-    result = unknown_delivery('supervision_failure')
 
     def cancelled(_signum, _frame):
         # Repeated termination must not interrupt the bounded cleanup path.

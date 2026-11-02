@@ -294,6 +294,7 @@ def main():
             try:
                 os.killpg(child.pid, number)
             except ProcessLookupError:
+                # The owned daemon has already exited; normal ownership cleanup still follows.
                 pass
             except OSError:
                 print("Could not signal owned TFTP daemon; retaining ownership", file=sys.stderr)

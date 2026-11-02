@@ -125,6 +125,7 @@ def select_tracks(config, query):
                     relative = expanded.relative_to(anchor).as_posix()
                     break
                 except ValueError:
+                    # This anchor does not contain the path; try the next approved anchor.
                     pass
             if relative is None:
                 # macOS may spell the same root through /var or /private/var.

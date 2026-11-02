@@ -732,7 +732,7 @@ class CameraPreviewTests(unittest.TestCase):
             return self.backend.data
 
         self.backend.hook = slow
-        page = self.request(ref.page_url)
+        self.request(ref.page_url)
         stamp = datetime.fromtimestamp(self.clock.wall, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         self.assertIn(stamp, self.xml(self.request(ref.page_url + "/text")).findtext("Text"))
         self.clock.advance(2)

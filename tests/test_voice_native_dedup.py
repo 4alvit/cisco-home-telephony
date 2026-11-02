@@ -54,7 +54,8 @@ class Assist:
         self.calls.append(kwargs)
         if self.error:
             raise AssistError(self.error)
-        frames = [frame async for frame in audio]
+        async for _ in audio:
+            pass
         return SimpleNamespace(conversation_id="next", text="Synthetic answer", tts_url=None)
 
 class NativeDedupTests(unittest.IsolatedAsyncioTestCase):

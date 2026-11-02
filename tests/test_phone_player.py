@@ -429,7 +429,6 @@ class PlayerTests(unittest.TestCase):
                     self.assertEqual(state['delete'] - before_delete, int(outcome == 'exact'))
 
     def test_restart_recovers_only_pending_reservation_not_playback(self):
-        player = self.server.player
         clock = gateway.app_module('phone_player').time
         with patch.object(clock, 'monotonic', return_value=100.) as now, self.reservation_ami() as state:
             self.request('play', source='https://example.org/a.mp3')

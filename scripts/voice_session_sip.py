@@ -39,6 +39,7 @@ class DeferredSink:
     async def stop(self, *args):
         if self.target is not None:
             return await self.target.stop(*args)
+        return None
 
 
 def startup_diagnostic(error, stage, port=None, *, reason=None):
@@ -349,6 +350,7 @@ def main():
         try:
             result['session_id'] = UUID(hex=args.session_id).hex
         except (ValueError, AttributeError):
+            # An invalid session identifier is omitted from the fixed startup-failure report.
             pass
         print(json.dumps(result, sort_keys=True))
         return 1

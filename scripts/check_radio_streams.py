@@ -35,6 +35,7 @@ def probe(name):
                 peak = max(peak, max(abs(x) for x in struct.unpack(
                     "<" + "h" * radio.FRAME_SAMPLES, data)))
     except (OSError, EOFError, ValueError):
+        # Partial probe failures keep measured frames; acceptance also requires audio and reaped workers.
         pass
     finally:
         call.close(); listener.close(); thread.join(timeout=3)

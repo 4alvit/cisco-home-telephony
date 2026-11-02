@@ -597,8 +597,11 @@ class AudioSocketPeer:
                         raise LabError("unexpected AudioSocket message type")
             need(self.ended or self.stop.is_set(), "AudioSocket session deadline exceeded")
         except BaseException as error:
-            if not self.stop.is_set():
-                self.error = str(error)
+            # Closing the owned socket can wake the worker with a transport
+            # failure. Unexpected failures still invalidate the fixture,
+            # including those racing with a requested shutdown.
+            if not (self.stop.is_set() and isinstance(error, (OSError, EOFError))):
+                self.error = f"{type(error).__name__}: {error}"
         finally:
             if self.connection is not None:
                 self.connection.close()
@@ -610,6 +613,7 @@ class AudioSocketPeer:
             try:
                 self.connection.shutdown(socket.SHUT_RDWR)
             except OSError:
+                # Shutdown may race peer closure; the listener still closes and its thread is joined.
                 pass
         self.listener.close()
         self.thread.join(1)

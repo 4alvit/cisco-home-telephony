@@ -114,6 +114,7 @@ def _remove_owned(directory, name, identity):
             os.unlink(name, dir_fd=directory)
             return True
     except FileNotFoundError:
+        # An absent marker cannot be removed; report that this call removed nothing.
         pass
     return False
 

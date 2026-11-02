@@ -584,6 +584,7 @@ def _execute_worker(pipe, phone, uri, deadline):
     try:
         pipe.send(result)
     except (EOFError, OSError):
+        # The parent may have gone away; still close the owned result pipe.
         pass
     pipe.close()
 
@@ -663,6 +664,7 @@ def _watchdog_loop(pipe, execute, deadline, allowed_starts, *, clock=time.monoto
                 result = 'error'
             pipe.send({'request_id': request_id, 'result': result})
     except (EOFError, OSError):
+        # A broken command pipe still enters the owned-target watchdog cleanup below.
         pass
     targets = owned | uncertain
     errors = 0
@@ -683,6 +685,7 @@ def _watchdog_loop(pipe, execute, deadline, allowed_starts, *, clock=time.monoto
     try:
         pipe.send(result)
     except (EOFError, OSError):
+        # The bounded cleanup attempts have finished; a disconnected parent cannot receive the final report.
         pass
     pipe.close()
     return result
@@ -741,6 +744,7 @@ class _Watchdog:
         try:
             self.pipe.send('finish')
         except (BrokenPipeError, EOFError, OSError):
+            # A broken command pipe must not skip joining the watchdog process below.
             pass
         # At most four hard-bounded Stop workers + delayed retry sweep.
         self.process.join(23)
@@ -749,6 +753,7 @@ class _Watchdog:
             while self.pipe.poll():
                 result.update(self.pipe.recv())
         except (EOFError, OSError):
+            # Keep the conservative report accumulated before the result pipe closed.
             pass
         self.pipe.close()
         return {**result, **self.report}

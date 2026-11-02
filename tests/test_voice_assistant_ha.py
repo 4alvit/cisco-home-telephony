@@ -348,7 +348,7 @@ def mocked_http(response):
     session = SimpleNamespace(get=Mock(return_value=response), close=AsyncMock())
     module = SimpleNamespace(
         ClientSession=Mock(return_value=session),
-        ClientTimeout=Mock(side_effect=lambda **values: SimpleNamespace(**values)),
+        ClientTimeout=Mock(side_effect=SimpleNamespace),
     )
     return module, session
 
@@ -523,7 +523,7 @@ def mocked_aiohttp(socket=None):
     module = SimpleNamespace(
         WSMsgType=message_types,
         ClientSession=Mock(return_value=session),
-        ClientTimeout=Mock(side_effect=lambda **values: SimpleNamespace(**values)),
+        ClientTimeout=Mock(side_effect=SimpleNamespace),
         TraceConfig=Mock(side_effect=lambda: SimpleNamespace(on_request_redirect=[])),
     )
     return module, session, websocket, socket

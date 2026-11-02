@@ -154,6 +154,7 @@ class HomeAssistantApps:
                     message = json.loads(exc.read(4097)).get('message')
                     reason = HA_ERRORS.get(message, reason)
                 except (ValueError, TypeError, AttributeError, OSError):
+                    # Untrusted error details are optional; retain the fixed sanitized HA error reason.
                     pass
             exc.close()
             raise AppsHAError(reason) from None
