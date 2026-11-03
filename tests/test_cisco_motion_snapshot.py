@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import selectors
 import signal
 import sqlite3
 import subprocess
@@ -422,27 +423,95 @@ class DispatchTests(unittest.TestCase):
         with self.assertRaisesRegex(motion.Failure, 'too_many_physical_phones'):
             motion.select_phones(value, ['*'], time.time())
 
-    def test_concurrent_process_event_claim_and_phone_cooldown(self):
-        # Separate interpreters exercise SQLite locking, not an in-process mock.
-        path = self.root / 'state'
-        ledger = motion.Claims(path)
-        ledger.close()
-        code = ('import sys,time;sys.path.insert(0,sys.argv[1]);import cisco_motion_snapshot as m;'
-                'd=m.Claims(sys.argv[2]);p,s=d.reserve("event",["201"],1000,60);'
-                'print(len(p));d.close()')
-        workers = [subprocess.Popen([sys.executable, '-c', code, str(SOURCE.parent), str(path)],
-                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE) for _ in range(2)]
-        outputs = []
+    def claim_workers(self, path, count=2):
+        """Open independent connections before releasing any claim attempt."""
+        code = '''import json, sys
+sys.path.insert(0, sys.argv[1])
+import cisco_motion_snapshot as m
+d = m.Claims(sys.argv[2])
+try:
+    print("ready", flush=True)
+    if sys.stdin.readline() != "claim\\n":
+        raise RuntimeError("missing claim signal")
+    try:
+        selected, skipped = d.reserve("event", ["201"], 1000, 60)
+        result = {"selected": selected, "skipped": skipped}
+    except m.Failure as exc:
+        if exc.reason != "state_busy_or_unavailable":
+            raise
+        result = {"refused": exc.reason}
+    print(json.dumps(result), flush=True)
+finally:
+    d.close()
+'''
+        workers = []
+        def cleanup():
+            for worker in workers:
+                if worker.poll() is None:
+                    worker.kill()
+                worker.communicate(timeout=5)
+        self.addCleanup(cleanup)
+        # Sequential readiness avoids testing concurrent schema creation while
+        # the actual claim attempts below still use independent processes.
+        for _ in range(count):
+            worker = subprocess.Popen(
+                [sys.executable, '-c', code, str(SOURCE.parent), str(path)],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            workers.append(worker)
+            with selectors.DefaultSelector() as selector:
+                selector.register(worker.stdout, selectors.EVENT_READ)
+                self.assertTrue(selector.select(5), 'claim worker did not become ready')
+            self.assertEqual(worker.stdout.readline(), b'ready\n')
+        return workers
+
+    def finish_claim_workers(self, workers):
+        # Signal every contender before waiting for any result.
+        for worker in workers:
+            worker.stdin.write(b'claim\n')
+            worker.stdin.flush()
+        results = []
         for worker in workers:
             out, err = worker.communicate(timeout=5)
             self.assertEqual(worker.returncode, 0, err)
-            outputs.append(out.strip())
-        self.assertEqual(sorted(outputs), [b'0', b'1'])
+            results.append(json.loads(out))
+        return results
+
+    def test_concurrent_process_event_claim_and_phone_cooldown(self):
+        # A bounded busy refusal is valid: a descheduled lock holder need not
+        # finish inside another process's production 100 ms busy budget.
+        path = self.root / 'state'
+        ledger = motion.Claims(path)
+        ledger.close()
+        results = self.finish_claim_workers(self.claim_workers(path))
+        winner = {'selected': ['201'], 'skipped': []}
+        duplicate = {'selected': [], 'skipped': [{'phone': '201', 'reason': 'duplicate_event'}]}
+        self.assertEqual(results.count(winner), 1)
+        self.assertTrue(all(row in (winner, duplicate,
+                        {'refused': 'state_busy_or_unavailable'}) for row in results))
         first, second = motion.Claims(path), motion.Claims(path)
+        self.addCleanup(first.close)
+        self.addCleanup(second.close)
+        self.assertEqual(first.reserve('event', ['201'], 1000, 60),
+                         ([], duplicate['skipped']))
         self.assertTrue(first.claim_phone('201', 1000, 60))
         self.assertFalse(second.claim_phone('201', 1001, 60))
         self.assertTrue(second.claim_phone('201', 1060, 60))
-        first.close(); second.close()
+
+    def test_concurrent_processes_refuse_held_writer_without_claiming_event(self):
+        path = self.root / 'state'
+        ledger = motion.Claims(path)
+        self.addCleanup(ledger.close)
+        workers = self.claim_workers(path)
+        ledger.db.execute('BEGIN IMMEDIATE')
+        try:
+            results = self.finish_claim_workers(workers)
+            self.assertEqual(results, [{'refused': 'state_busy_or_unavailable'}] * 2)
+            self.assertEqual(ledger.db.execute('SELECT count(*) FROM events').fetchone()[0], 0)
+        finally:
+            ledger.db.rollback()
+        self.assertEqual(ledger.reserve('event', ['201'], 1000, 60), (['201'], []))
+        self.assertEqual(ledger.reserve('event', ['201'], 1000, 60),
+                         ([], [{'phone': '201', 'reason': 'duplicate_event'}]))
 
 
 class TransportTests(unittest.TestCase):
