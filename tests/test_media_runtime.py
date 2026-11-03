@@ -40,6 +40,78 @@ class Connection:
         pass
 
 
+class DecoderCancellationTests(unittest.TestCase):
+    def http_source(self):
+        """Use the real HTTP parser/reader on local sockets, without a server."""
+        client, peer = socket.socketpair()
+        self.addCleanup(client.close)
+        self.addCleanup(peer.close)
+        connection = media.http.client.HTTPConnection('unused.example')
+        connection.sock = client
+        self.addCleanup(connection.close)
+        connection.request('GET', '/')
+        peer.sendall(b'HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\n'
+                     b'Content-Length: 4\r\n\r\ndata')
+        return connection, connection.getresponse()
+
+    def test_cancel_never_closes_httpresponse_while_worker_is_reading(self):
+        connection, response = self.http_source()
+        entered, release = threading.Event(), threading.Event()
+        errors, closers = [], []
+        original_close = response._close_conn
+        caller = threading.current_thread()
+
+        def gated_close():
+            closers.append(threading.current_thread())
+            if threading.current_thread() is not caller:
+                # read1 has reached the finite body's EOF, but has not yet
+                # released its fp. Concurrent response.close used to clear it.
+                entered.set()
+                if not release.wait(3):
+                    raise RuntimeError('Test did not release HTTP reader')
+            original_close()
+
+        with patch.object(media, 'open_media', return_value=(connection, response)), \
+                patch.object(response, '_close_conn', side_effect=gated_close), \
+                patch.object(media.subprocess, 'Popen') as process, \
+                patch.object(threading, 'excepthook', side_effect=lambda args: errors.append(args.exc_value)):
+            decoder = media.Decoder(SOURCE, (), 1024, lambda _: None)
+            try:
+                self.assertTrue(entered.wait(2), 'HTTP reader never reached EOF')
+                decoder.close()
+            finally:
+                release.set()
+                decoder.thread.join(3)
+                decoder.close()
+            self.assertFalse(decoder.thread.is_alive())
+            self.assertEqual(errors, [])
+            self.assertEqual(closers, [decoder.thread])
+            self.assertIsNone(connection.sock)
+            self.assertTrue(response.closed)
+            self.assertTrue(decoder.file.closed)
+            self.assertTrue(decoder.ready.is_set())
+            process.assert_not_called()
+
+    def test_unexpected_read_attribute_error_is_not_silenced(self):
+        connection, response = self.http_source()
+        failure = AttributeError('Unexpected reader defect')
+        errors = []
+        with patch.object(media, 'open_media', return_value=(connection, response)), \
+                patch.object(response, 'read1', side_effect=failure), \
+                patch.object(media.subprocess, 'Popen') as process, \
+                patch.object(threading, 'excepthook', side_effect=lambda args: errors.append(args.exc_value)):
+            decoder = media.Decoder(SOURCE, (), 1024, lambda _: None)
+            try:
+                decoder.thread.join(2)
+                self.assertFalse(decoder.thread.is_alive())
+                self.assertFalse(decoder.stop.is_set())
+                self.assertEqual(errors, [failure])
+                self.assertTrue(decoder.ready.is_set())
+                process.assert_not_called()
+            finally:
+                decoder.close()
+
+
 class RuntimeValidation(unittest.TestCase):
     def test_https_requires_tls12_and_verified_hostname_before_wrapping(self):
         context = ssl.create_default_context()

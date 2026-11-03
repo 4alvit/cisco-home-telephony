@@ -449,7 +449,10 @@ class Decoder:
                 if sock:
                     with contextlib.suppress(OSError):
                         sock.shutdown(socket.SHUT_RDWR)
-                self.connection.close()
+                # Only the reader thread closes HTTPConnection/HTTPResponse.
+                # Closing here races read1's EOF handling and clears its fp
+                # before _close_conn uses it. Shutdown interrupts the read;
+                # _run's finally block owns response and connection cleanup.
             with self.process_lock:
                 _terminate(self.process)
             if self.thread is not threading.current_thread():
