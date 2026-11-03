@@ -197,6 +197,13 @@ endpoint rather than a login or redirect URL.
 - SQLite state stores event/destination metadata for deduplication and
   cooldown, not camera images. An accepted or uncertain operation is not
   automatically retried. Do not delete state to force an event to replay.
+- A competing ledger writer can exhaust the 100 ms SQLite lock-wait budget.
+  An initial event claim failure prevents fetching a frame; a later per-phone
+  claim failure prevents that phone's POST. Concurrent notifications are not
+  guaranteed to all complete successfully.
+  Keep this bounded refusal rather than retrying an old notification. Offline
+  process tests check that at most one contender claims an event, held locks
+  cannot produce a claim, and duplicate/cooldown protection survives release.
 
 ## Link the existing HA notification
 
