@@ -275,10 +275,32 @@ def delivery_failed(job):
         recipient['status'] != 'completed' for recipient in job['recipients'])
 
 
+def failed_answer_ringing(current, attempted):
+    """Require a fresh, matching recipient before cancelling its whole job."""
+    ringing = []
+    for line, previous in attempted.items():
+        recipient = next(item for item in current['recipients'] if item['line'] == line)
+        require(all(recipient[key] == previous[key] for key in
+                    ('driver', 'phone_id', 'caller_id')), 'announcement_call_changed')
+        if recipient['status'] in ('ringing', 'playing'):
+            require(all(recipient[key] == previous[key] for key in ('channel', 'uniqueid')),
+                    'announcement_call_changed')
+        if current['status'] in TERMINAL or current['status'] == 'stopping':
+            continue
+        if recipient['status'] == 'ringing':
+            ringing.append(line)
+        else:
+            require(recipient['status'] in ('playing', 'completed', 'failed', 'skipped',
+                                            'stopped', 'stopping'),
+                    'announcement_answer_state_unconfirmed')
+    return ringing
+
+
 def run(args, config, *, gateway_factory, inventory_validator, read_file, clock=time.monotonic,
         sleep=time.sleep):
     identifier, dispatched, lines = None, False, []
-    latest, answers = None, {}
+    latest, answers, futures = None, {}, {}
+    answer_cleanup = None
     cancelled = threading.Event()
     connections = ExitStack()
     try:
@@ -317,21 +339,43 @@ def run(args, config, *, gateway_factory, inventory_validator, read_file, clock=
             require(latest['status'] == 'dry_run', 'announcement_dry_run_not_confirmed')
             return latest, 0
         deadline = clock() + WAIT_SECONDS
-        futures = {}
+        attempted, checked_answers = {}, set()
         with ThreadPoolExecutor(max_workers=MAX_LINES, thread_name_prefix='announcement-answer') as pool:
             try:
                 while latest['status'] not in TERMINAL:
                     require(clock() < deadline, 'announcement_wait_timeout')
                     for recipient in latest['recipients']:
                         line = recipient['line']
-                        if (recipient['status'] == 'ringing' and targets[line]['driver'] != 'ha_satellite'
+                        if (not cancelled.is_set() and recipient['status'] == 'ringing'
+                                and targets[line]['driver'] != 'ha_satellite'
                                 and line not in futures):
+                            attempted[line] = recipient
                             futures[line] = pool.submit(answer_once, config, args.timeout, identifier, lines,
                                 recipient, targets[line], gateway_factory, inventory_validator, cancelled,
                                 prepared.get(line))
                     for line, future in futures.items():
                         if future.done():
                             answers[line] = future.result()
+                    failures = {line: attempted[line] for line, answer in answers.items()
+                                if answer['status'] != 'acknowledged' and line not in checked_answers}
+                    if failures and answer_cleanup is None:
+                        latest = validate_job(service.request('/v1/announcements/' + identifier),
+                                              identifier, lines, routes)
+                        ringing = failed_answer_ringing(latest, failures)
+                        checked_answers.update(failures)
+                        if ringing:
+                            cancelled.set()
+                            # The service only supports whole-job cancellation. Record intent
+                            # before dispatch so a lost response never causes another stop.
+                            answer_cleanup = {'status': 'not_confirmed', 'scope': 'job',
+                                              'lines': ringing, 'reason': 'automatic_answer_failed'}
+                            latest = validate_job(service.request('/v1/announcements/' + identifier + '/stop', {}),
+                                                  identifier, lines, routes)
+                            require(latest['status'] in TERMINAL or latest['status'] == 'stopping',
+                                    'announcement_stop_not_confirmed')
+                            answer_cleanup['status'] = latest['status']
+                        if latest['status'] in TERMINAL:
+                            break
                     sleep(.5)
                     latest = validate_job(service.request('/v1/announcements/' + identifier), identifier, lines, routes)
             finally:
@@ -341,9 +385,17 @@ def run(args, config, *, gateway_factory, inventory_validator, read_file, clock=
         latest['answers'] = list(answers.values())
         latest['note'] = ('Playback results come from the configured delivery driver. '
                           'They do not prove that a person heard the message.')
+        if answer_cleanup is not None:
+            latest.update(answer_cleanup=answer_cleanup, recovery_command=recovery(args, identifier))
+            latest['note'] += ' Failed automatic answer requested whole-job stop; other recipients may be interrupted.'
         return latest, int(delivery_failed(latest))
     except (Exception, KeyboardInterrupt) as error:
         cancelled.set()
+        # The executor has joined its workers even if a fresh status or stop
+        # failed. Keep their completed receipts in the recovery result.
+        for line, future in futures.items():
+            if future.done() and not future.cancelled() and future.exception() is None:
+                answers[line] = future.result()
         reason = getattr(error, 'reason', 'announcement_local_or_transport_error')
         if not isinstance(reason, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,95}', reason):
             reason = 'announcement_local_or_transport_error'
@@ -353,6 +405,9 @@ def run(args, config, *, gateway_factory, inventory_validator, read_file, clock=
             result.update(id=identifier, recovery_command=recovery(args, identifier))
         if dispatched:
             result['note'] = 'Do not repeat the announcement blindly. Inspect this job; the server owns bounded cleanup.'
+        if answer_cleanup is not None:
+            result['answer_cleanup'] = answer_cleanup
+            result['note'] += ' Whole-job stop was sent once and will not be retried automatically.'
         return result, 1
     finally:
         connections.close()
