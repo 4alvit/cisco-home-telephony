@@ -34,10 +34,10 @@ A completed delivery receipt alone does not prove that a person heard audio.
 - **Managed media controls:** a direct MP3 source reached `playing`; pause,
   resume, seek, volume, and mute/unmute produced the corresponding state changes.
   A direct FLAC source was accepted into the queue; next, previous, and queue
-  clearing changed the queue as requested. The sampled FLAC transition was
-  `buffering`, so this record does not claim independently verified FLAC
-  playback or audibility. Stop returned the player to idle and removed its
-  channels. Volume and mute preferences were restored.
+  clearing changed the queue as requested. The initial FLAC sample showed
+  `buffering`; a later playback recheck is recorded below. Stop returned the
+  player to idle and removed its channels. Volume and mute preferences were
+  restored. No separate human confirmation of FLAC audibility was collected.
 - **Home Assistant Stop:** stopping both a managed media session and a legacy
   radio session returned the handset to idle with no remaining call channels.
 
@@ -54,6 +54,18 @@ A deterministic regression using the real HTTP parser reproduces the original
 failure and passes with the fix. A separate test ensures unexpected reader
 errors remain visible rather than being suppressed. The 31 media-runtime tests
 passed, including the existing synthetic MP3/FLAC playback tests.
+
+The fix was merged in [Cisco PR #89](https://github.com/4alvit/cisco-home-telephony/pull/89),
+commit [`252ab089693554ea09e3091bc37e010ae1730576`](https://github.com/4alvit/cisco-home-telephony/commit/252ab089693554ea09e3091bc37e010ae1730576),
+with required CI checks passing. It was installed as a runtime source overlay;
+the container image identity remained unchanged. Rollback to the previous
+source and reinstallation of the fix were both verified against the expected
+file contents. Both new regression tests also passed inside the installed
+gateway. In the physical MP3 and FLAC rechecks after installation, each source
+reached `playing` and its position advanced beyond one second. For each format,
+Home Assistant Stop returned the player to idle and removed its channel without
+a fallback stop. A bounded post-test gateway log review covering up to 500 lines
+from the preceding 15 minutes found no `Traceback` or `AttributeError`.
 
 ## Unavailable or protected endpoints
 
@@ -90,19 +102,56 @@ Subsequent tests produced two distinct results:
   zero completed turns. This was a restart, not a successful answer followed by
   rearming. The matching failure receipt reported `assistant_stopped`, with no
   TTS playback and confirmed cleanup before the supervisor restarted the
-  session. This differs from the earlier `peer_closed` failure; its underlying
-  Home Assistant error category has not yet been established. The final
-  explicit stop was confirmed.
+  session. The final explicit stop was confirmed.
 
 These observations do not establish reliable wake detection or a completed
-hands-free conversation. The acoustic-run failure remains under investigation;
-the successful idle stop does not explain or invalidate the earlier termination.
+hands-free conversation. The successful idle stop does not explain or invalidate
+the earlier termination.
+
+### Home Assistant compatibility fix
+
+The second acoustic failure was traced to the custom `HomeAPI` constructor
+skipping the Home Assistant base initializer. On Home Assistant 2026.11 this
+left `requires_admin` unset and broke the assistant path. This failure was in
+Home Assistant integration initialization, not a SIP transport failure. It does
+not explain the first test's unexplained ten-second `peer_closed` event.
+
+The constructor fix was merged in [EchoMuse PR #27](https://github.com/ha-homelab/ha-echomuse/pull/27),
+commit [`649ea2ed263edf5446d3aaf009dd90bb41792565`](https://github.com/ha-homelab/ha-echomuse/commit/649ea2ed263edf5446d3aaf009dd90bb41792565).
+Validation included 192 unit tests, 24 isolated tests against actual Home
+Assistant, and passing required CI checks. Only the constructor change was
+applied to the installed integration, preserving its existing Russian prompt.
+The Home Assistant Core process was restarted and observed returning to
+`RUNNING`. A read-only text request through the live Home Assistant conversation
+API then returned HTTP 200, `action_done`, and the correct answer to 2 + 2.
+The first physical trial after this change produced no observed wake or Home
+Assistant turn; its cleanup was verified. A bounded repeat using a repeated
+wake phrase, with the model and threshold unchanged, completed one synthetic
+speaker-to-microphone transport and playback cycle:
+`thinking` → `speaking` → `preparing` → `armed`,
+with the same session and `turns_completed: 1`. Home Assistant recorded speech
+recognition, intent completion, TTS, and run completion without an error.
+The matching intent reply and TTS input contained the correct answer, four, and
+the session recorded one complete PCM playback. The user also reported hearing
+a response meaning “I don't understand what you mean.” That response was traced
+to a separate, overlapping Echo Show session, with a different reply and TTS
+asset; it was not the Cisco session's answer. The Cisco trace therefore confirms
+one synthetic turn with correct reply text, completed playback, and rearming.
+It does not provide a separate human confirmation of that answer's audibility.
+
+The second repeated-wake stimulus produced no activation and no second completed
+turn. The operator then disabled hands-free mode; inactive state and confirmed
+stop were observed. All physical tests were stopped. **Reliable far-field wake
+detection and repeatable multi-turn hands-free use remain unqualified.** The
+single completed synthetic turn must not be generalized to those capabilities.
 
 ## Local suite and CI status
 
 The broader local suite reported 2,835 tests, 22 skips, and two errors. Both
 errored tests passed an unchanged targeted rerun. This is not recorded as a clean
-full-suite pass. Completion of all required CI checks remains pending.
+full-suite pass. Subsequently, all required CI checks passed for both merged
+fixes linked above. Automated checks and verified installation remain distinct
+from the physical results and remaining acceptance limitations recorded here.
 
 ## Scope and provenance
 
