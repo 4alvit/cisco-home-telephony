@@ -132,6 +132,10 @@ an identification service. Signed URL query parameters are removed from state.
 - **Control refused after a hangup:** refresh state and start a new session.
   Every control carries the observed session and physical line. Old commands
   cannot hang up or change a replacement telephone call.
+- **`NoneType` / `close` exception after Stop:** update the gateway's media
+  runtime. Cancelling a download formerly closed its HTTP response while the
+  reader was finishing it. The reader now owns response cleanup; cancellation
+  interrupts the socket without closing the response from another thread.
 - **`player_cleanup_pending`:** the local media session has closed, but its
   unused Asterisk reservation has not been confirmed removed. The gateway
   blocks new playback on that physical phone, including its other line, while
@@ -178,3 +182,6 @@ integration and private configuration when testing an image-only rollback.
 
 Manually dialing a radio number retains the legacy radio behavior and exact-call
 Stop. Start playback from HA or MA to use the richer controlled player.
+
+See the [physical acceptance record](physical-acceptance-2026-11-02.md) for
+observed controls, human audio confirmations, and remaining test limitations.
