@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / 'containers/asterisk'), str(ROOT / 'scripts')]
 import phone_voice_control as control
 import phone_voice_transport as transport
-from phone_voice_sip import BoundaryError, Session, Wire
+from phone_voice_sip import BoundaryError, Session, Wire, close_tcp_writer
 from phone_voice_sip_ami import AmiPort, LeaseWitness
 from voice_session import SessionProgress, ProgressPlayback
 from voice_assistant.config import build_service
@@ -234,13 +234,11 @@ async def run(args, config, private, phone, voice):
                     server.close()
                 except Exception:
                     cleanup_error('listener_cleanup_failed')
-            for writer in connections:
-                close_connection(writer)
             if stop_waiter is not None:
                 await asyncio.gather(stop_waiter, return_exceptions=True)
             for writer in connections:
                 try:
-                    await asyncio.wait_for(writer.wait_closed(), .5)
+                    await close_tcp_writer(writer)
                 except (Exception, asyncio.CancelledError):
                     cleanup_error('connection_cleanup_failed')
                     abort_connection(writer)

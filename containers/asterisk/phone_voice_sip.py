@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import math
+import socket
 import struct
 import time
 from typing import Protocol
@@ -25,6 +26,39 @@ MAX_PAYLOAD = FRAME_BYTES * 10
 
 class BoundaryError(RuntimeError):
     """Fixed category only; never include network/provider data."""
+
+
+def _tcp_transport_closed(writer, sock):
+    """A close request alone does not prove that the local socket is closed."""
+    try:
+        transport = writer.transport
+        return (transport.is_closing() is True and
+                sock.family in (socket.AF_INET, socket.AF_INET6) and
+                sock.type == socket.SOCK_STREAM and sock.fileno() == -1)
+    except Exception:
+        return False
+
+
+async def close_tcp_writer(writer):
+    """Bound local cleanup without treating an already closed peer as a leak.
+
+    StreamWriter.wait_closed may re-raise the terminal read/write error after
+    connection_lost has closed the TCP descriptor. Accept only those known
+    disconnects with independent local closure evidence. This is neither PBX
+    absence proof nor a successful session outcome.
+    """
+    # Some transports drop extra_info on close. Retain the actual socket object
+    # before requesting closure, then inspect its descriptor after the error.
+    try:
+        sock = writer.get_extra_info('socket')
+    except Exception:
+        sock = None
+    try:
+        writer.close()
+        await asyncio.wait_for(writer.wait_closed(), .5)
+    except (ConnectionResetError, BrokenPipeError):
+        if not _tcp_transport_closed(writer, sock):
+            raise
 
 
 @dataclass(frozen=True)
@@ -124,7 +158,7 @@ class Wire:
             if size > MAX_PAYLOAD:
                 raise BoundaryError('oversized_packet')
             data = await self.reader.readexactly(size)
-        except asyncio.IncompleteReadError as exc:
+        except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError) as exc:
             raise BoundaryError('peer_closed') from exc
         return kind, data
 
@@ -160,8 +194,11 @@ class Wire:
     async def write_pcm(self, pcm):
         if not self.admitted or self.closed or len(pcm) != FRAME_BYTES:
             raise BoundaryError('wire_not_ready')
-        self.writer.write(b'\x12\x02\x80' + pcm)
-        await asyncio.wait_for(self.writer.drain(), .25)
+        try:
+            self.writer.write(b'\x12\x02\x80' + pcm)
+            await asyncio.wait_for(self.writer.drain(), .25)
+        except (ConnectionResetError, BrokenPipeError) as exc:
+            raise BoundaryError('peer_closed') from exc
         self.frames_sent += 1
 
     async def close(self):
@@ -171,8 +208,7 @@ class Wire:
         self.pending.clear()
         # Closing TCP is a protocol termination. No potentially blocking final
         # write is needed; it never substitutes for exact PBX Hangup proof.
-        self.writer.close()
-        await asyncio.wait_for(self.writer.wait_closed(), .5)
+        await close_tcp_writer(self.writer)
 
 
 class Sink:

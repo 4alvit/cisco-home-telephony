@@ -1,9 +1,16 @@
 # Recover an ownerless SIP voice session
 
-An interrupted gateway can leave a reserved `recovery_required` journal after
-the process that owned it has exited. Ordinary Stop cannot adopt another
-process's session. Administrative recovery can release this exact reservation
-after new, bounded evidence that the phone's network media is quiescent.
+An interrupted gateway or failed cleanup can leave a reserved
+`recovery_required` journal after the process that owned it has exited.
+Ordinary Stop cannot adopt another process's session or reconcile cleanup
+after its runner has exited. Administrative recovery can release this exact
+reservation after new, bounded evidence that the phone's network media is
+quiescent.
+
+`stop_confirmed: true` can coexist with `recovery_required`: the owned call
+ended, but another cleanup stage failed, such as closing its AudioSocket.
+Both boolean Stop values are eligible for the same recovery checks. The old
+confirmation never substitutes for fresh evidence of network-media quiescence.
 
 ![Exact-session recovery gates](diagrams/voice-orphan-recovery.svg)
 
@@ -51,8 +58,10 @@ instruction to retry until successful. `recover --dry-run` is refused: use
 `recovery-status` for a read-only inspection. Recovery uses at least a 45-second
 client timeout, allowing a 30-second server proof budget plus transport overhead.
 
-The success receipt is `ORPHAN_RECOVERY_COMPLETE`, with `enabled: false`,
-`stop_confirmed: false`, and `proof_kind: phone_reported_transport_quiescence`.
+The success receipt is `ORPHAN_RECOVERY_COMPLETE`, with `enabled: false` and
+`proof_kind: phone_reported_transport_quiescence`. Its `stop_confirmed` and
+`historical_stop_confirmed` fields preserve the original boolean value, which
+can be either `false` or `true`. The private archive records that same value.
 The finite record becomes failed and unreserved. Its original error, Stop flag
 and diagnostic fields remain intact; this operation does not rewrite failure
 as a successful Stop. The hands-free policy remains disabled. Ordinary status
