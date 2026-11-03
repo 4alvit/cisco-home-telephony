@@ -18,9 +18,10 @@ Install cisco-voice, a launcher for this checkout's scripts/voice_session.py.
 The launcher preserves the caller's working directory and arguments. Keep the
 checkout and selected Python environment at their original paths. Dependencies
 must be installed separately; this installer downloads nothing and uses no sudo.
-Live voice sessions need websockets and aiohttp (including for TTS retrieval);
-install voice_assistant/requirements-websocket.txt in the selected environment.
-Python 3.11+ is recommended. Python 3.10 also requires async_timeout>=4,<6 in
+Live voice sessions need Python 3.11+, websockets>=17.4,<18 and aiohttp
+(including for TTS retrieval). Install voice_assistant/requirements-websocket.txt
+in the selected environment.
+Python 3.10 remains supported for offline checks and requires async_timeout>=4,<6 in
 the selected environment; installation is refused if that backport is missing.
 An identical executable wrapper is left unchanged. Any differing existing file
 or destination symlink is refused; there is no overwrite or update option.

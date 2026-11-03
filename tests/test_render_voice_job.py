@@ -51,7 +51,7 @@ def voice_fixture():
             "wake": {"mode": "manual", "bundle_file": ".local/unused-bundle.json"}}
 
 
-def wheel_bytes(*, version="15.0.1", pure="true", tag="py3-none-any", extra=None):
+def wheel_bytes(*, version="17.4", pure="true", tag="py3-none-any", extra=None):
     buffer = io.BytesIO()
     metadata = "websockets-" + version + ".dist-info/"
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -506,7 +506,7 @@ class RenderVoiceJobTests(unittest.TestCase):
         wheel = Path(os.environ["VOICE_TEST_WEBSOCKETS_WHEEL"]).resolve()
         r.read_websockets_wheel(wheel)
         code = ("import websockets; import websockets.asyncio.client; "
-                "assert websockets.__version__ == '15.0.1'; "
+                "assert websockets.__version__ == '17.4'; "
                 "assert '.whl' in websockets.__file__")
         result = subprocess.run([sys.executable, "-S", "-c", code],
                                 env=dict(os.environ, PYTHONPATH=str(wheel)), cwd=self.workspace,

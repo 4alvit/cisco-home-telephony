@@ -20,6 +20,7 @@ import inspect
 import json
 import logging
 import math
+import sys
 from typing import Any, Protocol
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
@@ -232,7 +233,8 @@ class HAClient:
     """One independent connection per request; safe to share between phones.
 
     ``connect`` is an async ``url -> WebSocket`` factory for tests/transports.
-    The default transport needs the optional ``websockets>=15`` package. Its
+    The default transport needs optional ``websockets>=17.4,<18`` on Python 3.11+.
+    Its
     proxy support, redirects and payload logging are disabled. Inject the
     optional ``aiohttp_connect`` to reuse an aiohttp installation instead.
     HTTP TTS fetches require optional aiohttp, bypass proxies, reject every
@@ -283,6 +285,11 @@ class HAClient:
         ))
 
     async def _default_connect(self, url: str) -> WebSocket:
+        if sys.version_info < (3, 11):
+            raise AssistError(
+                "websockets-python-version",
+                hint="The default websockets transport requires Python 3.11+ and websockets>=17.4,<18",
+            )
         try:
             from websockets.asyncio.client import connect
         except ImportError:
