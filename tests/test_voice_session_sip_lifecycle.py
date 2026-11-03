@@ -5,6 +5,8 @@ from dataclasses import replace
 import errno
 from pathlib import Path
 import signal
+import socket
+import struct
 import sys
 import threading
 import unittest
@@ -481,6 +483,29 @@ class LoopbackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.assistant.close_completed)
         self.assertEqual(self.port.hangups, 1)
         self.assertTrue(report['pbx_call_absent'])
+
+    async def test_real_peer_tcp_reset_is_failed_session_with_completed_cleanup(self):
+        task = self.launch()
+        _, writer, _, server_writer = await self.connect()
+        writer.write(packet(1, TOKEN.bytes) + packet(0x12, FRAME))
+        await writer.drain()
+        await asyncio.wait_for(self.assistant.frame_received.wait(), 1)
+        # Force an actual TCP RST after admission, rather than injecting a
+        # synthetic exception into read_pcm or wait_closed.
+        writer.get_extra_info('socket').setsockopt(
+            socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+        writer.transport.abort()
+        report = await self.finished(task)
+        self.assertEqual(report['result']['reason'], 'peer_closed')
+        self.assertEqual(report['error'], 'voice_session_failed')
+        self.assertEqual(report['result']['cleanup_errors'], ())
+        self.assertEqual(report['cleanup_errors'], [])
+        self.assertTrue(report['result']['stop_confirmed'])
+        self.assertTrue(report['pbx_call_absent'])
+        self.assertEqual(self.port.hangups, 1)
+        self.assertTrue(self.assistant.close_completed)
+        self.assertTrue(server_writer.is_closing())
+        self.assertEqual(server_writer.get_extra_info('socket').fileno(), -1)
 
     async def test_repeated_cancellation_during_writer_cleanup_still_reconciles_pbx(self):
         self.port.release.clear()

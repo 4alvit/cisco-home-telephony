@@ -11,6 +11,7 @@ from pathlib import Path
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -178,6 +179,9 @@ class VoiceOrphanRecoveryTests(unittest.TestCase):
         self.assertEqual(result['status'], 'ORPHAN_RECOVERY_COMPLETE')
         self.assertEqual(result['session_id'], SID)
         self.assertIs(result['stop_confirmed'], False)
+        self.assertIs(result['historical_stop_confirmed'], False)
+        commit = json.loads((self.state / result['archive'] / 'commit.json').read_bytes())
+        self.assertIs(commit['historical_stop_confirmed'], False)
         self.assertEqual(result['prior_journal_sha256'], hashlib.sha256(self.original_finite).hexdigest())
         self.assertEqual(result['journal_sha256'], hashlib.sha256(self.finite.read_bytes()).hexdigest())
         archived_bytes = [f.read_bytes() for f in self.state.rglob('*') if f.is_file()]
@@ -198,6 +202,96 @@ class VoiceOrphanRecoveryTests(unittest.TestCase):
         self.assert_unchanged()
         self.assertEqual(self.proof_calls, [])
         self.assertNotIn(str(self.workspace), json.dumps(result))
+
+    def test_both_boolean_stop_flags_are_eligible_without_probing_or_writing(self):
+        original = json.loads(self.original_finite)
+        old_time = self.finite.stat().st_mtime
+        for confirmed in (False, True):
+            with self.subTest(confirmed=confirmed):
+                self.write_json(self.finite, dict(original, stop_confirmed=confirmed))
+                os.utime(self.finite, (old_time, old_time))
+                before = self.finite.read_bytes()
+                result = self.manager.recovery_status('201', context=AUTH)
+                self.assertIs(result['eligible'], True)
+                self.assertEqual(result['journal_sha256'], self.digest())
+                self.assert_unchanged(finite=before)
+                self.assertEqual(self.proof_calls, [])
+
+    def test_missing_or_non_boolean_stop_flags_are_rejected_before_proof(self):
+        original = json.loads(self.original_finite)
+        old_time = self.finite.stat().st_mtime
+        for change in ({}, *({'stop_confirmed': value}
+                            for value in (None, 0, 1, 'false', 'true', [], {}))):
+            with self.subTest(change=change):
+                value = dict(original)
+                value.pop('stop_confirmed')
+                value.update(change)
+                self.write_json(self.finite, value)
+                os.utime(self.finite, (old_time, old_time))
+                before = self.finite.read_bytes()
+                self.assertIs(self.manager.recovery_status('201', context=AUTH)['eligible'], False)
+                self.assert_refused()
+                self.assert_unchanged(finite=before)
+                self.assertEqual(self.proof_calls, [])
+
+    def test_confirmed_stop_with_failed_cleanup_recovers_without_rewriting_history(self):
+        session = self.attach_current_orphan()
+        session.state = 'running'
+        session.stop_requested = False
+        session.spawn_attempted = True
+        session.lease_fd = os.open(self.lock, os.O_RDWR)
+        fcntl.flock(session.lease_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        report = {
+            'transport': 'sip_audiosocket', 'session_id': SID,
+            'safe_no_media_started': False, 'originate_attempted': True,
+            'pbx_deadline_armed': True, 'pbx_call_absent': True,
+            'error': 'voice_session_failed', 'turns_completed': 2,
+            'cleanup_errors': ['wire_close_failed', 'connection_cleanup_failed'],
+            'result': {'reason': 'session_failed', 'stop_confirmed': True,
+                       'cleanup_errors': ['wire_close_failed']},
+        }
+        raw = json.dumps(report).encode()
+        session.handle = SimpleNamespace(poll=lambda: 1, read_result=lambda: raw, overflow=False)
+        self.manager._write(session)
+        self.manager._finish(session, raw)
+        self.assertEqual(session.state, 'recovery_required')
+        self.assertIs(session.stop_confirmed, True)
+        self.assertFalse(session.cleanup_verified)
+        self.assertIsNone(session.handle)
+        self.assertEqual(session.lease_fd, -1)
+        self.original_finite = self.finite.read_bytes()
+        before = json.loads(self.original_finite)
+        failure_path = self.finite.with_suffix('.last-failure.json')
+        failure = failure_path.read_bytes()
+        old_time = time.time() - control.EXTERNAL_OWNER_GRACE_SECONDS - 60
+        os.utime(self.finite, (old_time, old_time))
+        self.assertIs(self.manager.recovery_status('201', context=AUTH)['eligible'], True)
+
+        # A historical Stop confirmation does not substitute for fresh proof.
+        self.assert_refused(verify=lambda **kwargs: None)
+        self.assert_unchanged()
+        self.assertFalse(session.cleanup_verified)
+        result = self.recover()
+        after = json.loads(self.finite.read_bytes())
+        self.assertEqual(after, dict(before, state='failed', reserved=False,
+                                     active=False, remaining_seconds=0))
+        self.assertIs(after['stop_confirmed'], True)
+        self.assertIs(result['stop_confirmed'], True)
+        self.assertIs(result['historical_stop_confirmed'], True)
+        self.assertEqual(result['status'], 'ORPHAN_RECOVERY_COMPLETE')
+        self.assertFalse(result['enabled'])
+        self.assertTrue(session.cleanup_verified)
+        self.assertIs(session.stop_confirmed, True)
+        self.assertEqual(session.error, 'voice_stop_unconfirmed')
+        self.assertEqual(len(self.proof_calls), 1)
+        archive = self.state / result['archive']
+        commit = json.loads((archive / 'commit.json').read_bytes())
+        self.assertIs(commit['historical_stop_confirmed'], True)
+        self.assertEqual((archive / 'finite.before.json').read_bytes(), self.original_finite)
+        self.assertEqual((archive / 'hands-free.before.json').read_bytes(), self.original_hf)
+        self.assertEqual(failure_path.read_bytes(), failure)
+        self.assertEqual(json.loads(self.hf_path.read_bytes()),
+                         dict(json.loads(self.original_hf), pending=False, error=None))
 
     def reentrant_control(self, action):
         entry = self.supervisor._entries['201']

@@ -68,12 +68,14 @@ def _owner(manager, profile, sid, control):
 
 def _finite(value, profile, sid, control):
     control._safe_status(value)
+    # Stop may be confirmed while another cleanup stage failed. Its historical
+    # value is preserved; either case still requires fresh quiescence proof.
     control._require(type(sid) is str and re.fullmatch('[0-9a-f]{32}', sid)
                      and value.get('session_id') == sid and value.get('phone') == profile.phone_id
                      and value.get('line') in profile.lines
                      and value.get('state') == 'recovery_required'
                      and value.get('active') is False and value.get('reserved') is True
-                     and value.get('stop_confirmed') is False, 'voice_recovery_session_changed')
+                     and type(value.get('stop_confirmed')) is bool, 'voice_recovery_session_changed')
 
 
 def _finite_cache(manager, current, value, control):
@@ -327,7 +329,7 @@ def recover(manager, target, sid, expected, *, context, verify_cleanup, control)
             _backup(archive, 'proof.json', _encoded(proof))
             _backup(archive, 'commit.json', _encoded({
                 'version': 1, 'session_id': sid, 'kind': 'administrative_unreservation',
-                'historical_stop_confirmed': False,
+                'historical_stop_confirmed': value['stop_confirmed'],
                 'before': {'finite': _digest(raw), 'hands_free': _digest(hands_raw)},
                 'after': {'finite': _digest(_encoded(updated)),
                           'hands_free': _digest(_encoded(updated_hands))}}))

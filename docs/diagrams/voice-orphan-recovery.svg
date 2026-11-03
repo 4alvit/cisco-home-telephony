@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="420" viewBox="0 0 1000 420" role="img" aria-labelledby="title desc">
   <title id="title">Exact-session administrative recovery</title>
-  <desc id="desc">Disabled policy, exact owner checks, bounded network quiescence, and private archive precede release. Automatic listening stays off and the historical Stop remains unconfirmed.</desc>
+  <desc id="desc">Disabled policy, exact owner checks, bounded network quiescence, and private archive precede release. Automatic listening stays off and the historical Stop flag remains unchanged.</desc>
   <defs>
     <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#102b46"/><stop offset="1" stop-color="#18243d"/></linearGradient>
     <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0 0L8 4L0 8Z" fill="#8bb8cf"/></marker>
@@ -30,7 +30,7 @@
     </g>
     <rect x="36" y="278" width="928" height="52" rx="10" fill="#533c2d"/>
     <text x="56" y="310" fill="#ffdb9a" font-size="17">Any active, changed, missing or timed-out evidence → keep the reservation</text>
-    <text x="36" y="365" fill="#c4d8e9" font-size="16">Historical Stop remains unconfirmed. Network quiescence does not measure microphone power.</text>
+    <text x="36" y="365" fill="#c4d8e9" font-size="16">Historical Stop flag stays unchanged. Network quiescence does not measure microphone power.</text>
     <text x="36" y="391" fill="#8caabe" font-size="14">Success never automatically enables listening; acoustic qualification is a separate check.</text>
   </g>
 </svg>
