@@ -21,7 +21,7 @@ phone actions.
 
 The renderer captures an explicit allowlist of 13 public Python files in a
 ConfigMap. It can also include a locally supplied pure-Python `websockets`
-15.0.1 wheel in `binaryData`. The private transport configuration, minimized
+17.4 wheel in `binaryData`. The private transport configuration, minimized
 gateway configuration, voice configuration and HA token go into a Secret,
 mounted as `/run/voice/.local/transport.json`, `gateway.json`, `voice.json`
 and `ha-token.txt`. The gateway copy retains the selected physical phone with
@@ -194,12 +194,12 @@ every rendered Job is suspended. Optional arguments are:
 | --- | --- |
 | `--workspace ROOT` | Selects the repository working-tree root containing the captured sources and private inputs. |
 | `--voice-image IMAGE` | Uses a separate immutable `repository@sha256:...` voice runtime for this Job. |
-| `--websockets-wheel .local/dependencies/websockets-15.0.1-py3-none-any.whl` | Includes the local wheel after validation against the pinned official hash. |
+| `--websockets-wheel .local/dependencies/websockets-17.4-py3-none-any.whl` | Includes the local wheel after validation against the pinned official hash. |
 | `--display-port PORT` | Enables the optional phone status/Stop display server on a validated non-conflicting port. |
 | `--name phone-voice-pilot` | Selects a 1–32-character lowercase DNS-label base name beginning with a letter. |
 
 If the wheel is omitted, the image must already provide compatible
-`websockets` 15.x. Including the wheel adds it to `PYTHONPATH` for direct ZIP
+`websockets` 17.4. Including the wheel adds it to `PYTHONPATH` for direct ZIP
 import; there is no package installation or writable dependency directory.
 This option remains compatible with older packaging, but supplies only
 `websockets`; the image must still supply `aiohttp`, Pillow and FFmpeg.

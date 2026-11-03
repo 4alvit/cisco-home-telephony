@@ -1,4 +1,5 @@
-# Runtime lock, verified against exact-version PyPI JSON on 2026-10-19.
+# Runtime lock; websockets updated against exact-version PyPI JSON on 2026-11-03.
+# Other package records retain their previously verified versions and hashes.
 # Supports CPython 3.11/3.12 on Debian amd64/arm64; binary wheels only.
 # Every required transitive dependency is pinned. No extras or source builds.
 # Update by resolving the full closure, checking PyPI hashes, downloading
@@ -63,9 +64,9 @@ propcache==0.5.4 \
 typing-extensions==4.16.0 \
     --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
 
-# https://pypi.org/pypi/websockets/15.0.1/json
-websockets==15.0.1 \
-    --hash=sha256:f7a866fbc1e97b5c617ee4116daaa09b722101d4a3c170c787450ba409f9736f
+# https://pypi.org/pypi/websockets/17.4/json
+websockets==17.4 \
+    --hash=sha256:c6bd2c9781915592b209160d0f017d4c7c82ad53075e6b0c24d2a89299e7f9e9
 
 # https://pypi.org/pypi/yarl/1.25.1/json
 yarl==1.25.1 \

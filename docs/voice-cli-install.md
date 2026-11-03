@@ -28,9 +28,10 @@ installation. The wrapper stores their absolute paths and preserves the
 virtual environment's Python executable path, including its final symlink.
 It does not activate a virtual environment or copy the project.
 
-The installer uses Bash and Git. Python **3.11 or newer is recommended** on a
-Unix host; Python 3.10 requires the timeout compatibility extra below. From
-the repository root, prepare an isolated interpreter if you do not already
+The installer uses Bash and Git. The default live WebSocket transport requires
+**Python 3.11 or newer** for the patched dependency. Python 3.10 remains supported
+for offline checks and separate aiohttp integrations with the timeout extra below.
+From the repository root, prepare an isolated interpreter if you do not already
 have a suitable one:
 
 ```sh
@@ -39,7 +40,8 @@ python3 -m venv .local/voice-venv
 .local/voice-venv/bin/python -m pip install -r voice_assistant/requirements-websocket.txt
 ```
 
-For a Python 3.10 environment, install the conditional compatibility
+For a Python 3.10 environment used for those separate paths, omit the WebSocket
+requirement file above and install the conditional compatibility
 [requirement](../voice_assistant/requirements-python310.txt) using that same
 selected interpreter before running the wrapper installer:
 
@@ -58,7 +60,7 @@ do not establish the complete acoustic HA conversation path or unattended use.
 
 The foreground CLI uses the default WebSocket transport. Its current
 [requirement file](../voice_assistant/requirements-websocket.txt) specifies
-both `websockets>=15,<17` and `aiohttp>=3.12,<4`. **aiohttp is required for live
+both `websockets>=17.4,<18` and `aiohttp>=3.12,<4`. **aiohttp is required for live
 TTS audio fetching even when the turn uses websockets.** It supplies the
 asynchronous HTTP path that can be cancelled while fetching the reply. Install
 both through the requirement file into the interpreter the wrapper will use,
@@ -66,7 +68,16 @@ not a different system Python.
 
 The separate `aiohttp_connect` adapter can also carry the WebSocket turn in
 other integrations. That is a different choice from the mandatory aiohttp TTS
-dependency, and it is not a `cisco-voice` transport flag.
+dependency, and it is not a `cisco-voice` transport flag. On Python 3.10, install
+[`requirements-aiohttp.txt`](../voice_assistant/requirements-aiohttp.txt) together
+with the timeout extra for these separate integrations. Do not retain an older
+`websockets` version to run the default transport on Python 3.10.
+
+`websockets` 17.4 fixes unbounded fragmented-message reassembly
+([GHSA-6m5v-9gmr-5665](https://github.com/python-websockets/websockets/security/advisories/GHSA-6m5v-9gmr-5665)).
+The existing receive deadline and message-size limit remain in place, but they
+are not substitutes for the dependency fix. Keep the library's default fragment
+limit; do not raise `WEBSOCKETS_MAX_FRAGMENTS` to bypass it.
 
 Check imports and display installed versions using the same interpreter. This
 opens no network connection and does not establish target-host acceptance:
@@ -176,7 +187,8 @@ bash scripts/install-voice-cli.sh \
 Add the corresponding bin directory to PATH, or invoke the wrapper by its
 full path. The selected repository must be a Git checkout root with the
 regular `scripts/voice_session.py` file, and the selected interpreter must
-report Python 3.11 or newer, or Python 3.10 with the validated timeout extra.
+report Python 3.11 or newer for live voice, or Python 3.10 with the validated
+timeout extra for offline checks only.
 
 The installer reports `Installed cisco-voice: ...`, or
 `Already installed cisco-voice: ...` when an existing executable regular wrapper

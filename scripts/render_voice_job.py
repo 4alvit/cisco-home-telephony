@@ -34,9 +34,9 @@ SOURCE_FILES = (
     'voice_assistant/pipeline.py',
     'voice_assistant/playback.py',
 )
-WHEEL_NAME = 'websockets-15.0.1-py3-none-any.whl'
-# PyPI's published SHA-256 for the optional pure-Python 15.0.1 wheel.
-WHEEL_SHA256 = 'f7a866fbc1e97b5c617ee4116daaa09b722101d4a3c170c787450ba409f9736f'
+WHEEL_NAME = 'websockets-17.4-py3-none-any.whl'
+# PyPI's published SHA-256 for the optional pure-Python 17.4 wheel.
+WHEEL_SHA256 = 'c6bd2c9781915592b209160d0f017d4c7c82ad53075e6b0c24d2a89299e7f9e9'
 MAX_SOURCE_FILE = 256 * 1024
 MAX_CONFIG_BYTES = 256 * 1024
 MAX_CONFIGMAP_BYTES = 700_000
@@ -146,10 +146,10 @@ def read_websockets_wheel(path):
                      and name.suffix not in ('.so', '.dll', '.pyd', '.dylib', '.pth'),
                      'unsafe_wheel_member')
             names.add(item.filename)
-        metadata = archive.read('websockets-15.0.1.dist-info/METADATA').decode('utf-8')
-        wheel = archive.read('websockets-15.0.1.dist-info/WHEEL').decode('utf-8')
+        metadata = archive.read('websockets-17.4.dist-info/METADATA').decode('utf-8')
+        wheel = archive.read('websockets-17.4.dist-info/WHEEL').decode('utf-8')
         _require('Name: websockets' in metadata.splitlines()
-                 and 'Version: 15.0.1' in metadata.splitlines()
+                 and 'Version: 17.4' in metadata.splitlines()
                  and 'Root-Is-Purelib: true' in wheel.splitlines()
                  and 'Tag: py3-none-any' in wheel.splitlines(), 'unsupported_wheel_metadata')
         _require('websockets/asyncio/client.py' in names, 'websocket_client_missing')
@@ -327,7 +327,7 @@ def main(argv=None):
     parser.add_argument('--transport-config', required=True)
     parser.add_argument('--voice-config', required=True)
     parser.add_argument('--workspace', default=str(ROOT))
-    parser.add_argument('--websockets-wheel', help='optional local, pinned pure-Python 15.0.1 wheel')
+    parser.add_argument('--websockets-wheel', help='optional local, pinned pure-Python 17.4 wheel')
     parser.add_argument('--voice-image', help='immutable voice runtime image digest; defaults to site asterisk_image')
     parser.add_argument('--display-port', type=int)
     parser.add_argument('--name', default='phone-voice-pilot')
