@@ -56,13 +56,36 @@ class RecoveryCLITests(unittest.TestCase):
         self.assertIs(result['recovery']['quiescence_verified'], False)
         self.assertNotIn('PRIVATE', json.dumps(result))
 
-    def test_exact_recover_preserves_failure_history_and_extends_timeout(self):
-        code, result, calls = self.invoke(self.arguments(), dict(receipt(), archive='/PRIVATE/PATH'))
-        self.assertEqual(code, 0)
-        self.assertEqual(calls, [('/v1/phones/202/voice_recover', dict(
-            idempotency_key='synthetic-recovery', session_id=SID, journal_sha256=SHA), 45)])
-        self.assertIs(result['recovery']['stop_confirmed'], False)
-        self.assertNotIn('PRIVATE', json.dumps(result))
+    def test_exact_recover_preserves_stop_history_and_extends_timeout(self):
+        for confirmed in (False, True):
+            with self.subTest(confirmed=confirmed):
+                code, result, calls = self.invoke(self.arguments(), dict(receipt(), archive='/PRIVATE/PATH',
+                    stop_confirmed=confirmed, historical_stop_confirmed=confirmed))
+                self.assertEqual(code, 0)
+                self.assertEqual(calls, [('/v1/phones/202/voice_recover', dict(
+                    idempotency_key='synthetic-recovery', session_id=SID, journal_sha256=SHA), 45)])
+                self.assertIs(result['recovery']['stop_confirmed'], confirmed)
+                self.assertIs(result['recovery']['historical_stop_confirmed'], confirmed)
+                self.assertIs(result['recovery']['enabled'], False)
+                self.assertNotIn('PRIVATE', json.dumps(result))
+
+    def test_stop_history_requires_matching_actual_booleans(self):
+        invalid = [(False, True), (True, False)]
+        for value in (None, 0, 1, '', 'false', 'true', [], {}):
+            invalid.extend([(value, False), (False, value), (value, value)])
+        for confirmed, historical in invalid:
+            with self.subTest(confirmed=confirmed, historical=historical):
+                code, result, calls = self.invoke(self.arguments(), dict(receipt(),
+                    stop_confirmed=confirmed, historical_stop_confirmed=historical))
+                self.assertEqual(code, 1)
+                self.assertEqual(result['reason'], 'invalid_voice_recovery_response')
+                self.assertEqual(len(calls), 1)
+        for field in ('stop_confirmed', 'historical_stop_confirmed'):
+            value = receipt(); del value[field]
+            code, result, calls = self.invoke(self.arguments(), value)
+            self.assertEqual(code, 1)
+            self.assertEqual(result['reason'], 'invalid_voice_recovery_response')
+            self.assertEqual(len(calls), 1)
 
     def test_dry_run_never_submits_recovery(self):
         code, result, calls = self.invoke([*self.arguments(), '--dry-run'], receipt())

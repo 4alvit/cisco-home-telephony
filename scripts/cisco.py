@@ -890,13 +890,15 @@ def voice_recovery_command(args, client, path, *, on_dispatch=None):
         require(value.get('status') == 'ORPHAN_RECOVERY_COMPLETE' and value.get('state') == 'recovered'
                 and value['session_id'] == args.session_id
                 and value.get('prior_journal_sha256') == args.journal_sha256
-                and value.get('stop_confirmed') is False
-                and value.get('historical_stop_confirmed') is False
+                and type(value.get('stop_confirmed')) is bool
+                and type(value.get('historical_stop_confirmed')) is bool
+                and value['stop_confirmed'] == value['historical_stop_confirmed']
                 and value.get('enabled') is False
                 and value.get('proof_kind') == 'phone_reported_transport_quiescence',
                 'invalid_voice_recovery_response')
         result.update(status=value['status'], state='recovered', prior_journal_sha256=args.journal_sha256,
-                      stop_confirmed=False, historical_stop_confirmed=False, enabled=False,
+                      stop_confirmed=value['stop_confirmed'],
+                      historical_stop_confirmed=value['historical_stop_confirmed'], enabled=False,
                       proof_kind=value['proof_kind'])
     else:
         remaining = value.get('minimum_age_remaining_seconds')

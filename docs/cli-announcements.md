@@ -61,6 +61,34 @@ playback was stopped. After a network error, inspect the known job
 before deciding whether to send a new announcement. A new job can produce a
 second audible announcement; do not retry blindly.
 
+If automatic SIP answer is refused or its acknowledgement is lost, the CLI
+immediately reads that same job again. If the exact recipient is already
+playing or completed, it keeps observing without repeating the answer. If the
+same channel and unique ID are still ringing, it sends one Stop request for
+that job and stops submitting answer requests. A failed or uncertain Stop is
+never retried automatically. The result preserves the original answer receipt,
+an `answer_cleanup` receipt when Stop was attempted, and a `recovery_command`
+for reading the exact job's status.
+
+Cancellation currently applies to the **whole announcement job**, including a
+mixed SIP/Echo group: stopping one failed ringing recipient may interrupt
+another recipient's playback. Use separate commands for recipients that need
+independent failure handling. If the fresh job/call identity changed or its
+state cannot be established, the CLI reports uncertainty without guessing
+which call to stop; inspect the supplied recovery command. A local interruption
+or polling timeout likewise leaves cleanup to the server's existing deadlines
+and does not automatically stop a possibly replaced call.
+
+A failed earlier voice session can leave the phone reserved even after its
+SIP call ends. In that case the gateway may refuse the one-shot answer with
+`voice_phone_busy` or `voice_recovery_required`. Inspect `cisco LINE voice status`
+and `cisco LINE voice recovery-status`, then follow the
+[exact-session recovery procedure](voice-orphan-recovery.md). A gateway with the
+recovery fix accepts `stop_confirmed: true` together with `recovery_required`
+only after the same fresh quiescence checks. Do not delete reservation files or
+enable persistent auto-answer to work around the refusal. Successful recovery
+keeps hands-free listening disabled.
+
 For a terminal job, `say-status` uses the same exit-code rules as `say`: zero
 requires a `finished` job with every recipient `completed`. Failed, skipped,
 stopped or unknown delivery returns a nonzero code, including a mixed group.
@@ -597,7 +625,7 @@ redelivery. Read the per-recipient reasons even when the overall job is
 | Duplicate physical recipient | Remove the second line or repeated number for that same physical phone. |
 | Busy, offline or DND recipient | Read that recipient's current state; the announcement does not interrupt an unrelated call. |
 | Speech preparation failed | Check the existing HA TTS service, engine/voice configuration and credentials before another call. |
-| Phone rings but does not answer | Keep the CLI running; check the relevant Cisco gateway or native LifeSize answer control. |
+| Phone rings but does not answer | Keep the CLI running: a failed answer triggers one exact-job Stop after a fresh ringing check. Inspect `answers`, `answer_cleanup` and the recovery command; resolve the gateway/native refusal without bypassing call or voice ownership guards. |
 | A network request had an unknown outcome | Use `say-status` for the existing job ID. Do not create a second job just to discover its state. |
 | Playback has ended but cleanup is pending | Read job status and use exact-job Stop if needed; do not hang up an unrelated replacement call. |
 

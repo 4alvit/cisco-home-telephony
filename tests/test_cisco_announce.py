@@ -1,5 +1,6 @@
 """Announcements remain finite, privately configured and exact-call scoped."""
 import contextlib
+from concurrent.futures import Future
 import copy
 import io
 import json
@@ -453,6 +454,151 @@ class AnnouncementAnswerTests(unittest.TestCase):
 
 
 class AnnouncementPollingTests(unittest.TestCase):
+    def failed_answer_case(self, *, initial=None, observed=None, stop_reply=None,
+                           stop_error=None, answers=None, config=None):
+        """Control callback completion and server transitions without timing races."""
+        initial = initial or job(status='running', recipient_status='ringing')
+        observed = list(observed if observed is not None else [initial])
+        stop_reply = stop_reply or job(initial['lines'], status='stopped', recipient_status='stopped')
+        answers = answers or {'212': {'line': '212', 'status': 'refused', 'reason': 'voice_reserved'}}
+        requests = []
+        args = cisco.parser().parse_args(['--idempotency-key', KEY, ','.join(initial['lines']),
+                                         'voicemsg', 'Private test message'])
+
+        class ImmediatePool:
+            def __init__(self, **_): pass
+            def __enter__(self): return self
+            def __exit__(self, *_): pass
+            def submit(self, function, *args):
+                future = Future()
+                future.set_result(function(*args))
+                return future
+
+        class Gateway:
+            def __init__(self, *_): pass
+            def request(self, path, body=None):
+                requests.append((path, copy.deepcopy(body)))
+                if path == '/v1/phones': return inventory()
+                if path.endswith('/stop'):
+                    if stop_error: raise stop_error
+                    return copy.deepcopy(stop_reply)
+                if body is not None: return copy.deepcopy(initial)
+                if not observed: raise AssertionError('unexpected extra status read')
+                return copy.deepcopy(observed.pop(0))
+
+        def answer(_config, _timeout, _id, _lines, recipient, *_rest):
+            return answers[recipient['line']]
+
+        with patch.object(announce, 'ThreadPoolExecutor', ImmediatePool), \
+                patch.object(announce, 'prepare_native', return_value={}), \
+                patch.object(announce, 'answer_once', side_effect=answer) as attempt:
+            result, code = announce.run(args, config or configuration(), gateway_factory=Gateway,
+                inventory_validator=cisco.validate_inventory, read_file=cisco.read_file, sleep=lambda _: None)
+        self.assertNotIn('Private test message', json.dumps(result))
+        return result, code, requests, attempt
+
+    def test_failed_answer_stops_exact_still_ringing_job_once(self):
+        for status in ('refused', 'not_confirmed'):
+            with self.subTest(status=status):
+                result, code, requests, answer = self.failed_answer_case(answers={
+                    '212': {'line': '212', 'status': status, 'reason': 'announcement_answer_failed'}})
+                self.assertEqual(code, 1)
+                self.assertEqual(result['status'], 'stopped')
+                self.assertEqual(result['answers'][0]['status'], status)
+                self.assertEqual(result['answer_cleanup']['status'], 'stopped')
+                self.assertIn('say-status '+IDENTIFIER, result['recovery_command'])
+                self.assertEqual([path for path, _ in requests], ['/v1/phones', '/v1/announcements',
+                    '/v1/announcements/'+IDENTIFIER, '/v1/announcements/'+IDENTIFIER+'/stop'])
+                self.assertEqual(answer.call_count, 1)
+
+    def test_uncertain_answer_already_playing_or_completed_is_not_stopped(self):
+        for status in ('playing', 'completed'):
+            with self.subTest(status=status):
+                current = job(status='running' if status == 'playing' else 'finished',
+                              recipient_status=status)
+                if status == 'completed':
+                    current['recipients'][0].update(channel=None, uniqueid=None)
+                result, code, requests, answer = self.failed_answer_case(observed=[current, job()],
+                    answers={'212': {'line': '212', 'status': 'not_confirmed',
+                                     'reason': 'network_outcome_unknown'}})
+                self.assertEqual(code, 0)
+                self.assertEqual(result['status'], 'finished')
+                self.assertEqual(result['answers'][0]['status'], 'not_confirmed')
+                self.assertNotIn('answer_cleanup', result)
+                self.assertFalse(any(path.endswith('/stop') for path, _ in requests))
+                self.assertEqual(answer.call_count, 1)
+
+    def test_stop_failure_is_not_retried_and_preserves_exact_job_recovery(self):
+        result, code, requests, answer = self.failed_answer_case(
+            stop_error=cisco.Refused('network_outcome_unknown'))
+        self.assertEqual(code, 1)
+        self.assertEqual(result['status'], 'not_confirmed')
+        self.assertEqual(result['reason'], 'network_outcome_unknown')
+        self.assertEqual(result['answer_cleanup']['status'], 'not_confirmed')
+        self.assertIn('say-status '+IDENTIFIER, result['recovery_command'])
+        self.assertEqual(sum(path.endswith('/stop') for path, _ in requests), 1)
+        self.assertEqual(answer.call_count, 1)
+
+    def test_fresh_job_or_recipient_identity_mismatch_never_stops(self):
+        for mutate in (lambda j: j.update(id='0'*32),
+                       lambda j: j.update(lines=['214']),
+                       lambda j: j['recipients'][0].update(phone_id='214'),
+                       lambda j: j['recipients'][0].update(caller_id='899999999'),
+                       lambda j: j['recipients'][0].update(channel='PJSIP/212-ffffffff'),
+                       lambda j: j['recipients'][0].update(uniqueid='later.212')):
+            current = job(status='running', recipient_status='ringing'); mutate(current)
+            result, code, requests, _ = self.failed_answer_case(observed=[current])
+            self.assertEqual(code, 1)
+            self.assertEqual(result['status'], 'not_confirmed')
+            self.assertIn('say-status '+IDENTIFIER, result['recovery_command'])
+            self.assertFalse(any(path.endswith('/stop') for path, _ in requests))
+
+    def test_unavailable_fresh_call_state_does_not_guess_or_repeat_answer(self):
+        current = job(status='running', recipient_status='queued')
+        current['recipients'][0].update(channel=None, uniqueid=None, reason='state_unavailable')
+        result, code, requests, answer = self.failed_answer_case(observed=[current])
+        self.assertEqual(code, 1)
+        self.assertEqual(result['reason'], 'announcement_answer_state_unconfirmed')
+        self.assertFalse(any(path.endswith('/stop') for path, _ in requests))
+        self.assertEqual(answer.call_count, 1)
+
+    def test_unconfirmed_stop_reply_is_not_retried(self):
+        for reply in (job(status='running', recipient_status='ringing'),
+                      dict(job(status='stopped', recipient_status='stopped'), id='0'*32)):
+            result, code, requests, _ = self.failed_answer_case(stop_reply=reply)
+            self.assertEqual(code, 1)
+            self.assertEqual(result['status'], 'not_confirmed')
+            self.assertEqual(result['answer_cleanup']['status'], 'not_confirmed')
+            self.assertEqual(sum(path.endswith('/stop') for path, _ in requests), 1)
+
+    def test_mixed_group_failed_sip_answer_stops_whole_job_not_each_recipient(self):
+        initial = job(('212', '222'), status='running', recipient_status='ringing')
+        initial['lines'].append('223')
+        initial['recipients'].extend(direct_job(status='running', recipient_status='playing')['recipients'])
+        stopped = copy.deepcopy(initial); stopped['status'] = 'stopped'
+        for recipient in stopped['recipients']:
+            recipient.update(status='stopped', channel=None, uniqueid=None)
+        result, code, requests, answer = self.failed_answer_case(initial=initial, stop_reply=stopped,
+            answers={'212': {'line': '212', 'status': 'refused', 'reason': 'voice_reserved'},
+                     '222': {'line': '222', 'status': 'acknowledged'}}, config=direct_configuration())
+        self.assertEqual(code, 1)
+        self.assertEqual(result['answer_cleanup']['lines'], ['212'])
+        self.assertEqual(result['answer_cleanup']['scope'], 'job')
+        self.assertEqual(sum(path.endswith('/stop') for path, _ in requests), 1)
+        self.assertEqual(answer.call_count, 2)
+        self.assertIn('other recipients may be interrupted', result['note'])
+
+    def test_stop_acknowledgement_is_followed_read_only_until_cleanup_completes(self):
+        running = job(status='running', recipient_status='ringing')
+        result, code, requests, _ = self.failed_answer_case(observed=[running,
+            job(status='stopping', recipient_status='stopping'),
+            job(status='stopped', recipient_status='stopped')],
+            stop_reply=job(status='stopping', recipient_status='stopping'))
+        self.assertEqual(code, 1)
+        self.assertEqual(result['status'], 'stopped')
+        self.assertEqual(sum(path.endswith('/stop') for path, _ in requests), 1)
+        self.assertEqual(requests[-1], ('/v1/announcements/'+IDENTIFIER, None))
+
     def test_mixed_group_only_answers_the_sip_recipient(self):
         args = cisco.parser().parse_args(['--idempotency-key', KEY, '212,223', 'say', 'Example'])
         running = job(('212',), status='running', recipient_status='ringing')
@@ -505,16 +651,17 @@ class AnnouncementPollingTests(unittest.TestCase):
 
     def test_group_answers_run_in_parallel_and_uncertain_answers_are_never_retried(self):
         args = cisco.parser().parse_args(['--idempotency-key', KEY, '212,222', 'say', 'Example'])
-        attempts, polls = [], []
+        attempts, polls, stops = [], [], []
         started = threading.Event()
         lock = threading.Lock()
         class Gateway:
             def __init__(self, *_): pass
             def request(self, path, body=None):
                 if path == '/v1/phones': return inventory()
+                if path.endswith('/stop'):
+                    stops.append(path)
+                    return job(('212', '222'), status='stopped', recipient_status='stopped')
                 if body is None: polls.append(path)
-                if len(polls) >= 3:
-                    return job(('212', '222'), status='finished', recipient_status='failed')
                 return job(('212', '222'), status='running', recipient_status='ringing')
         def answer(_config, _timeout, _id, _lines, recipient, *_rest):
             with lock:
@@ -524,13 +671,15 @@ class AnnouncementPollingTests(unittest.TestCase):
             return {'line': recipient['line'], 'status': 'not_confirmed', 'reason': 'network_outcome_unknown'}
         def pause(_duration):
             if not started.wait(2): raise AssertionError('answer workers were not started')
+            time.sleep(.001)
         with patch.object(announce, 'answer_once', answer):
             result, code = announce.run(args, configuration(), gateway_factory=Gateway,
                 inventory_validator=cisco.validate_inventory, read_file=cisco.read_file, sleep=pause)
         self.assertEqual(code, 1)
         self.assertEqual(sorted(attempts), ['212', '222'])
         self.assertEqual(len(result['answers']), 2)
-        self.assertEqual(len(polls), 3)
+        self.assertEqual(stops, ['/v1/announcements/'+IDENTIFIER+'/stop'])
+        self.assertGreaterEqual(len(polls), 1)
 
     def test_polling_deadline_preserves_job_for_read_only_recovery(self):
         args = cisco.parser().parse_args(['--idempotency-key', KEY, '212', 'say', 'Example'])
