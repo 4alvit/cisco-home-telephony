@@ -1,5 +1,6 @@
 """Validate the local, firmware-free TFTP profile inputs without network access."""
 import copy
+import importlib.util
 import ipaddress
 import os
 from pathlib import Path
@@ -12,6 +13,11 @@ RFC1918 = tuple(ipaddress.IPv4Network(value) for value in
                ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 MAX_FILE_BYTES = 128 * 1024
 MAX_TOTAL_BYTES = 700_000
+
+_services_spec = importlib.util.spec_from_file_location(
+    "profile_phone_services", Path(__file__).resolve().parents[1] / "containers/asterisk/phone_services.py")
+_phone_services = importlib.util.module_from_spec(_services_spec)
+_services_spec.loader.exec_module(_phone_services)
 
 
 def _mac(value):
@@ -145,6 +151,54 @@ def _expected(phones):
     return {"SEP" + phone["mac"] + ".cnf.xml": phone for phone in phones}
 
 
+def _profile_layout(site, inventory, phones):
+    """Resolve a single opt-in hotline file without broadening filename access."""
+    expected = _expected(phones)
+    templates = {"dialplan.xml": None}
+    references = {name: "dialplan.xml" for name in expected}
+    if _phone_services.hotline_settings(site) is None:
+        return expected, templates, references
+    owners, primary_macs = {}, {}
+    for phone in inventory["phones"]:
+        if "extension" in phone and "lines" in phone:
+            raise ValueError("Hotline profiles require one unambiguous line inventory")
+        lines = phone.get("lines", [{"extension": phone.get("extension")}])
+        if not isinstance(lines, list) or not 1 <= len(lines) <= 2:
+            raise ValueError("Hotline profiles require one or two inventoried phone lines")
+        extensions = []
+        for line in lines:
+            value = str(line.get("extension")) if isinstance(line, dict) else ""
+            if not re.fullmatch(r"2[0-9]{2}", value) or value in owners or value in extensions:
+                raise ValueError("Hotline profiles require unique inventoried local lines")
+            extensions.append(value)
+        primary = extensions[0]
+        primary_macs[primary] = _mac(phone.get("mac"))
+        owners.update({value: primary for value in extensions})
+    clients = site.get("softphones", [])
+    if not isinstance(clients, list) or any(not isinstance(row, dict) for row in clients):
+        raise ValueError("Hotline profiles require a valid softphone inventory")
+    client_lines = [row.get("extension") for row in clients]
+    if (any(not isinstance(value, str) or not re.fullmatch(r"2[0-9]{2}", value)
+            for value in client_lines) or len(set(client_lines)) != len(client_lines)
+            or set(client_lines) & set(owners)):
+        raise ValueError("Hotline profiles require distinct local softphone lines")
+    allowed = list(primary_macs) + client_lines
+    settings = _phone_services.hotline_settings(site, allowed, owners)
+    mac = primary_macs[settings["source"]]
+    name = f"dialplan-hotline-{mac}.xml"
+    templates[name] = settings["extension"]
+    references["SEP" + mac + ".cnf.xml"] = name
+    return expected, templates, references
+
+
+def _validate_hotline_template(root, destination):
+    if (root.attrib or (root.text or "").strip() or len(root) != 1
+            or root[0].tag != "TEMPLATE"
+            or root[0].attrib != {"match": "", "timeout": "0", "rewrite": destination}
+            or len(root[0]) or (root[0].text or "").strip() or (root[0].tail or "").strip()):
+        raise ValueError("Hotline dial template must contain only its configured immediate local destination")
+
+
 def _xml(text):
     # NULs can make Expat auto-detect UTF-16/32 after a permissive UTF-8 decode,
     # bypassing a textual declaration check. This input contract is UTF-8 only.
@@ -167,9 +221,9 @@ def _field(root, path, value):
 def validate_profiles(files, site, inventory):
     """Validate an exact profile mapping and return it in stable filename order."""
     _, phones = _inventory(site, inventory)
-    expected = _expected(phones)
-    if not isinstance(files, dict) or set(files) != set(expected) | {"dialplan.xml"}:
-        raise ValueError("Profile TFTP requires exactly the inventoried SEP profiles and dialplan.xml")
+    expected, templates, references = _profile_layout(site, inventory, phones)
+    if not isinstance(files, dict) or set(files) != set(expected) | set(templates):
+        raise ValueError("Profile TFTP requires exactly the inventoried SEP profiles and configured dial templates")
     total = 0
     for name, text in files.items():
         if not isinstance(text, str):
@@ -184,15 +238,17 @@ def validate_profiles(files, site, inventory):
         if total > MAX_TOTAL_BYTES:
             raise ValueError("Profile TFTP inputs exceed the safe Secret size")
         root = _xml(text)
-        if name == "dialplan.xml":
+        if name in templates:
             if root.tag != "DIALTEMPLATE":
-                raise ValueError("dialplan.xml must have a DIALTEMPLATE root")
+                raise ValueError("Dial templates must have a DIALTEMPLATE root")
+            if templates[name] is not None:
+                _validate_hotline_template(root, templates[name])
         else:
             if root.tag != "device":
                 raise ValueError("Phone profiles must have a device root")
             _field(root, "./loadInformation", expected[name]["firmware_load"])
             _field(root, "./vendorConfig/g722CodecSupport", "2")
-            _field(root, "./sipProfile/dialTemplate", "dialplan.xml")
+            _field(root, "./sipProfile/dialTemplate", references[name])
     return {name: files[name] for name in sorted(files)}
 
 
@@ -223,7 +279,8 @@ def _identity(info):
 def read_profiles(directory, site, inventory):
     """Read a bounded flat directory; reject links, extra files and changing inputs."""
     _, phones = _inventory(site, inventory)
-    expected = set(_expected(phones)) | {"dialplan.xml"}
+    profiles, templates, _ = _profile_layout(site, inventory, phones)
+    expected = set(profiles) | set(templates)
     fd = None
     try:
         fd = _directory(directory)

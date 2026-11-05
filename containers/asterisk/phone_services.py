@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Private dial-to-toggle alarm service; never accept a caller-supplied URL."""
+"""Private phone-service dialplans and authenticated alarm-toggle handling."""
 import base64
 import hashlib
 import io
@@ -44,6 +44,80 @@ def group_settings(site, members=None):
     if members is not None and not set(selected) <= set(members):
         raise ValueError('inbound ring members must be Cisco primary lines or declared softphones')
     return selected
+
+
+def hotline_settings(site, members=None, line_owners=None):
+    """Validate the opt-in, source-restricted physical-phone hotline."""
+    value = site.get('hotline_ring_group', {})
+    keys = {'enabled', 'extension', 'source', 'members', 'timeout'}
+    if (not isinstance(value, dict) or set(value) - keys
+            or type(value.get('enabled', False)) is not bool):
+        raise ValueError('invalid hotline_ring_group configuration')
+    if not value.get('enabled', False):
+        return None
+    if set(value) != keys or value['extension'] != '622':
+        raise ValueError('hotline_ring_group requires the reserved extension 622')
+    gateway = site.get('gateway', {})
+    if not isinstance(gateway, dict) or gateway.get('enabled') is not True:
+        raise ValueError('hotline ring group requires the DND-capable gateway')
+    source, selected = value['source'], value['members']
+    if not isinstance(source, str) or not re.fullmatch(r'2[0-9]{2}', source):
+        raise ValueError('hotline source must be a Cisco primary extension')
+    if (not isinstance(selected, list) or not 1 <= len(selected) <= 50
+            or any(not isinstance(line, str) or not re.fullmatch(r'2[0-9]{2}', line) for line in selected)
+            or len(set(selected)) != len(selected) or source in selected):
+        raise ValueError('hotline members must be unique local extensions excluding the source')
+    timeout = value['timeout']
+    if type(timeout) is not int or not 1 <= timeout <= 120:
+        raise ValueError('hotline timeout must be an integer from 1 to 120 seconds')
+    if members is not None and not set(selected) <= set(members):
+        raise ValueError('hotline members must be Cisco primary lines or declared softphones')
+    result = {**value, 'members': list(selected)}
+    if line_owners is not None:
+        if (not isinstance(line_owners, dict)
+                or any(not isinstance(line, str) or not re.fullmatch(r'2[0-9]{2}', line)
+                       or not isinstance(owner, str) or not re.fullmatch(r'2[0-9]{2}', owner)
+                       for line, owner in line_owners.items())
+                or line_owners.get(source) != source):
+            raise ValueError('hotline source must own a physical Cisco phone')
+        source_lines = sorted(line for line, owner in line_owners.items() if owner == source)
+        if set(selected).intersection(source_lines):
+            raise ValueError('hotline group must exclude every line of its source phone')
+        result['source_lines'] = source_lines
+    return result
+
+
+def hotline_dialplan(site, members=None, line_owners=None):
+    """Ring one local group from the authenticated source phone; first answer wins."""
+    config = hotline_settings(site, members, line_owners)
+    if config is None:
+        return ''
+    if members is None or line_owners is None:
+        raise ValueError('hotline rendering requires verified membership and physical ownership')
+    allowed = ' | '.join('"${HOTLINE_SOURCE}" = "' + line + '"'
+                         for line in config['source_lines'])
+    parts = [
+        'exten => 622,1,GotoIf($["${CHANNEL(channeltype)}" != "PJSIP"]?denied)',
+        ' same => n,Set(HOTLINE_SOURCE=${CHANNEL(endpoint)})',
+        f' same => n,GotoIf($[{allowed}]?allowed:denied)',
+        ' same => n(allowed),Set(__CISCO_HOTLINE=1)',
+        ' same => n,Set(HOTLINE_TARGETS=)',
+        ' same => n,Set(HOTLINE_SEPARATOR=)',
+    ]
+    for line in config['members']:
+        condition = f'$["${{DB(cisco-dnd/{line})}}" != "1"]'
+        parts.extend([
+            f' same => n,ExecIf({condition}?Set(HOTLINE_TARGETS=${{HOTLINE_TARGETS}}${{HOTLINE_SEPARATOR}}PJSIP/{line}))',
+            f' same => n,ExecIf({condition}?Set(HOTLINE_SEPARATOR=&))'])
+    parts.extend([
+        ' same => n,GotoIf($["${HOTLINE_TARGETS}" = ""]?unavailable)',
+        f' same => n,Dial(${{HOTLINE_TARGETS}},{config["timeout"]},i)',
+        ' same => n,Hangup()',
+        ' same => n(unavailable),Busy(3)',
+        ' same => n,Hangup()',
+        ' same => n(denied),Hangup(21)',
+    ])
+    return '\n'.join(parts) + '\n'
 
 
 def private_file(path, limit):
