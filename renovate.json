@@ -14,5 +14,12 @@
     "managerFilePatterns": [
       "/(^|/)requirements[^/]*\\.(txt|pip)$/"
     ]
-  }
+  },
+  "ignorePaths": [
+    "**/vendor/**",
+    "**/node_modules/**",
+    "**/fixtures/**",
+    "containers/voice/requirements.lock",
+    "containers/voice-wake/requirements.lock"
+  ]
 }
