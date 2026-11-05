@@ -388,7 +388,7 @@ not the proposed daily-boot design.
 ## Sources
 
 - [Asterisk downloads / LTS](https://www.asterisk.org/downloads/).
-- [Asterisk 22.11.0 source archive](https://downloads.asterisk.org/pub/telephony/asterisk/asterisk-22.11.0.tar.gz).
+- [Asterisk 22.11.0 source archive](https://downloads.asterisk.org/pub/telephony/asterisk/old-releases/asterisk-22.11.0.tar.gz).
 - [Asterisk release support](https://docs.asterisk.org/About-the-Project/Asterisk-Versions/).
 - [Kubernetes hostNetwork and NetworkPolicy](https://kubernetes.io/docs/concepts/services-networking/network-policies/#networkpolicy-and-hostnetwork-pods).
 - [Kubernetes Jobs: deadline, TTL](https://kubernetes.io/docs/concepts/workloads/controllers/job/).

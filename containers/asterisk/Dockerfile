@@ -48,7 +48,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libedit-dev libssl-dev libxml2-dev uuid-dev libsqlite3-dev libncurses-dev libunbound-dev \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
-RUN curl -fL --retry 3 "https://downloads.asterisk.org/pub/telephony/asterisk/asterisk-${ASTERISK_VERSION}.tar.gz" -o asterisk.tar.gz \
+RUN curl -fL --retry 3 "https://downloads.asterisk.org/pub/telephony/asterisk/old-releases/asterisk-${ASTERISK_VERSION}.tar.gz" -o asterisk.tar.gz \
     && printf '%s  asterisk.tar.gz\n' "$ASTERISK_SHA256" | sha256sum -c - \
     && tar -xzf asterisk.tar.gz --strip-components=1 \
     && ./configure --with-pjproject-bundled --with-jansson-bundled \
