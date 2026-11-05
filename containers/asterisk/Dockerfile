@@ -5,6 +5,12 @@ FROM ${DEBIAN_IMAGE} AS distribution
 ARG DEBIAN_IMAGE
 LABEL org.opencontainers.image.base.name="${DEBIAN_IMAGE}" \
       io.cisco-home-telephony.debian.snapshot="20261101T000000Z"
+# Bound archive retries and stalled connections in this stage and its descendants.
+RUN printf '%s\n' \
+       'Acquire::Retries "3";' \
+       'Acquire::http::Timeout "30";' \
+       'Acquire::https::Timeout "30";' \
+       > /etc/apt/apt.conf.d/zz-cisco-network
 # Both compilation and runtime resolve packages from the same reviewed snapshot.
 # Debian slim has no CA bundle. Bootstrap it from the frozen archive over HTTP;
 # APT still verifies Debian Release signatures and package checksums. All later

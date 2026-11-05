@@ -5,6 +5,12 @@ FROM ${PYTHON_IMAGE}
 ARG PYTHON_IMAGE
 LABEL org.opencontainers.image.base.name="${PYTHON_IMAGE}" \
       io.cisco-home-telephony.debian.snapshot="20261101T000000Z"
+# Bound archive retries and stalled connections for every APT operation.
+RUN printf '%s\n' \
+       'Acquire::Retries "3";' \
+       'Acquire::http::Timeout "30";' \
+       'Acquire::https::Timeout "30";' \
+       > /etc/apt/apt.conf.d/zz-cisco-network
 
 # Freeze Debian package indexes as well as Python wheels. Updating this date is
 # an explicit dependency update; the base digest is recorded by the helper.
