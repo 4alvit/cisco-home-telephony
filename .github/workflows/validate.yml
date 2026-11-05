@@ -56,8 +56,28 @@ jobs:
           .venv/bin/python -m pip install --disable-pip-version-check \
             'numpy>=1.26,<3' Pillow PyYAML Jinja2 -r voice_assistant/requirements-websocket.txt
           if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends ffmpeg
+            # Use Ubuntu's main archive when the runner's Azure mirror is slow.
+            # Include mirror+file lists; keep suites, components and signing keys.
+            sudo python3 - <<'PYAPT'
+          from pathlib import Path
+          import re
+          directory = Path('/etc/apt/sources.list.d')
+          sources = [Path('/etc/apt/sources.list'), Path('/etc/apt/apt-mirrors.txt'),
+                     Path('/etc/apt/apt-mirrors-security.txt'),
+                     *sorted(directory.glob('*.list')), *sorted(directory.glob('*.sources'))]
+          for path in sources:
+              if not path.is_file():
+                  continue
+              original = path.read_text()
+              updated = re.sub(r'https?://azure\.archive\.ubuntu\.com/ubuntu(?=/|\s|$)',
+                               'https://archive.ubuntu.com/ubuntu', original)
+              if updated != original:
+                  path.write_text(updated)
+          PYAPT
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30 update
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30 install -y --no-install-recommends ffmpeg
           fi
           # Fail explicitly instead of silently skipping media and wake tests.
           # These tests use synthetic pixels/audio and injected ONNX sessions.
@@ -102,8 +122,28 @@ jobs:
           # The fast job installs them for its media tests; this job needs the
           # same guarantee instead of trusting whatever the runner image ships.
           if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends ffmpeg
+            # Use Ubuntu's main archive when the runner's Azure mirror is slow.
+            # Include mirror+file lists; keep suites, components and signing keys.
+            sudo python3 - <<'PYAPT'
+          from pathlib import Path
+          import re
+          directory = Path('/etc/apt/sources.list.d')
+          sources = [Path('/etc/apt/sources.list'), Path('/etc/apt/apt-mirrors.txt'),
+                     Path('/etc/apt/apt-mirrors-security.txt'),
+                     *sorted(directory.glob('*.list')), *sorted(directory.glob('*.sources'))]
+          for path in sources:
+              if not path.is_file():
+                  continue
+              original = path.read_text()
+              updated = re.sub(r'https?://azure\.archive\.ubuntu\.com/ubuntu(?=/|\s|$)',
+                               'https://archive.ubuntu.com/ubuntu', original)
+              if updated != original:
+                  path.write_text(updated)
+          PYAPT
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30 update
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30 install -y --no-install-recommends ffmpeg
           fi
           ffmpeg -version
       - name: Build and smoke-test the isolated voice runtime
