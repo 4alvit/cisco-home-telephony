@@ -223,12 +223,12 @@ does not prove an HTTP 429 response or a rate-limit violation. See the
 and the failure handler linked above. TFTP's download policy remains unchanged.
 
 The image qualification runs `tests/apt_network_probe.py` inside the built voice
-image to check the exact APT 3.0.3 behavior against a synthetic loopback server.
+image to check the exact APT 3.0.4 behavior against a synthetic loopback server.
 It runs as the non-root application user with external networking disabled and
 only a small writable temporary filesystem. A macOS host does not supply this
 Linux APT runtime, so local configuration tests do not establish a runtime pass;
 that claim requires the isolated image step to succeed.
-The step rejects APT versions other than `3.0.3`. Upgrading APT requires reviewing
+The step rejects APT versions other than `3.0.4`. Upgrading APT requires reviewing
 and rerunning the probe and updating that expected version in the workflow.
 
 The reviewed package identities are:

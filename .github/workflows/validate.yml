@@ -156,7 +156,7 @@ jobs:
             --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges \
             --pids-limit 128 --memory 512m --cpus 1 \
             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
-            --entrypoint python3 -i cisco-home-ci/voice:pilot -I - --require-apt-version 3.0.3 < tests/apt_network_probe.py
+            --entrypoint python3 -i cisco-home-ci/voice:pilot -I - --require-apt-version 3.0.4 < tests/apt_network_probe.py
       - name: Verify speech codecs and artwork isolation in the final image
         if: steps.scope.outputs.images == 'true'
         run: |

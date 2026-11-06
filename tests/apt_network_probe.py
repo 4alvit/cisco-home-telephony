@@ -4,7 +4,7 @@
 Run inside an existing image with ``docker run --network none``; this script
 never installs packages or contacts a package mirror. It is deliberately not
 named test_*.py: ordinary unit discovery must not start transport experiments.
-Use --require-apt-version 3.0.3 when qualifying the pinned Trixie runtime.
+Use --require-apt-version 3.0.4 when qualifying the pinned Trixie runtime.
 """
 
 import argparse
