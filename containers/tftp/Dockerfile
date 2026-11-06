@@ -3,7 +3,7 @@ ARG DEBIAN_IMAGE
 FROM ${DEBIAN_IMAGE}
 # Bound archive retries and stalled connections for every APT operation.
 RUN printf '%s\n' \
-       'Acquire::Retries "3";' \
+       'Acquire::Retries "6";' \
        'Acquire::http::Timeout "30";' \
        'Acquire::https::Timeout "30";' \
        > /etc/apt/apt.conf.d/zz-cisco-network

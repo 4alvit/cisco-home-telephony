@@ -7,7 +7,7 @@ LABEL org.opencontainers.image.base.name="${DEBIAN_IMAGE}" \
       io.cisco-home-telephony.debian.snapshot="20261101T000000Z"
 # Bound archive retries and stalled connections in this stage and its descendants.
 RUN printf '%s\n' \
-       'Acquire::Retries "3";' \
+       'Acquire::Retries "6";' \
        'Acquire::http::Timeout "30";' \
        'Acquire::https::Timeout "30";' \
        > /etc/apt/apt.conf.d/zz-cisco-network
@@ -22,7 +22,7 @@ RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
        'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261101T000000Z trixie-updates main' \
        'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261101T000000Z trixie-security main' \
        > /etc/apt/sources.list \
-    && apt-get -o Acquire::Retries=3 update \
+    && apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && sed -i 's|http://snapshot.debian.org|https://snapshot.debian.org|g' /etc/apt/sources.list \
     && rm -rf /var/lib/apt/lists/*

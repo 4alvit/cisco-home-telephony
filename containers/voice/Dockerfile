@@ -7,7 +7,7 @@ LABEL org.opencontainers.image.base.name="${PYTHON_IMAGE}" \
       io.cisco-home-telephony.debian.snapshot="20261101T000000Z"
 # Bound archive retries and stalled connections for every APT operation.
 RUN printf '%s\n' \
-       'Acquire::Retries "3";' \
+       'Acquire::Retries "6";' \
        'Acquire::http::Timeout "30";' \
        'Acquire::https::Timeout "30";' \
        > /etc/apt/apt.conf.d/zz-cisco-network
@@ -21,7 +21,7 @@ RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
        'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20261101T000000Z trixie-updates main' \
        'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20261101T000000Z trixie-security main' \
        > /etc/apt/sources.list \
-    && apt-get -o Acquire::Retries=3 update \
+    && apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends tzdata \
        ffmpeg=7:7.1.5-0+deb13u1 libmbedcrypto16=3.6.6-0.1~deb13u1 \

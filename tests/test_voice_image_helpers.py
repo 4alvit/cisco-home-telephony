@@ -71,7 +71,9 @@ elif args[:1] == ["build"]:
                 "symlink": path.is_symlink(),
             }
     (records / "context.json").write_text(json.dumps({"path": str(context), "files": files}))
-    if os.environ.get("VOICE_FAKE_FAIL") == "build":
+    failure = os.environ.get("VOICE_FAKE_FAIL")
+    target = args[args.index("--target") + 1] if "--target" in args else None
+    if failure == "build" or (target and failure == "build:" + target):
         sys.exit(7)
 elif args[:2] == ["image", "inspect"]:
     print(os.environ["VOICE_FAKE_IMAGE_ID"])
@@ -317,17 +319,39 @@ class PbxBaseIsolationTests(unittest.TestCase):
         resolves = [call[3] for call in calls if call[0] == 'buildx']
         self.assertEqual(resolves, ['debian:trixie-slim', 'debian:bookworm-slim'])
         builds = [call for call in calls if call[0] == 'build']
-        self.assertEqual([call[call.index('--build-arg') + 1] for call in builds], [
-            'DEBIAN_IMAGE=debian:trixie-slim@' + BASE_DIGEST,
-            'DEBIAN_IMAGE=debian:bookworm-slim@' + BASE_DIGEST])
-        self.assertEqual([call[-1] for call in builds], ['containers/asterisk', 'containers/tftp'])
+        common = ['build', '--platform', 'linux/amd64', '--build-arg',
+                  'DEBIAN_IMAGE=debian:trixie-slim@' + BASE_DIGEST]
+        self.assertEqual(builds, [
+            common + ['--target', 'pillow-build', 'containers/asterisk'],
+            common + ['--target', 'build', 'containers/asterisk'],
+            common + ['-t', 'example.invalid/test/asterisk:22.11.0', 'containers/asterisk'],
+            ['build', '--platform', 'linux/amd64', '--build-arg',
+             'DEBIAN_IMAGE=debian:bookworm-slim@' + BASE_DIGEST,
+             '-t', 'example.invalid/test/tftp:bookworm', 'containers/tftp']])
         self.assertFalse(any(call[0] in ('push', 'login') for call in calls))
 
     def test_explicit_digest_replays_do_not_resolve_mutable_tags(self):
         result, calls = self.run_build(ASTERISK_DEBIAN_IMAGE='debian:trixie-slim@' + BASE_DIGEST,
-                                       TFTP_DEBIAN_IMAGE='debian:bookworm-slim@' + BASE_DIGEST)
+                                       TFTP_DEBIAN_IMAGE='debian:bookworm-slim@' + BASE_DIGEST,
+                                       BUILD_PLATFORM='linux/arm64')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(any(call[0] == 'buildx' for call in calls))
+        builds = [call for call in calls if call[0] == 'build']
+        self.assertEqual([call[call.index('--platform') + 1] for call in builds],
+                         ['linux/arm64'] * 4)
+
+    def test_failed_prebuild_stops_before_later_images_or_smoke_checks(self):
+        for target, count in (('pillow-build', 1), ('build', 2)):
+            with self.subTest(target=target):
+                (self.root / 'records/calls.jsonl').unlink(missing_ok=True)
+                result, calls = self.run_build(VOICE_FAKE_FAIL='build:' + target)
+                self.assertEqual(result.returncode, 7, result.stderr)
+                builds = [call for call in calls if call[0] == 'build']
+                self.assertEqual(len(builds), count)
+                self.assertEqual(builds[-1][-3:], ['--target', target, 'containers/asterisk'])
+                self.assertTrue(all('--target' in call for call in builds))
+                self.assertFalse(any(call[0] in ('run', 'push', 'login') for call in calls))
+                self.assertNotIn('Built locally.', result.stdout)
 
     def test_old_or_mutable_pbx_base_is_rejected_before_build(self):
         for image in ('debian:bookworm-slim@' + BASE_DIGEST, 'debian:trixie-slim'):
