@@ -37,6 +37,24 @@ def listing():
 
 
 class ServiceCatalogTests(unittest.TestCase):
+    def test_hotline_catalog_requires_verified_owners_and_tracks_disable(self):
+        site = {'gateway': {'enabled': True}, 'hotline_ring_group': {
+            'enabled': True, 'extension': '622', 'source': '201',
+            'members': ['209'], 'timeout': 25}}
+        owners = {'201': '201', '202': '201'}
+        def build(**kwargs):
+            return service_catalog.build(site, has_phones=True,
+                                         group_members=['201', '209'],
+                                         line_owners=owners, **kwargs)
+        self.assertIn({'number': '622', 'label': 'Handset hotline group',
+                       'kind': 'group'}, build())
+        self.assertNotIn('622', [item['number'] for item in build(allowed_numbers=['600'])])
+        self.assertIn('622', service_catalog.managed_numbers())
+        with self.assertRaises(ValueError):
+            service_catalog.build(site, has_phones=True, group_members=['201', '209'])
+        site['hotline_ring_group']['enabled'] = False
+        self.assertNotIn('622', [item['number'] for item in build()])
+
     def test_disabled_optional_features_do_not_invent_routes(self):
         base = service_catalog.build({}, has_phones=True)
         self.assertEqual([item['number'] for item in base], ['600', '601', '620'])

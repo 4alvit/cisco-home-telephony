@@ -83,7 +83,7 @@ def player_dialplan():
 '''
 
 
-def service_dialplan(site):
+def service_dialplan(site, members=None, line_owners=None):
     """Return optional service routes without introducing outbound dialing."""
     radio, alarm = radio_settings(site), alarm_settings(site)
     routes, numbers = [], []
@@ -121,6 +121,8 @@ def service_dialplan(site):
     if phone_services.group_settings(site):
         routes.append(phone_services.group_dialplan(site))
         numbers.append("621")
+    if phone_services.hotline_settings(site):
+        routes.append(phone_services.hotline_dialplan(site, members, line_owners))
     return ''.join(routes), numbers
 
 
@@ -384,6 +386,7 @@ def validate(site, inventory, *, pbx_only=False):
     gateway_settings(site)
     phone_services.enabled(site)
     phone_services.group_settings(site)
+    hotline = phone_services.hotline_settings(site)
     external = external_sip.validate(site)
     softphones.validate(site)
     phone_networks(site)
@@ -392,6 +395,8 @@ def validate(site, inventory, *, pbx_only=False):
     if ip not in net or ip in (net.network_address, net.broadcast_address):
         raise ValueError("node_ipv4 must be a usable address in lan_cidr")
     if pbx_only:
+        if hotline:
+            raise ValueError("Hotline mode requires a verified physical phone inventory")
         if inventory is not None:
             raise ValueError("PBX-only mode does not accept a phone inventory")
         if external and any(account["inbound_target"] for account in external["accounts"]):
@@ -471,6 +476,11 @@ def validate(site, inventory, *, pbx_only=False):
     clients = softphones.validate(site, seen_ext)
     phone_services.group_settings(site, [phone_lines(p)[0]["extension"] for p in normalized]
                                   + [client["extension"] for client in clients])
+    phone_services.hotline_settings(
+        site, [phone_lines(p)[0]["extension"] for p in normalized]
+        + [client["extension"] for client in clients],
+        {line["extension"]: phone_lines(p)[0]["extension"]
+         for p in normalized for line in phone_lines(p)})
     return normalized, ntp
 
 
@@ -481,7 +491,7 @@ def sub(parent, tag, value=None):
     return node
 
 
-def phone_xml(phone, ip, ntp, passwords, management=None):
+def phone_xml(phone, ip, ntp, passwords, management=None, *, dial_template="dialplan.xml"):
     d = ET.Element("device")
     sub(d, "fullConfig", "true")
     sub(d, "deviceProtocol", "SIP")
@@ -524,7 +534,7 @@ def phone_xml(phone, ip, ntp, passwords, management=None):
         sub(line.find("autoAnswer"),"autoAnswerEnabled",0)
         for k,v in {"callWaiting":3,"authName":ext,"authPassword":passwords[ext],"sharedLine":"false","messageWaitingLampPolicy":1,"messagesNumber":"","ringSettingIdle":4,"ringSettingActive":5,"contact":ext}.items():
             sub(line,k,v)
-    sub(profile,"dialTemplate","dialplan.xml")
+    sub(profile,"dialTemplate",dial_template)
     common_profile = sub(d,"commonProfile")
     if "background_image_access" in phone:
         sub(common_profile,"backgroundImageAccess",str(phone["background_image_access"]).lower())
@@ -579,6 +589,9 @@ def generate(site, inventory, out, *, pbx_only=False):
     clients = softphones.validate(site)
     line_owners = {line["extension"]: phone_lines(p)[0]["extension"] for p in phones for line in phone_lines(p)}
     services = phone_services.settings(site, line_owners)
+    hotline = phone_services.hotline_settings(
+        site, [phone_lines(p)[0]["extension"] for p in phones]
+        + [client["extension"] for client in clients], line_owners)
     phone_services.group_settings(site, [phone_lines(p)[0]["extension"] for p in phones]
                                   + [client["extension"] for client in clients])
     out=Path(out)
@@ -671,13 +684,25 @@ qualify_frequency=60
                 dial.append(f'exten => {ext},1,Dial(PJSIP/{ext},25)\n same => n,Hangup()\n')
         filename=f'SEP{p["mac"]}.cnf.xml'
         expected.add(filename)
-        private_write(out/"tftp"/filename,phone_xml(p,ip,ntp,passwords,management.get("SEP" + p["mac"])))
+        dial_template = (f'dialplan-hotline-{p["mac"]}.xml'
+                         if hotline and phone_lines(p)[0]["extension"] == hotline["source"]
+                         else "dialplan.xml")
+        private_write(out/"tftp"/filename, phone_xml(
+            p, ip, ntp, passwords, management.get("SEP" + p["mac"]), dial_template=dial_template))
+        if dial_template != "dialplan.xml":
+            expected.add(dial_template)
+            private_write(out/"tftp"/dial_template,
+                          '<DIALTEMPLATE>\n  <TEMPLATE match="" timeout="0" rewrite="'
+                          + hotline["extension"] + '"/>\n</DIALTEMPLATE>\n')
     for client in clients:
         client_pjsip, client_dialplan = softphones.render_client(site, client, client_passwords[client["extension"]])
         pjsip.append(client_pjsip)
         dial.append(client_dialplan)
-    # Only remove old generated phone profiles, leaving other operator files intact.
-    for old in (out/"tftp").glob('SEP*.cnf.xml'):
+    # Remove stale generated profiles/templates, leaving other operator files intact.
+    for old in list((out/"tftp").glob('SEP*.cnf.xml')) + list((out/"tftp").glob('dialplan-hotline-*.xml')):
+        if (old.name.startswith("dialplan-hotline-")
+                and not re.fullmatch(r"dialplan-hotline-[0-9A-F]{12}\.xml", old.name)):
+            continue
         if old.name not in expected:
             if old.is_symlink():
                 raise ValueError("refusing stale symlink")
@@ -710,7 +735,9 @@ exten => 601,1,Answer()
             dial.append(f'''exten => 620,1,Dial({ring},25)
  same => n,Hangup()
 ''')
-    service_routes, service_numbers = service_dialplan(site)
+    service_routes, service_numbers = service_dialplan(
+        site, [phone_lines(p)[0]["extension"] for p in phones]
+        + [client["extension"] for client in clients], line_owners)
     dial.append(service_routes)
     dial.append('''
 ; Internal service only. No emergency or PSTN route is configured.

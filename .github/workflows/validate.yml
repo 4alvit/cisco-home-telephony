@@ -56,8 +56,28 @@ jobs:
           .venv/bin/python -m pip install --disable-pip-version-check \
             'numpy>=1.26,<3' Pillow PyYAML Jinja2 -r voice_assistant/requirements-websocket.txt
           if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends ffmpeg
+            # Use Ubuntu's main archive when the runner's Azure mirror is slow.
+            # Include mirror+file lists; keep suites, components and signing keys.
+            sudo python3 - <<'PYAPT'
+          from pathlib import Path
+          import re
+          directory = Path('/etc/apt/sources.list.d')
+          sources = [Path('/etc/apt/sources.list'), Path('/etc/apt/apt-mirrors.txt'),
+                     Path('/etc/apt/apt-mirrors-security.txt'),
+                     *sorted(directory.glob('*.list')), *sorted(directory.glob('*.sources'))]
+          for path in sources:
+              if not path.is_file():
+                  continue
+              original = path.read_text()
+              updated = re.sub(r'https?://azure\.archive\.ubuntu\.com/ubuntu(?=/|\s|$)',
+                               'https://archive.ubuntu.com/ubuntu', original)
+              if updated != original:
+                  path.write_text(updated)
+          PYAPT
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30 update
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30 install -y --no-install-recommends ffmpeg
           fi
           # Fail explicitly instead of silently skipping media and wake tests.
           # These tests use synthetic pixels/audio and injected ONNX sessions.
@@ -102,13 +122,41 @@ jobs:
           # The fast job installs them for its media tests; this job needs the
           # same guarantee instead of trusting whatever the runner image ships.
           if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends ffmpeg
+            # Use Ubuntu's main archive when the runner's Azure mirror is slow.
+            # Include mirror+file lists; keep suites, components and signing keys.
+            sudo python3 - <<'PYAPT'
+          from pathlib import Path
+          import re
+          directory = Path('/etc/apt/sources.list.d')
+          sources = [Path('/etc/apt/sources.list'), Path('/etc/apt/apt-mirrors.txt'),
+                     Path('/etc/apt/apt-mirrors-security.txt'),
+                     *sorted(directory.glob('*.list')), *sorted(directory.glob('*.sources'))]
+          for path in sources:
+              if not path.is_file():
+                  continue
+              original = path.read_text()
+              updated = re.sub(r'https?://azure\.archive\.ubuntu\.com/ubuntu(?=/|\s|$)',
+                               'https://archive.ubuntu.com/ubuntu', original)
+              if updated != original:
+                  path.write_text(updated)
+          PYAPT
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30 update
+            sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+              -o Acquire::https::Timeout=30 install -y --no-install-recommends ffmpeg
           fi
           ffmpeg -version
       - name: Build and smoke-test the isolated voice runtime
         if: steps.scope.outputs.images == 'true'
         run: bash scripts/build-voice-image.sh cisco-home-ci
+      - name: Verify APT retry and throttling behavior in the final image
+        if: steps.scope.outputs.images == 'true'
+        run: |
+          docker run --rm --pull never --network none --read-only \
+            --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges \
+            --pids-limit 128 --memory 512m --cpus 1 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m \
+            --entrypoint python3 -i cisco-home-ci/voice:pilot -I - --require-apt-version 3.0.4 < tests/apt_network_probe.py
       - name: Verify speech codecs and artwork isolation in the final image
         if: steps.scope.outputs.images == 'true'
         run: |

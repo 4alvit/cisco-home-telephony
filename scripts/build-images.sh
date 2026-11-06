@@ -24,7 +24,12 @@ pbx_base=$(resolve_base debian:trixie-slim "${ASTERISK_DEBIAN_IMAGE:-}")
 tftp_base=$(resolve_base debian:bookworm-slim "${TFTP_DEBIAN_IMAGE:-}")
 printf 'PBX base: %s\nTFTP base: %s\n' "$pbx_base" "$tftp_base"
 printf 'PBX Debian package snapshot: 20261101T000000Z\n'
-docker build --platform "${BUILD_PLATFORM:-linux/amd64}" --build-arg "DEBIAN_IMAGE=$pbx_base" -t "$prefix/asterisk:22.11.0" containers/asterisk
+# Populate each independent build stage sequentially so APT downloads do not
+# compete for the snapshot service. The final build reuses their normal cache.
+pbx_build_args=(--platform "${BUILD_PLATFORM:-linux/amd64}" --build-arg "DEBIAN_IMAGE=$pbx_base")
+docker build "${pbx_build_args[@]}" --target pillow-build containers/asterisk
+docker build "${pbx_build_args[@]}" --target build containers/asterisk
+docker build "${pbx_build_args[@]}" -t "$prefix/asterisk:22.11.0" containers/asterisk
 docker build --platform "${BUILD_PLATFORM:-linux/amd64}" --build-arg "DEBIAN_IMAGE=$tftp_base" -t "$prefix/tftp:bookworm" containers/tftp
 # Binary checks do not bind ports or contact the LAN.
 docker run --rm "$prefix/asterisk:22.11.0" -V

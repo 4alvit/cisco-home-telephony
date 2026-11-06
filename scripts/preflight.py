@@ -19,10 +19,7 @@ def check_service_config(site, configs, inventory=None):
     actual = json.loads(configs["radio.conf"]) if "radio.conf" in configs else None
     if expected != actual:
         raise ValueError("Radio settings differ from site.json; rerun provision.py")
-    routes, _ = service_dialplan(site)
     dialplan = configs.get("extensions.conf", "")
-    if routes and routes not in dialplan:
-        raise ValueError("Service routes differ from site.json; rerun provision.py")
     if not expected and "AGI(radio.py," in dialplan:
         raise ValueError("Disabled radio has stale routes; rerun provision.py")
     if not site.get("alarms", {}).get("enabled", False) and "exten => 640," in dialplan:
@@ -46,6 +43,20 @@ def check_service_config(site, configs, inventory=None):
         raise ValueError("Disabled phone services have stale configuration; rerun provision.py")
     group_candidates = ([str(phone_lines(phone)[0]["extension"]) for phone in inventory["phones"]]
                         if inventory is not None else extensions) + list(generic)
+    expected_owners = ({str(line["extension"]): str(phone_lines(phone)[0]["extension"])
+                        for phone in inventory["phones"] for line in phone_lines(phone)}
+                       if inventory is not None else None)
+    hotline = phone_services.hotline_settings(site, group_candidates, expected_owners)
+    if hotline and inventory is None:
+        raise ValueError("Hotline verification requires the physical phone inventory")
+    routes, _ = service_dialplan(site, group_candidates, expected_owners)
+    if routes and routes not in dialplan:
+        raise ValueError("Service routes differ from site.json; rerun provision.py")
+    if hotline:
+        if len(re.findall(r"^exten => 622,1,", dialplan, re.M)) != 1:
+            raise ValueError("Hotline service route is missing or duplicated; rerun provision.py")
+    elif re.search(r"^\s*exten\s*=>\s*622,|CISCO_HOTLINE", dialplan, re.M):
+        raise ValueError("Disabled hotline has stale routes; rerun provision.py")
     if phone_services.group_settings(site, group_candidates) is None and "exten => 621," in dialplan:
         raise ValueError("Disabled inbound ring group has a stale route; rerun provision.py")
     for number, feature in (("621", bool(phone_services.group_settings(site))),
@@ -195,7 +206,8 @@ def main():
             check_phone_config(site, configs)
             check_ha_config(site, configs)
             inventory = (json.loads((root / "phones.json").read_text())
-                         if phone_services.enabled(site) or phone_services.group_settings(site) else None)
+                         if (phone_services.enabled(site) or phone_services.group_settings(site)
+                             or phone_services.hotline_settings(site)) else None)
             check_service_config(site, configs, inventory)
             render_core(site, configs)
         if args.with_tftp or args.tftp_only:

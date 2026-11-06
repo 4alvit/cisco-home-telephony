@@ -4,6 +4,9 @@ These optional services extend the existing local Asterisk deployment. They do n
 
 - **641 — Toggle saved alarm.** From either line of a configured Cisco handset, enable or disable that physical handset's existing recurring alarm. Preserve its time, weekdays and owner line. If no alarm has been saved, announce that it is not configured and change no alarm settings.
 - **621 — Incoming calls group.** Ring the explicit private list of local recipients simultaneously for up to 25 seconds. Skip recipients with gateway DND enabled. Ring each Cisco once through its primary line, and optionally include registered softphones.
+- **622 — Handset hotline group.** Optional source-restricted group for a dedicated
+  off-hook phone. See [handset hotline](handset-hotline.md) for private membership,
+  first-answer behavior, installation and rollback.
 
 The ordinary 620 group, 630 Assist call, radio stations, timer actions and recurring scheduler continue to work as before. Existing timers and alarms keep ringing until stopped or answered; 641 does not enable speakerphone auto-answer.
 

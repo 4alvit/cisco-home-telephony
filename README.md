@@ -59,6 +59,8 @@ conversion to MPP is not required.
   phones, enabled radio stations and service shortcuts, with a private contacts export.
 - **Control a saved alarm by calling:** [641 and incoming group 621](docs/phone-services.md)
   cover spoken confirmations, missing-alarm behavior and private recipient selection.
+- **Call home by lifting a handset:** [handset hotline 622](docs/handset-hotline.md)
+  rings a private group, excludes selected phones, and connects the first answer.
 - **Use free external SIP services:** the [provider and practice directory](docs/free-voip-directory.md)
   lists published test menus, account restrictions and the difference between a SIP identity and an incoming telephone number.
 - **Try the stock-phone voice pilot:** [implementation and measured acceptance](docs/voice-rollout.md),

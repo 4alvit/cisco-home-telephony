@@ -1,6 +1,12 @@
 # syntax=docker/dockerfile:1
 ARG DEBIAN_IMAGE
 FROM ${DEBIAN_IMAGE}
+# Bound archive retries and stalled connections for every APT operation.
+RUN printf '%s\n' \
+       'Acquire::Retries "6";' \
+       'Acquire::http::Timeout "30";' \
+       'Acquire::https::Timeout "30";' \
+       > /etc/apt/apt.conf.d/zz-cisco-network
 RUN apt-get update && apt-get install -y --no-install-recommends tftpd-hpa tftp-hpa ca-certificates python3 \
     && rm -rf /var/lib/apt/lists/* && mkdir -p /srv/tftp
 COPY entrypoint.sh /usr/local/bin/cisco-tftp
