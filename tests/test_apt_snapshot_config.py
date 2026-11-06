@@ -61,8 +61,8 @@ class AptSnapshotConfigurationTests(unittest.TestCase):
                         self.assertEqual(metadata, f'priority:{priority}')
                         self.assertEqual(parsed.scheme, 'https')
                         self.assertEqual(parsed.netloc, (
-                            'snapshot-cloudflare.debian.org',
-                            'snapshot.debian.org')[priority - 1])
+                            'snapshot.debian.org',
+                            'snapshot-cloudflare.debian.org')[priority - 1])
                         self.assertEqual(parsed.path, f'/archive/{archive}/{SNAPSHOT}/')
                         self.assertFalse(parsed.query or parsed.fragment)
 

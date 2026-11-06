@@ -182,8 +182,8 @@ the package snapshot, base digest or Python locks is a dependency change that
 requires the same final-image qualification again.
 
 The Asterisk and voice builds use local APT mirror lists for that exact snapshot.
-Each list prefers `snapshot-cloudflare.debian.org` over HTTPS and falls back to
-`snapshot.debian.org` over HTTPS when an individual file fails. Debian and
+Each list prefers `snapshot.debian.org` over HTTPS and falls back to
+`snapshot-cloudflare.debian.org` over HTTPS when an individual file fails. Debian and
 Debian Security have separate lists, so fallback cannot change the archive,
 date or suite. This uses APT's
 [documented mirror transport](https://manpages.debian.org/trixie/apt/apt-transport-mirror.1.en.html),
