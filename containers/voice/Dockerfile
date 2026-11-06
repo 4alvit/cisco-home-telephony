@@ -12,6 +12,8 @@ RUN printf '%s\n' \
        'Acquire::https::Timeout "30";' \
        'Acquire::http::Pipeline-Depth "0";' \
        'Acquire::https::Pipeline-Depth "0";' \
+       'Acquire::http::Dl-Limit "1000";' \
+       'Acquire::https::Dl-Limit "1000";' \
        > /etc/apt/apt.conf.d/zz-cisco-network
 
 # Freeze Debian package indexes as well as Python wheels. Updating this date is

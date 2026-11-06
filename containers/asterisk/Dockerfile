@@ -12,6 +12,8 @@ RUN printf '%s\n' \
        'Acquire::https::Timeout "30";' \
        'Acquire::http::Pipeline-Depth "0";' \
        'Acquire::https::Pipeline-Depth "0";' \
+       'Acquire::http::Dl-Limit "1000";' \
+       'Acquire::https::Dl-Limit "1000";' \
        > /etc/apt/apt.conf.d/zz-cisco-network
 # Both compilation and runtime resolve packages from the same reviewed snapshot.
 # Debian slim has no CA bundle. Bootstrap it from the primary archive over HTTP;
@@ -46,6 +48,8 @@ RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
        'Acquire::https::Timeout "30";' \
        'Acquire::http::Pipeline-Depth "0";' \
        'Acquire::https::Pipeline-Depth "0";' \
+       'Acquire::http::Dl-Limit "1000";' \
+       'Acquire::https::Dl-Limit "1000";' \
        > /etc/apt/apt.conf.d/zz-cisco-network \
     && rm -rf /var/lib/apt/lists/*
 # Debian's Pillow package still carries reviewed critical findings. Stage the

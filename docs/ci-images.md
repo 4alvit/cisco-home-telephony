@@ -204,6 +204,33 @@ PBX build stages run sequentially and
 reuse their normal cache to reduce concurrent archive downloads. If both
 mirrors fail, the build fails rather than changing versions or disabling checks.
 
+Asterisk and voice also cap HTTP/HTTPS downloads at `1000` KiB/s using
+`Acquire::http::Dl-Limit` and `Acquire::https::Dl-Limit`. APT additionally uses
+one worker per transport when a download limit is set, reducing simultaneous
+downloads across mirrors. This reduces bursts; it does not guarantee a maximum
+number of requests per second or resolve every upstream failure. See the
+[APT transport documentation](https://manpages.debian.org/trixie/apt/apt-transport-http.1.en.html)
+and [worker selection](https://github.com/Debian/apt/blob/3.0.3/apt-pkg/acquire.cc#L475-L499).
+The same cap was suggested in [Debian's snapshot rate-limit report](https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=977653),
+but that historical guidance is not a statement of today's service limits.
+
+APT 3.0.3 already includes [Retry-After handling and jitter](https://salsa.debian.org/apt-team/apt/-/merge_requests/383).
+Leave them enabled: `Retry-After: 0` still retains exponential backoff and jitter,
+with the first two retry delays at one second and two to three seconds. APT can
+label a 503 response carrying that header `TooManyRequests`; the label alone
+does not prove an HTTP 429 response or a rate-limit violation. See the
+[header parser and response handler](https://github.com/Debian/apt/blob/3.0.3/methods/basehttp.cc)
+and the failure handler linked above. TFTP's download policy remains unchanged.
+
+The image qualification runs `tests/apt_network_probe.py` inside the built voice
+image to check the exact APT 3.0.3 behavior against a synthetic loopback server.
+It runs as the non-root application user with external networking disabled and
+only a small writable temporary filesystem. A macOS host does not supply this
+Linux APT runtime, so local configuration tests do not establish a runtime pass;
+that claim requires the isolated image step to succeed.
+The step rejects APT versions other than `3.0.3`. Upgrading APT requires reviewing
+and rerunning the probe and updating that expected version in the workflow.
+
 The reviewed package identities are:
 
 - `ffmpeg=7:7.1.5-0+deb13u1`.

@@ -116,7 +116,9 @@ class AptSnapshotConfigurationTests(unittest.TestCase):
         self.assertEqual(content, 'Acquire::Retries "2";\nAcquire::http::Timeout "30";\n'
                                  'Acquire::https::Timeout "30";\n'
                                  'Acquire::http::Pipeline-Depth "0";\n'
-                                 'Acquire::https::Pipeline-Depth "0";\n')
+                                 'Acquire::https::Pipeline-Depth "0";\n'
+                                 'Acquire::http::Dl-Limit "1000";\n'
+                                 'Acquire::https::Dl-Limit "1000";\n')
         ca_install = commands.index(
             ['apt-get', 'install', '-y', '--no-install-recommends', 'ca-certificates'])
         final_sources = max(index for index, path, _ in writes if path == '/etc/apt/sources.list')
@@ -128,13 +130,15 @@ class AptSnapshotConfigurationTests(unittest.TestCase):
             with self.subTest(image=image):
                 writes = emitted_files(run_commands(image, 'Acquire::Retries'))
                 retries = 2 if image == 'voice' else 6
-                pipeline = ('' if image == 'tftp' else
-                            'Acquire::http::Pipeline-Depth "0";\n'
-                            'Acquire::https::Pipeline-Depth "0";\n')
+                throttling = ('' if image == 'tftp' else
+                              'Acquire::http::Pipeline-Depth "0";\n'
+                              'Acquire::https::Pipeline-Depth "0";\n'
+                              'Acquire::http::Dl-Limit "1000";\n'
+                              'Acquire::https::Dl-Limit "1000";\n')
                 self.assertEqual([(path, content) for _, path, content in writes], [
                     ('/etc/apt/apt.conf.d/zz-cisco-network',
                      f'Acquire::Retries "{retries}";\nAcquire::http::Timeout "30";\n'
-                     'Acquire::https::Timeout "30";\n' + pipeline)])
+                     'Acquire::https::Timeout "30";\n' + throttling)])
                 text = (ROOT / 'containers' / image / 'Dockerfile').read_text()
                 self.assertLess(text.index('/etc/apt/apt.conf.d/zz-cisco-network'),
                                 text.index('apt-get'))
