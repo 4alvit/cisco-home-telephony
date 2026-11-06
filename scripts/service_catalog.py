@@ -13,7 +13,7 @@ KINDS = {'diagnostic', 'group', 'assistant', 'alert', 'radio', 'external', 'auto
 
 def managed_numbers():
     """Codes owned by this repository, including currently disabled services."""
-    return ({'600', '601', '620', '621', '630', '640', '641'}
+    return ({'600', '601', '620', '621', '622', '630', '640', '641'}
             | {entry['extension'] for entry in provision._radio.catalog().values()}
             | {entry['number'] for entry in provision.external_sip.PROVIDERS.values()})
 
@@ -65,6 +65,12 @@ def build(site, *, has_phones, local_numbers=(), allowed_numbers=None, group_mem
         add('640', 'Legacy alarm tone', 'alert')
     if provision.phone_services.group_settings(site, members=group_members):
         add('621', 'Incoming calls group', 'group')
+    hotline = provision.phone_services.hotline_settings(site, members=group_members,
+                                                        line_owners=line_owners)
+    if hotline:
+        if group_members is None or not line_owners:
+            raise ValueError('hotline catalog requires verified membership and physical ownership')
+        add('622', 'Handset hotline group', 'group')
     # Use the complete deployment validator, not just the feature flag. A
     # partial HA setup, missing prompt or absent physical owner must not create
     # a catalog entry or grant the service through --sync-services.

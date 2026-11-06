@@ -5,10 +5,21 @@ FROM ${DEBIAN_IMAGE} AS distribution
 ARG DEBIAN_IMAGE
 LABEL org.opencontainers.image.base.name="${DEBIAN_IMAGE}" \
       io.cisco-home-telephony.debian.snapshot="20261101T000000Z"
+# Bound archive retries and stalled connections in this stage and its descendants.
+RUN printf '%s\n' \
+       'Acquire::Retries "6";' \
+       'Acquire::http::Timeout "30";' \
+       'Acquire::https::Timeout "30";' \
+       'Acquire::http::Pipeline-Depth "0";' \
+       'Acquire::https::Pipeline-Depth "0";' \
+       'Acquire::http::Dl-Limit "1000";' \
+       'Acquire::https::Dl-Limit "1000";' \
+       > /etc/apt/apt.conf.d/zz-cisco-network
 # Both compilation and runtime resolve packages from the same reviewed snapshot.
-# Debian slim has no CA bundle. Bootstrap it from the frozen archive over HTTP;
-# APT still verifies Debian Release signatures and package checksums. All later
-# archive transfers use HTTPS with the installed CA bundle.
+# Debian slim has no CA bundle. Bootstrap it from the primary archive over HTTP;
+# APT still verifies Debian Release signatures and package checksums. After that,
+# Indexes stay on the snapshot mirrors; the last mirror serves only .deb payloads.
+# Keep six retries for CA bootstrap, then use two so mirror failover happens sooner.
 RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
     && rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
     && printf '%s\n' \
@@ -16,9 +27,32 @@ RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
        'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261101T000000Z trixie-updates main' \
        'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261101T000000Z trixie-security main' \
        > /etc/apt/sources.list \
-    && apt-get -o Acquire::Retries=3 update \
+    && apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
-    && sed -i 's|http://snapshot.debian.org|https://snapshot.debian.org|g' /etc/apt/sources.list \
+    && printf '%s\tpriority:1\n%s\tpriority:2\n%s\tpriority:3 type:deb\n' \
+       'https://snapshot.debian.org/archive/debian/20261101T000000Z/' \
+       'https://snapshot-cloudflare.debian.org/archive/debian/20261101T000000Z/' \
+       'https://deb.debian.org/debian/' \
+       > /etc/apt/cisco-debian-snapshot.mirrors \
+    && printf '%s\tpriority:1\n%s\tpriority:2\n%s\tpriority:3 type:deb\n' \
+       'https://snapshot.debian.org/archive/debian-security/20261101T000000Z/' \
+       'https://snapshot-cloudflare.debian.org/archive/debian-security/20261101T000000Z/' \
+       'https://deb.debian.org/debian-security/' \
+       > /etc/apt/cisco-security-snapshot.mirrors \
+    && printf '%s\n' \
+       'deb [check-valid-until=no] mirror+file:/etc/apt/cisco-debian-snapshot.mirrors trixie main' \
+       'deb [check-valid-until=no] mirror+file:/etc/apt/cisco-debian-snapshot.mirrors trixie-updates main' \
+       'deb [check-valid-until=no] mirror+file:/etc/apt/cisco-security-snapshot.mirrors trixie-security main' \
+       > /etc/apt/sources.list \
+    && printf '%s\n' \
+       'Acquire::Retries "2";' \
+       'Acquire::http::Timeout "30";' \
+       'Acquire::https::Timeout "30";' \
+       'Acquire::http::Pipeline-Depth "0";' \
+       'Acquire::https::Pipeline-Depth "0";' \
+       'Acquire::http::Dl-Limit "1000";' \
+       'Acquire::https::Dl-Limit "1000";' \
+       > /etc/apt/apt.conf.d/zz-cisco-network \
     && rm -rf /var/lib/apt/lists/*
 # Debian's Pillow package still carries reviewed critical findings. Stage the
 # hash-locked upstream wheel with the SAME Debian interpreter as the runtime.

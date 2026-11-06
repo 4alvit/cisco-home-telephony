@@ -5,17 +5,39 @@ FROM ${PYTHON_IMAGE}
 ARG PYTHON_IMAGE
 LABEL org.opencontainers.image.base.name="${PYTHON_IMAGE}" \
       io.cisco-home-telephony.debian.snapshot="20261101T000000Z"
+# Bound archive retries and stalled connections for every APT operation.
+RUN printf '%s\n' \
+       'Acquire::Retries "2";' \
+       'Acquire::http::Timeout "30";' \
+       'Acquire::https::Timeout "30";' \
+       'Acquire::http::Pipeline-Depth "0";' \
+       'Acquire::https::Pipeline-Depth "0";' \
+       'Acquire::http::Dl-Limit "1000";' \
+       'Acquire::https::Dl-Limit "1000";' \
+       > /etc/apt/apt.conf.d/zz-cisco-network
 
 # Freeze Debian package indexes as well as Python wheels. Updating this date is
 # an explicit dependency update; the base digest is recorded by the helper.
+# Indexes stay on the snapshot mirrors. The last mirror serves only .deb payloads;
+# APT still verifies the same Debian Release signatures and package checksums.
 RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
     && rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
+    && printf '%s\tpriority:1\n%s\tpriority:2\n%s\tpriority:3 type:deb\n' \
+       'https://snapshot.debian.org/archive/debian/20261101T000000Z/' \
+       'https://snapshot-cloudflare.debian.org/archive/debian/20261101T000000Z/' \
+       'https://deb.debian.org/debian/' \
+       > /etc/apt/cisco-debian-snapshot.mirrors \
+    && printf '%s\tpriority:1\n%s\tpriority:2\n%s\tpriority:3 type:deb\n' \
+       'https://snapshot.debian.org/archive/debian-security/20261101T000000Z/' \
+       'https://snapshot-cloudflare.debian.org/archive/debian-security/20261101T000000Z/' \
+       'https://deb.debian.org/debian-security/' \
+       > /etc/apt/cisco-security-snapshot.mirrors \
     && printf '%s\n' \
-       'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20261101T000000Z trixie main' \
-       'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20261101T000000Z trixie-updates main' \
-       'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20261101T000000Z trixie-security main' \
+       'deb [check-valid-until=no] mirror+file:/etc/apt/cisco-debian-snapshot.mirrors trixie main' \
+       'deb [check-valid-until=no] mirror+file:/etc/apt/cisco-debian-snapshot.mirrors trixie-updates main' \
+       'deb [check-valid-until=no] mirror+file:/etc/apt/cisco-security-snapshot.mirrors trixie-security main' \
        > /etc/apt/sources.list \
-    && apt-get -o Acquire::Retries=3 update \
+    && apt-get update \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends tzdata \
        ffmpeg=7:7.1.5-0+deb13u1 libmbedcrypto16=3.6.6-0.1~deb13u1 \

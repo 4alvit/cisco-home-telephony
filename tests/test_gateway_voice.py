@@ -386,8 +386,13 @@ class GatewayVoiceTests(unittest.TestCase):
         ami = mock.Mock()
         ami.__enter__ = mock.Mock(return_value=ami)
         ami.__exit__ = mock.Mock(return_value=False)
-        ami.action.return_value = [{'CoreStartupDate': 'synthetic-date',
-                                    'CoreStartupTime': 'synthetic-time'}]
+        def action(name, **fields):
+            if name == 'Getvar':
+                variable = fields['Variable']
+                return [{'Response': 'Success', 'Variable': variable,
+                         'Value': channel['Uniqueid'] if variable == 'UNIQUEID' else ''}]
+            return [{'CoreStartupDate': 'synthetic-date', 'CoreStartupTime': 'synthetic-time'}]
+        ami.action.side_effect = action
         ami.snapshot.return_value = ({'201': 'Not in use', '202': 'Ringing'}, [channel])
         with mock.patch.object(self.gateway, 'stopped') as stopped, \
              mock.patch.object(gateway, 'AMI', return_value=ami), \
@@ -408,8 +413,13 @@ class GatewayVoiceTests(unittest.TestCase):
         ami = mock.Mock()
         ami.__enter__ = mock.Mock(return_value=ami)
         ami.__exit__ = mock.Mock(return_value=False)
-        ami.action.return_value = [{'CoreStartupDate': 'synthetic-date',
-                                    'CoreStartupTime': 'synthetic-time'}]
+        def action(name, **fields):
+            if name == 'Getvar':
+                variable = fields['Variable']
+                return [{'Response': 'Success', 'Variable': variable,
+                         'Value': channel['Uniqueid'] if variable == 'UNIQUEID' else ''}]
+            return [{'CoreStartupDate': 'synthetic-date', 'CoreStartupTime': 'synthetic-time'}]
+        ami.action.side_effect = action
         ami.snapshot.return_value = ({'201': 'Not in use', '202': 'Ringing'}, [channel])
         with mock.patch.object(self.gateway, 'stopped') as stopped, \
              mock.patch.object(gateway, 'AMI', return_value=ami), \

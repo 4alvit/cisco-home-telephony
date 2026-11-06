@@ -1809,6 +1809,25 @@ class Gateway:
                 ami.action('Hangup', Channel=channel['Uniqueid'], Cause='16')
             return {'line': line, 'channel': channel['Channel'], 'uniqueid': channel['Uniqueid']}
 
+    @staticmethod
+    def automatic_answer_allowed(ami, channel):
+        """Do not let a preference auto-answer a hotline intended for a person.
+
+        Bind the marker read to the observed channel identity. The ordinary
+        mutate path performs its own fresh identity check before phone I/O.
+        A missing/ambiguous AMI result must not become permission to answer.
+        """
+        name, identity = channel.get('Channel'), channel.get('Uniqueid')
+        if not isinstance(name, str) or not isinstance(identity, str) or not identity:
+            return False
+        for variable, expected in (('UNIQUEID', identity), ('CISCO_HOTLINE', '')):
+            response = ami.action('Getvar', Channel=name, Variable=variable)
+            values = [item.get('Value') for item in response
+                      if item.get('Response') == 'Success' and item.get('Variable') == variable]
+            if values != [expected]:
+                return False
+        return True
+
     def background(self):
         while not self.stopped.wait(2):
             if self.camera_preview is not None:
@@ -1845,6 +1864,8 @@ class Gateway:
                             continue
                         identity = item.get('Uniqueid')
                         if not identity or identity in self.auto_attempts or item.get('ChannelStateDesc') != 'Ringing':
+                            continue
+                        if not self.automatic_answer_allowed(ami, item):
                             continue
                         self.auto_attempts.add(identity)  # One attempt, including ambiguous timeout.
                         line = item['Channel'].split('/')[1].split('-')[0]

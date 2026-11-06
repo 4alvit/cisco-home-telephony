@@ -39,7 +39,7 @@ def validate_site(site, with_tftp=False):
         raise ValueError("home_assistant must be an object with boolean enabled")
     if not isinstance(ha.get("assist", {}), dict):
         raise ValueError("home_assistant.assist must be an object")
-    for key in ("radio", "gateway", "alarms", "external_sip", "phone_services", "inbound_ring_group"):
+    for key in ("radio", "gateway", "alarms", "external_sip", "phone_services", "inbound_ring_group", "hotline_ring_group"):
         config = site.get(key, {})
         if not isinstance(config, dict) or type(config.get("enabled", False)) is not bool:
             raise ValueError(f"{key} must be an object with boolean enabled")
