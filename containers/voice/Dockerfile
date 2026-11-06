@@ -7,7 +7,7 @@ LABEL org.opencontainers.image.base.name="${PYTHON_IMAGE}" \
       io.cisco-home-telephony.debian.snapshot="20261101T000000Z"
 # Bound archive retries and stalled connections for every APT operation.
 RUN printf '%s\n' \
-       'Acquire::Retries "6";' \
+       'Acquire::Retries "2";' \
        'Acquire::http::Timeout "30";' \
        'Acquire::https::Timeout "30";' \
        > /etc/apt/apt.conf.d/zz-cisco-network

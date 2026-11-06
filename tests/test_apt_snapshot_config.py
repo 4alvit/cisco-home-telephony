@@ -106,13 +106,29 @@ class AptSnapshotConfigurationTests(unittest.TestCase):
             if path.endswith('.mirrors'):
                 self.assertGreater(index, ca_install)
 
-    def test_all_apt_calls_inherit_bounded_network_policy(self):
+    def test_pbx_reduces_retries_after_bootstrap_and_mirror_setup(self):
+        commands = run_commands('asterisk', 'VERSION_CODENAME')
+        writes = emitted_files(commands)
+        policy = [(index, content) for index, path, content in writes
+                  if path == '/etc/apt/apt.conf.d/zz-cisco-network']
+        self.assertEqual(len(policy), 1)
+        policy_index, content = policy[0]
+        self.assertEqual(content, 'Acquire::Retries "2";\nAcquire::http::Timeout "30";\n'
+                                 'Acquire::https::Timeout "30";\n')
+        ca_install = commands.index(
+            ['apt-get', 'install', '-y', '--no-install-recommends', 'ca-certificates'])
+        final_sources = max(index for index, path, _ in writes if path == '/etc/apt/sources.list')
+        self.assertGreater(policy_index, ca_install)
+        self.assertGreater(policy_index, final_sources)
+
+    def test_all_apt_calls_start_with_bounded_network_policy(self):
         for image in (*IMAGES, 'tftp'):
             with self.subTest(image=image):
                 writes = emitted_files(run_commands(image, 'Acquire::Retries'))
+                retries = 2 if image == 'voice' else 6
                 self.assertEqual([(path, content) for _, path, content in writes], [
                     ('/etc/apt/apt.conf.d/zz-cisco-network',
-                     'Acquire::Retries "6";\nAcquire::http::Timeout "30";\n'
+                     f'Acquire::Retries "{retries}";\nAcquire::http::Timeout "30";\n'
                      'Acquire::https::Timeout "30";\n')])
                 text = (ROOT / 'containers' / image / 'Dockerfile').read_text()
                 self.assertLess(text.index('/etc/apt/apt.conf.d/zz-cisco-network'),

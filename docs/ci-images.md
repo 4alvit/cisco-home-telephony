@@ -189,9 +189,13 @@ date or suite. This uses APT's
 [documented mirror transport](https://manpages.debian.org/trixie/apt/apt-transport-mirror.1.en.html),
 with tab-separated priorities `1` and `2`; signature and package-hash checks
 remain enabled. Asterisk first installs its CA bundle from the signed primary
-snapshot over HTTP, then enables the HTTPS lists. Six download retries and
-30-second connection/data inactivity timeouts bound stalled requests; the CI
-job timeout still bounds the whole build. PBX build stages run sequentially and
+snapshot over HTTP with six download retries, then enables the HTTPS lists and
+reduces retries to two. Voice uses two retries from the start; TFTP keeps six
+because it has no mirror list. APT exhausts retries on the current mirror before
+trying another, so two retries reach fallback sooner than six; this
+ordering is explicit in [APT's failure handler](https://github.com/Debian/apt/blob/3.0.3/apt-pkg/acquire-worker.cc#L647-L725).
+Connection/data inactivity timeouts remain 30 seconds; the CI job timeout still
+bounds the whole build. PBX build stages run sequentially and
 reuse their normal cache to reduce concurrent archive downloads. If both
 mirrors fail, the build fails rather than changing versions or disabling checks.
 

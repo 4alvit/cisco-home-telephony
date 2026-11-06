@@ -15,6 +15,7 @@ RUN printf '%s\n' \
 # Debian slim has no CA bundle. Bootstrap it from the primary archive over HTTP;
 # APT still verifies Debian Release signatures and package checksums. After that,
 # HTTPS mirror lists allow per-file failover from the CDN to the primary archive.
+# Keep six retries for CA bootstrap, then use two so mirror failover happens sooner.
 RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
     && rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
     && printf '%s\n' \
@@ -37,6 +38,11 @@ RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
        'deb [check-valid-until=no] mirror+file:/etc/apt/cisco-debian-snapshot.mirrors trixie-updates main' \
        'deb [check-valid-until=no] mirror+file:/etc/apt/cisco-security-snapshot.mirrors trixie-security main' \
        > /etc/apt/sources.list \
+    && printf '%s\n' \
+       'Acquire::Retries "2";' \
+       'Acquire::http::Timeout "30";' \
+       'Acquire::https::Timeout "30";' \
+       > /etc/apt/apt.conf.d/zz-cisco-network \
     && rm -rf /var/lib/apt/lists/*
 # Debian's Pillow package still carries reviewed critical findings. Stage the
 # hash-locked upstream wheel with the SAME Debian interpreter as the runtime.
