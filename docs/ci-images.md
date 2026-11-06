@@ -195,7 +195,12 @@ because it has no mirror list. APT exhausts retries on the current mirror before
 trying another, so two retries reach fallback sooner than six; this
 ordering is explicit in [APT's failure handler](https://github.com/Debian/apt/blob/3.0.3/apt-pkg/acquire-worker.cc#L647-L725).
 Connection/data inactivity timeouts remain 30 seconds; the CI job timeout still
-bounds the whole build. PBX build stages run sequentially and
+bounds the whole build. Asterisk and voice disable HTTP/HTTPS pipelining to reduce
+concurrent requests within each APT transport; TFTP keeps its existing behavior.
+This is a bounded mitigation, not evidence that pipelining caused the observed
+503 responses or a guarantee that upstream outages are resolved. The setting
+uses the [documented pipeline option](https://manpages.debian.org/trixie/apt/apt-transport-http.1.en.html).
+PBX build stages run sequentially and
 reuse their normal cache to reduce concurrent archive downloads. If both
 mirrors fail, the build fails rather than changing versions or disabling checks.
 
