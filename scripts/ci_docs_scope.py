@@ -1,22 +1,13 @@
 #!/usr/bin/env python3
-"""Prove that a pull request changes nothing but documentation.
+"""Preserve required contexts while skipping proven documentation-only work.
 
-Markdown cannot reach a container image or a Python, shell or media check, so
-`images` may skip its builds and `validate` may skip its heavy steps on such a
-pull request. Both jobs are required contexts, so neither may be dropped by a
-`paths-ignore` filter: the branch policy would then wait for a check that never
-arrives. The decision therefore runs inside the running job and only skips work.
-
-Everything else keeps the full work. Pushes and manual dispatches run
-unconditionally, so the default branch and every exported artifact still come
-from a real build of the exact commit. An empty or non-Markdown diff also keeps
-the full work. Invalid commits, a mismatched checkout, missing or ambiguous
-history, or unexpected paths fail the required job instead of granting a skip:
-a wrong "documentation only" answer would merge unbuilt container code and
-untested Python.
+The shared classifier checks the complete PR or push diff, including file modes
+and protected source locations. Repository-specific checkout/ancestry checks
+remain strict. Manual runs always build the exact source and exported images.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -26,6 +17,12 @@ import subprocess
 ZERO_SHA = '0' * 40
 COMMIT = re.compile(r'(?:[0-9a-f]{40}|[0-9a-f]{64})')
 MAX_DIFF_BYTES = 16 * 1024 * 1024
+
+# Vendored from the shared toolkit; no network or dependency install is needed.
+_SPEC = importlib.util.spec_from_file_location(
+    'shared_change_scope', Path(__file__).with_name('change_scope.py'))
+shared_scope = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(shared_scope)
 
 
 def git(root, *args):
@@ -60,17 +57,24 @@ def changed_paths(root, base, head):
 
 
 def documentation_only(paths):
-    """True only for a non-empty change set that is entirely Markdown."""
-    return bool(paths) and all(path.lower().endswith('.md') for path in paths)
+    """Retain the path helper without treating source fixtures as prose."""
+    return bool(paths) and all(shared_scope.documentation_path(path, ()) for path in paths)
 
 
 def classify(event_name, event, github_sha, root):
     checked_out = commit(git(root, 'rev-parse', 'HEAD').decode().strip())
     if checked_out != commit(github_sha):
         raise ValueError('Checkout differs from the triggering commit')
+    if event_name == 'push':
+        base, head = event.get('before'), commit(event['after'])
+        if head != checked_out:
+            raise ValueError('Push head differs from the checked-out commit')
+        result = shared_scope.classify(root, event_name, event)
+        return {'images': result['run'], 'documentation_only': not result['run'],
+                'reason': result['reason'], 'head': head, 'base': base,
+                'checked_out': checked_out}
     if event_name != 'pull_request':
-        # Pushes keep the default branch honestly built and a dispatch exists to
-        # export verified bytes, so neither may skip anything.
+        # A dispatch can export images and must always verify the exact source.
         return {'images': True, 'documentation_only': False,
                 'reason': 'not-a-pull-request', 'head': checked_out, 'base': None}
     pull = event['pull_request']
@@ -84,9 +88,11 @@ def classify(event_name, event, github_sha, root):
     # Target-branch changes after this PR branched are not part of its diff.
     # Use the same proven merge-base comparison as the optional wake scope.
     paths = changed_paths(root, comparison_base, head)
-    skip = documentation_only(paths)
+    result = shared_scope.classify(root, event_name, event)
+    skip = not result['run']
     return {'images': not skip, 'documentation_only': skip,
             'reason': 'documentation-only-diff' if skip else 'changed-paths',
+            'shared_reason': result['reason'],
             'base': base, 'comparison_base': comparison_base,
             'head': head, 'checked_out': checked_out,
             'changed_paths': len(paths)}

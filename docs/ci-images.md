@@ -1,7 +1,8 @@
 # Images from a native GitHub runner
 
-Normal push/PR runs build and smoke-test on standard `ubuntu-24.04`, without
-publishing containers or uploading artifacts. If your workstation is ARM and
+Code-changing push/PR runs build and smoke-test on standard `ubuntu-24.04`,
+without publishing containers or uploading artifacts. Proven documentation-only
+changes run the lightweight checks described below. If your workstation is ARM and
 your k3s node is AMD64, a manual workflow can export the verified AMD64 images
 without local emulation.
 
@@ -435,33 +436,31 @@ the fast job fails; the next push cancels it through the workflow concurrency
 group. Both jobs run for every pull request, and both workflows run on pushes
 to the default branch.
 
-A pull request whose every changed file is Markdown (`.md`, case-insensitive,
-including `.MD`) skips that work inside both
-jobs, never a job itself. Each job must still run to report its required
-context: a `paths-ignore` filter would drop it, and the branch policy would then
-wait for a check that never arrives, so such a pull request could not merge at
-all. `scripts/ci_docs_scope.py` finds the unique merge base of the event's exact
-base and head commits, then compares that merge base with the PR head. This
-includes changes from an older branch point that a synthetic merge checkout
-can otherwise hide. The job verifies that its checkout contains both event
-commits before considering the reduced path. In `images` that means every
-build, scan, smoke and export; in `validate` it means the dependency install, the test suite
-and the shell checks, while the link checker and the two modules that read
-Markdown still run without any third-party dependency. An empty diff or a
-single non-Markdown path, including either side of a rename, keeps the full
-work. Invalid or zero SHAs, a checkout that differs from the triggering commit,
-a base or head outside that checkout, a missing or ambiguous merge base,
-unexpected paths, or a diff that cannot be read fail the scope step instead of
-granting a documentation-only skip. Pushes and manual dispatches
-build and test everything, so the default branch and every exported artifact
-still come from a real build of the exact commit. A job using the reduced path
-reports success in seconds and identifies the work it skipped, without claiming
-an image was built or the full suite passed.
-`validate` on such a pull request finishes in seconds rather than minutes,
-because the checks that remain resolve links and read Markdown without
-installing a third-party dependency. Mixing one Markdown edit with any code,
-workflow or script file is no longer Markdown-only, so the full path runs: a
-change to the checks themselves is never covered by the reduced one.
+Pull requests and pushes containing only ordinary documentation skip heavy steps
+inside both jobs, never the required contexts themselves. Each job still reports
+its result: a workflow-level `paths-ignore` filter would leave a required check
+missing. The shared `scripts/change_scope.py` classifier is vendored from
+`victron-venus/venus-os-ci-toolkit` at
+`04d1a895fac608e5c972e49b127a1a792d7ad725`. It accepts ordinary Markdown or
+reStructuredText under `docs/` and standard root documents such as `README.md`.
+Source, fixture, hidden and build directories are never exempt, even when a
+file has a Markdown extension; symlinks and executable/mode changes also keep
+the full work. Unknown, empty or incomplete comparisons cannot grant a skip.
+
+The repository adapter `scripts/ci_docs_scope.py` preserves its checkout and PR
+ancestry checks. A PR uses the unique merge base and its complete head diff; a
+push uses the complete before/after range, so a later documentation commit
+cannot hide earlier code changes. Invalid PR revisions or push heads, a
+mismatched checkout or ambiguous PR ancestry fail the scope step. An unknown
+push base and other uncertain Git evidence request the full work. Manual dispatches always build and test everything, including
+all export runs.
+
+For an eligible documentation change, `images` skips builds, image scans and
+smokes; `validate` skips dependency installation, the full test suite and shell
+checks. The documentation link checker and both documentation test modules
+still run without third-party dependencies. Independent CodeQL security checks
+retain their existing behavior. The reduced path identifies exactly what it
+skipped; it does not claim an image was built or the full suite passed.
 
 A pull-request branch is covered by the `pull_request` event alone, so a commit
 pushed to an open pull request is built once instead of once per trigger; a
@@ -484,7 +483,7 @@ also always runs: its lightweight scope job compares the exact event commits
 with complete Git history, then builds the optional image only when an input
 changed.
 
-For pull requests, scope uses the unique merge base of the event's exact base
+For the optional wake workflow, scope uses the unique merge base on pull requests of the event's exact base
 and head, and verifies that the checked-out test merge contains both. For push
 updates it compares the event's before/after commits; a new branch checks the
 whole tree. Renames include both removed and added paths. An explicit workflow

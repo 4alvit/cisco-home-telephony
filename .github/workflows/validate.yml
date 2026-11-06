@@ -29,10 +29,9 @@ jobs:
   # waiting for the container builds. Both jobs are required, and they are
   # independent on purpose: the images job still starts when a test fails, and
   # the next push cancels it through this workflow's concurrency group.
-  # Pull requests that touch only Markdown still run both jobs, but the work
-  # inside them is skipped: a path filter would drop a job instead and leave its
-  # required context unreported for that pull request. Markdown cannot reach an
-  # image or a media test, so `validate` keeps only the checks that read it.
+  # Proven ordinary-documentation PRs and pushes keep both required contexts,
+  # skipping only heavy steps. Markdown inside source or fixture directories,
+  # mode changes and uncertain history still run the full checks.
   validate:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -43,7 +42,7 @@ jobs:
           # The scope decision diffs the event's exact base commit, which needs
           # the pull-request history rather than a single shallow commit.
           fetch-depth: 0
-      - name: Decide whether this pull request changes only documentation
+      - name: Decide whether this change contains only ordinary documentation
         id: scope
         run: python3 scripts/ci_docs_scope.py
       # Markdown is the link checker's input, so this always runs.
@@ -99,8 +98,8 @@ jobs:
       - name: Report the skipped checks
         if: steps.scope.outputs.documentation_only == 'true'
         run: |
-          echo "Every changed file is Markdown, so the dependency install, test suite and container builds were skipped."
-          echo "The link checker and the documentation policy test ran instead; the push to main runs everything."
+          echo "The complete diff changes only ordinary documentation; dependency installation, the full test suite and container builds were skipped."
+          echo "The link checker and the documentation policy tests ran; manual exports still run every check."
 
   images:
     runs-on: ubuntu-24.04
@@ -112,7 +111,7 @@ jobs:
           # The scope decision diffs the event's exact base commit, which needs
           # the pull-request history rather than a single shallow commit.
           fetch-depth: 0
-      - name: Decide whether this pull request needs the image builds
+      - name: Decide whether this change needs image builds
         id: scope
         run: python3 scripts/ci_docs_scope.py
       - name: Ensure the host media tools the L16 lab shells out to
@@ -330,5 +329,5 @@ jobs:
       - name: Report the skipped builds
         if: steps.scope.outputs.images != 'true'
         run: |
-          echo "Every changed file is Markdown, so nothing here can change an image."
-          echo "The required images context is satisfied without building; the push to main rebuilds all images."
+          echo "The complete diff changes only ordinary documentation and no protected build inputs."
+          echo "The required images context reports the proven documentation path; manual exports rebuild all images."
