@@ -14,14 +14,22 @@ RUN printf '%s\n' \
 
 # Freeze Debian package indexes as well as Python wheels. Updating this date is
 # an explicit dependency update; the base digest is recorded by the helper.
-# Use the snapshot CDN to avoid intermittent primary-host outages; APT still
-# verifies the same Debian Release signatures and package checksums.
+# HTTPS mirror lists allow per-file failover from the CDN to the primary archive;
+# APT still verifies the same Debian Release signatures and package checksums.
 RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
     && rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
+    && printf '%s\tpriority:1\n%s\tpriority:2\n' \
+       'https://snapshot-cloudflare.debian.org/archive/debian/20261101T000000Z/' \
+       'https://snapshot.debian.org/archive/debian/20261101T000000Z/' \
+       > /etc/apt/cisco-debian-snapshot.mirrors \
+    && printf '%s\tpriority:1\n%s\tpriority:2\n' \
+       'https://snapshot-cloudflare.debian.org/archive/debian-security/20261101T000000Z/' \
+       'https://snapshot.debian.org/archive/debian-security/20261101T000000Z/' \
+       > /etc/apt/cisco-security-snapshot.mirrors \
     && printf '%s\n' \
-       'deb [check-valid-until=no] https://snapshot-cloudflare.debian.org/archive/debian/20261101T000000Z trixie main' \
-       'deb [check-valid-until=no] https://snapshot-cloudflare.debian.org/archive/debian/20261101T000000Z trixie-updates main' \
-       'deb [check-valid-until=no] https://snapshot-cloudflare.debian.org/archive/debian-security/20261101T000000Z trixie-security main' \
+       'deb [check-valid-until=no] mirror+file:/etc/apt/cisco-debian-snapshot.mirrors trixie main' \
+       'deb [check-valid-until=no] mirror+file:/etc/apt/cisco-debian-snapshot.mirrors trixie-updates main' \
+       'deb [check-valid-until=no] mirror+file:/etc/apt/cisco-security-snapshot.mirrors trixie-security main' \
        > /etc/apt/sources.list \
     && apt-get update \
     && apt-get upgrade -y \

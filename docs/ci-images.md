@@ -181,6 +181,20 @@ Do not reuse a Bookworm digest for the Trixie voice or Asterisk build. Updating
 the package snapshot, base digest or Python locks is a dependency change that
 requires the same final-image qualification again.
 
+The Asterisk and voice builds use local APT mirror lists for that exact snapshot.
+Each list prefers `snapshot-cloudflare.debian.org` over HTTPS and falls back to
+`snapshot.debian.org` over HTTPS when an individual file fails. Debian and
+Debian Security have separate lists, so fallback cannot change the archive,
+date or suite. This uses APT's
+[documented mirror transport](https://manpages.debian.org/trixie/apt/apt-transport-mirror.1.en.html),
+with tab-separated priorities `1` and `2`; signature and package-hash checks
+remain enabled. Asterisk first installs its CA bundle from the signed primary
+snapshot over HTTP, then enables the HTTPS lists. Six download retries and
+30-second connection/data inactivity timeouts bound stalled requests; the CI
+job timeout still bounds the whole build. PBX build stages run sequentially and
+reuse their normal cache to reduce concurrent archive downloads. If both
+mirrors fail, the build fails rather than changing versions or disabling checks.
+
 The reviewed package identities are:
 
 - `ffmpeg=7:7.1.5-0+deb13u1`.
