@@ -175,7 +175,7 @@ def documentation_only_problems(text, test_directory):
     """Return one problem per documentation check a Markdown-only pull request loses."""
     body = job_bodies(text).get(FAST_JOB, '')
     problems = []
-    scope = named_step(body, 'Decide whether this pull request changes only documentation')
+    scope = named_step(body, 'Decide whether this change contains only ordinary documentation')
     if scope is None or SCOPE_SCRIPT not in scope:
         problems.append('the short job no longer reads the documentation-only decision')
     links = named_step(body, 'Verify documentation links and anchors')

@@ -113,15 +113,68 @@ class ImagesScopeTests(unittest.TestCase):
         root, base, head = self.case('docs/NOTES.MD')
         self.assertFalse(scope.classify('pull_request', pull_event(base, head), head, root)['images'])
 
-    def test_pushes_and_dispatches_always_build(self):
+    def test_documentation_push_skips_but_dispatches_always_build(self):
         root, base, head = self.case('docs/guide.md')
-        pushed = scope.classify('push', {'before': base, 'after': head, 'deleted': False}, head, root)
+        pushed = scope.classify('push', {'before': base, 'after': head}, head, root)
         dispatched = scope.classify('workflow_dispatch', {}, head, root)
-        self.assertTrue(pushed['images'])
+        self.assertFalse(pushed['images'])
+        self.assertTrue(pushed['documentation_only'])
+        self.assertEqual('documentation-only', pushed['reason'])
         self.assertTrue(dispatched['images'])
-        self.assertFalse(pushed['documentation_only'])
         self.assertFalse(dispatched['documentation_only'])
-        self.assertEqual('not-a-pull-request', pushed['reason'])
+
+    def test_markdown_in_source_or_hidden_locations_keeps_full_work(self):
+        for changed in ('tests/fixtures/example.md', 'scripts/README.md',
+                        '.github/README.md', 'docs/assets/README.md'):
+            with self.subTest(changed=changed):
+                root, base, head = self.case(changed)
+                self.assertTrue(scope.classify('pull_request', pull_event(base, head),
+                                               head, root)['images'])
+                self.assertTrue(scope.classify('push', {'before': base, 'after': head},
+                                               head, root)['images'])
+
+    def test_executable_markdown_is_not_ordinary_documentation(self):
+        root, base, _ = self.case('docs/guide.md')
+        (root / 'docs/guide.md').chmod(0o755)
+        run(root, 'add', '.')
+        run(root, 'commit', '-qm', 'executable file')
+        head = run(root, 'rev-parse', 'HEAD')
+        result = scope.classify('push', {'before': base, 'after': head}, head, root)
+        self.assertTrue(result['images'])
+        self.assertEqual('non-regular-or-mode-change', result['reason'])
+
+    def test_documentation_symlink_keeps_full_work(self):
+        root, _, base = self.case('docs/guide.md')
+        (root / 'docs/guide.md').unlink()
+        (root / 'docs/guide.md').symlink_to('../README.md')
+        run(root, 'add', '.')
+        run(root, 'commit', '-qm', 'symlink file')
+        head = run(root, 'rev-parse', 'HEAD')
+        self.assertTrue(scope.classify('push', {'before': base, 'after': head},
+                                       head, root)['images'])
+
+    def test_push_compares_the_whole_range(self):
+        root, base, _ = self.case('scripts/runtime.py')
+        (root / 'README.md').write_text('later documentation edit')
+        run(root, 'add', '.')
+        run(root, 'commit', '-qm', 'docs after code')
+        head = run(root, 'rev-parse', 'HEAD')
+        self.assertTrue(scope.classify('push', {'before': base, 'after': head},
+                                       head, root)['images'])
+
+    def test_push_head_must_match_the_checkout(self):
+        root, base, head = self.case('docs/guide.md')
+        with self.assertRaisesRegex(ValueError, 'Push head differs'):
+            scope.classify('push', {'before': base, 'after': base}, head, root)
+
+    def test_incomplete_history_keeps_full_work(self):
+        root, base, head = self.case('docs/guide.md')
+        original_git = scope.shared_scope.git
+        def shallow(repo, operation, revision=''):
+            return b'true' if operation == 'shallow' else original_git(repo, operation, revision)
+        with patch.object(scope.shared_scope, 'git', side_effect=shallow):
+            self.assertTrue(scope.classify('push', {'before': base, 'after': head},
+                                           head, root)['images'])
 
     def test_an_empty_diff_is_not_treated_as_documentation(self):
         root, base, head = self.case('docs/guide.md')
