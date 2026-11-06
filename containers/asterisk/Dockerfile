@@ -12,9 +12,9 @@ RUN printf '%s\n' \
        'Acquire::https::Timeout "30";' \
        > /etc/apt/apt.conf.d/zz-cisco-network
 # Both compilation and runtime resolve packages from the same reviewed snapshot.
-# Debian slim has no CA bundle. Bootstrap it from the frozen archive over HTTP;
-# APT still verifies Debian Release signatures and package checksums. All later
-# archive transfers use HTTPS with the installed CA bundle.
+# Debian slim has no CA bundle. Bootstrap it from the primary archive over HTTP;
+# APT still verifies Debian Release signatures and package checksums. After that,
+# use the snapshot CDN over HTTPS to avoid intermittent primary-host outages.
 RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
     && rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
     && printf '%s\n' \
@@ -24,7 +24,7 @@ RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
        > /etc/apt/sources.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
-    && sed -i 's|http://snapshot.debian.org|https://snapshot.debian.org|g' /etc/apt/sources.list \
+    && sed -i 's|http://snapshot.debian.org|https://snapshot-cloudflare.debian.org|g' /etc/apt/sources.list \
     && rm -rf /var/lib/apt/lists/*
 # Debian's Pillow package still carries reviewed critical findings. Stage the
 # hash-locked upstream wheel with the SAME Debian interpreter as the runtime.
