@@ -8,7 +8,7 @@ from test_ci_job_split import job_bodies
 CALLER = Path(__file__).resolve().parents[1] / '.github/workflows/auto-approve.yml'
 PINNED_CALL = re.compile(
     r'^    uses: victron-venus/venus-os-ci-toolkit/\.github/workflows/'
-    r'auto-approve-reusable\.yml@[0-9a-f]{40}$', re.MULTILINE)
+    r'auto-approve-reusable\.yml@[0-9a-f]{40}(?:[ \t]+#[^\r\n]*)?$', re.MULTILINE)
 
 
 def boundary_problems(text):
@@ -40,6 +40,16 @@ class ApprovalBoundaryTests(unittest.TestCase):
         mutated = re.sub(r'(?<=\.yml@)[0-9a-f]{40}', 'main', self.text)
         self.assertIn('approval must use an immutable shared workflow',
                       boundary_problems(mutated))
+
+    def test_version_comment_preserves_the_immutable_reference(self):
+        annotated = re.sub(r'(\.yml@[0-9a-f]{40})(?:[ \t]+#[^\r\n]*)?',
+                           r'\1 # main', self.text)
+        self.assertEqual([], boundary_problems(annotated))
+
+    def test_uncommented_suffix_is_not_part_of_a_valid_reference(self):
+        malformed = re.sub(r'(\.yml@[0-9a-f]{40})', r'\1 extra', self.text)
+        self.assertIn('approval must use an immutable shared workflow',
+                      boundary_problems(malformed))
 
     def test_executable_pr_steps_are_rejected(self):
         mutated = self.text + '\n    steps:\n      - uses: actions/checkout@main\n'
