@@ -183,12 +183,17 @@ requires the same final-image qualification again.
 
 The Asterisk and voice builds use local APT mirror lists for that exact snapshot.
 Each list prefers `snapshot.debian.org` over HTTPS and falls back to
-`snapshot-cloudflare.debian.org` over HTTPS when an individual file fails. Debian and
-Debian Security have separate lists, so fallback cannot change the archive,
-date or suite. This uses APT's
+`snapshot-cloudflare.debian.org` over HTTPS when an individual file fails. A third
+entry permits only binary package payloads from the corresponding official pool:
+`https://deb.debian.org/debian/` or `https://deb.debian.org/debian-security/`, with
+metadata `priority:3 type:deb`. Debian and Debian Security have separate lists.
+Indexes still come exclusively from the fixed snapshot; the pool cannot change
+the selected versions, archive or suite. This uses APT's
 [documented mirror transport](https://manpages.debian.org/trixie/apt/apt-transport-mirror.1.en.html),
-with tab-separated priorities `1` and `2`; signature and package-hash checks
-remain enabled. Asterisk first installs its CA bundle from the signed primary
+with tab-separated priorities and its `type:deb` filter. APT uses the package's
+existing relative filename and checks its size and hashes from the authenticated
+snapshot index. No rolling package index or new signing key is added.
+Asterisk first installs its CA bundle from the signed primary
 snapshot over HTTP with six download retries, then enables the HTTPS lists and
 reduces retries to two. Voice uses two retries from the start; TFTP keeps six
 because it has no mirror list. APT exhausts retries on the current mirror before
@@ -201,8 +206,11 @@ This is a bounded mitigation, not evidence that pipelining caused the observed
 503 responses or a guarantee that upstream outages are resolved. The setting
 uses the [documented pipeline option](https://manpages.debian.org/trixie/apt/apt-transport-http.1.en.html).
 PBX build stages run sequentially and
-reuse their normal cache to reduce concurrent archive downloads. If both
-mirrors fail, the build fails rather than changing versions or disabling checks.
+reuse their normal cache to reduce concurrent archive downloads. If both snapshot
+mirrors cannot supply an index, the build still fails. A package also fails if
+neither snapshot mirror nor the ordinary pool has the exact indexed bytes;
+older versions may have been removed from the ordinary pool. The payload-only
+fallback does not cover the earlier CA bootstrap or relax verification.
 
 Asterisk and voice also cap HTTP/HTTPS downloads at `1000` KiB/s using
 `Acquire::http::Dl-Limit` and `Acquire::https::Dl-Limit`. APT additionally uses
@@ -230,6 +238,17 @@ Linux APT runtime, so local configuration tests do not establish a runtime pass;
 that claim requires the isolated image step to succeed.
 The step rejects APT versions other than `3.0.4`. Upgrading APT requires reviewing
 and rerunning the probe and updating that expected version in the workflow.
+
+The probe also runs ordinary `apt-get update` and `apt-get download` against a
+small, signed synthetic repository. Its public test key and signed index are
+embedded in the probe; the temporary signing key was discarded. Each case has
+private sources, trusted-key directories, package lists and state, with no
+package installation or unsigned-repository exception. The checks require that
+an index outage never reaches the payload-only pool, a package can fall back
+after snapshot failure, a same-size corrupt package is rejected, and an altered
+signed index prevents downloading. The original throttle, retry and hash checks
+remain separate. These loopback tests verify transport and trust behavior, not
+the continuing availability of an external mirror.
 
 The reviewed package identities are:
 

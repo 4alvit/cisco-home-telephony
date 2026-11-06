@@ -8,6 +8,7 @@ Use --require-apt-version 3.0.4 when qualifying the pinned Trixie runtime.
 """
 
 import argparse
+import base64
 import hashlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
@@ -25,6 +26,79 @@ import time
 HELPER = '/usr/lib/apt/apt-helper'
 PAYLOAD = bytes(range(256)) * (4 * 1024 * 1024 // 256)
 SMALL_PAYLOAD = PAYLOAD[:4096]
+# Public, synthetic fixture only. Its signing key was generated in an isolated
+# temporary GPG home at 2024-01-01 and destroyed after signing. No expiry or
+# Valid-Until is used; normal signature and date checks remain enabled.
+FIXTURE_FINGERPRINT = "0B836673EBF8961AE4A86D751E8DE8A624850359"
+FIXTURE_DEB = base64.b64decode(
+    "ITxhcmNoPgpkZWJpYW4tYmluYXJ5LyAgMCAgICAgICAgICAgMCAgICAgMCAgICAgMTAwNjQ0ICA0"
+    "ICAgICAgICAgYAoyLjAKY29udHJvbC50YXIuZ3ovIDAgICAgICAgICAgIDAgICAgIDAgICAgIDEw"
+    "MDY0NCAgMjI1ICAgICAgIGAKH4sIAAAAAAAA/+3QwWoCMRAGYM95iryA21VWC4sUhV56KHiQ3sfs"
+    "tA2uSZiMxcc3a8GDd7WF/4MwQ5KZCameXAwqsR/dTl3Mm+Yci+tYT6eTS/67/zwrwdY3fNPFIStJ"
+    "GXmPWX/QmtyOvri1lHScJG55/OmPehA2HyzZx9DaSVWblbhvr+yGk3J5380b804+aFksrV2tN3bD"
+    "We1iaKQlW/KR9qnnyocf6n33Yl45O/FJz03fcuxJubMqFHKKonaoMo/+EAAAAAAAAAAAAAAAAAAA"
+    "AAAAgH/iBJtStkYAKAAACmRhdGEudGFyLmd6LyAgICAwICAgICAgICAgICAwICAgICAwICAgICAx"
+    "MDA2NDQgIDQ1ICAgICAgICBgCh+LCAAAAAAAAP/twQENAAAAwqD3T20ON6AAAAAAAAAAAACANwOa"
+    "3h0nACgAAAo="
+)
+FIXTURE_PACKAGES = b"""Package: apt-probe-fixture
+Version: 1.0
+Architecture: amd64
+Maintainer: APT Test <apt-test@example.invalid>
+Filename: pool/main/a/apt-probe-fixture/apt-probe-fixture_1.0_amd64.deb
+Size: 464
+SHA256: ae87e3a7f3d41791d726afeb8e469ba290bb8e2bde75217277ec7395ae9a6d51
+Description: Isolated transport test
+
+"""
+FIXTURE_KEY = b"""-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+mQENBGWSAIABCADfkMtXj9HJJM4hufXDK/LhXaSfoWrvq73HqvgJcMD8EpRa04GA
+Uo0RWZMp3dp86iPqn3Ttjyefn6/IroI64Y0Cqr2A7vbfI8IBFILHltk+hOLqlMez
+IugrgMIjHPuiZZIDkEgCFgxmvBGLoTG6UIhFqEkFq5KFUMtMR4MJgcn8EvrDCbHy
+L9wt/KxTzTO8UhOu6ho7XG0bjCLUSLdVN2OmnXb9w4/JEJU0G5v1sP2/btOrAGRU
+yopwdafbjeD2sbKWnoV2wokhgkCu5ze1BBEThUOAPzJj0DNo/0bYRxYsiNK5DY4N
+M6Uv9tnRnBkTuNqHkswvS2wT5OVwu9IJs+gpABEBAAG0LEFQVCBMb29wYmFjayBU
+ZXN0IDxhcHQtdGVzdEBleGFtcGxlLmludmFsaWQ+iQFtBBMBCABXFiEEC4Nmc+v4
+lhrkqG11Ho3opiSFA1kFAmWSAIAbFIAAAAAABAAObWFudTIsMi41KzEuMTIsMCwz
+AhsDBQsJCAcCAiICBhUKCQgLAgQWAgMBAh4HAheAAAoJEB6N6KYkhQNZBSwH/0Ye
+RxxupKofkdK1E2JGtVKAozetuemNkW7g0Qx47XlKvJk25KTyEVRY8fvv38Jl8bnG
+xZYZtPv+QsGKm6BjrQYdBupmKeIVBb9c2rHafTYzePH5KSZyA1AxrEDveJ8Nbdoi
+pcwj5K36egH/yhV89hUDKwX09AoXnJv8UFYXpsU6mf3r3baAcSKVG3FlAZtdwJHT
+kAXoo0SvbK6Ki3QobLjfSotsew2UkKT1p0rhHfkyb2qoNWT57qcqSOvi8irOpo+S
+gt85gQvDiPXa6n+6s7Ch7680c24hITBTQzMuvk4rcjYGo0Bmu7n7KqILB+xWds1W
+ZTZSpaqP4FCBRjSsrSg=
+=wV2y
+-----END PGP PUBLIC KEY BLOCK-----
+"""
+FIXTURE_INRELEASE = b"""-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA256
+
+Origin: APT Loopback Test
+Label: APT Loopback Test
+Suite: probe
+Codename: probe
+Date: Mon, 01 Jan 2024 00:00:00 UTC
+Architectures: amd64
+Components: main
+Description: Isolated signed transport fixture
+SHA256:
+ 528373ba002a6d9f8ee1889a636a7d18b924c2c926c2412055fb5049882bb784 301 main/binary-amd64/Packages
+-----BEGIN PGP SIGNATURE-----
+
+iQFPBAEBCAA5FiEEC4Nmc+v4lhrkqG11Ho3opiSFA1kFAmWSAIAbFIAAAAAABAAO
+bWFudTIsMi41KzEuMTIsMCwzAAoJEB6N6KYkhQNZHzYIAN59Q34mT4RkJ82W3EEm
+NVgxQkXgS7XaPEoUn84fO1pRTY2lQjLf1M6ept+eLX5DKN90dEfHzcHLrTBG7bdl
+AbbqBTIu9TBNnZh37sZ4nf6OActhqjBTD8nXmGM0mh+bmhqEN2v5dec62OitPXKh
+OqHSREyOmAIoI8LOZuBtPZZ/LxpmmbRvI94hK+Q4HJ7RAS5zM8nwMAwDkTxcG+ZR
+Yz0Hqxtp84oeGno3I1FX9hm2mdJL3akv4u3gdIUp27vpwXA5N2uiDjXkOM6qrbw0
+RjlzmMTJSQDmJD+dppkIZtWrSHdBY2R5W7f5bg9upwVEzLBIoIosPgXlCbhVcBqI
+RWA=
+=cDge
+-----END PGP SIGNATURE-----
+"""
+FIXTURE_FILENAME = 'pool/main/a/apt-probe-fixture/apt-probe-fixture_1.0_amd64.deb'
+
 CHILD_LIMITS = '''\
 import os, resource, sys
 resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
@@ -38,6 +112,38 @@ os.execv(sys.argv[1], sys.argv[1:])
 def require(condition, reason):
     if not condition:
         raise RuntimeError(reason)
+
+
+REPOSITORY_CASES = ('repo_index_outage', 'repo_fallback',
+                    'repo_corrupt', 'repo_tampered')
+
+
+def repository_response(path):
+    """The pool could serve indexes, but APT must never ask it for one."""
+    parts = path.split('/', 3)
+    if len(parts) != 4 or parts[1] not in REPOSITORY_CASES:
+        return None
+    _, case, mirror, suffix = parts
+    if mirror not in ('snapshot', 'snapshot2', 'pool'):
+        return 404, b'Unknown mirror\n'
+    if suffix == FIXTURE_FILENAME:
+        if mirror != 'pool':
+            return 404, b'Snapshot payload unavailable\n'
+        payload = FIXTURE_DEB
+        if case == 'repo_corrupt':
+            payload = bytes([payload[0] ^ 1]) + payload[1:]
+        return 200, payload
+    if case == 'repo_index_outage' and mirror != 'pool':
+        return 404, b'Snapshot index unavailable\n'
+    if suffix == 'dists/probe/InRelease':
+        release = FIXTURE_INRELEASE
+        if case == 'repo_tampered' and mirror != 'pool':
+            release = release.replace(b'Label: APT Loopback Test',
+                                      b'Label: Altered Test Data')
+        return 200, release
+    if suffix == 'dists/probe/main/binary-amd64/Packages':
+        return 200, FIXTURE_PACKAGES
+    return 404, b'Unknown fixture file\n'
 
 
 class Origin(HTTPServer):
@@ -60,14 +166,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         allowed = {'/baseline', '/limited', '/mismatch', '/retry0', '/retry2'}
-        if self.path not in allowed:
-            self.send_error(404)
-            return
-        earlier = sum(item['path'] == self.path for item in self.server.requests)
-        retry_after = self.path[-1] if self.path.startswith('/retry') else None
-        status = 503 if retry_after is not None and earlier == 0 else 200
-        body = (b'Synthetic service unavailable\n' if status == 503 else
-                PAYLOAD if self.path in ('/baseline', '/limited') else SMALL_PAYLOAD)
+        retry_after = None
+        if self.path in allowed:
+            earlier = sum(item['path'] == self.path for item in self.server.requests)
+            retry_after = self.path[-1] if self.path.startswith('/retry') else None
+            status = 503 if retry_after is not None and earlier == 0 else 200
+            body = (b'Synthetic service unavailable\n' if status == 503 else
+                    PAYLOAD if self.path in ('/baseline', '/limited') else SMALL_PAYLOAD)
+        else:
+            status, body = repository_response(self.path) or (404, b'Unknown fixture\n')
         self.server.requests.append({
             'path': self.path, 'at': time.monotonic(), 'status': status,
             'retry_after': retry_after if status == 503 else None,
@@ -125,6 +232,29 @@ def installed_limits():
     return limits
 
 
+def private_environment(directory, config):
+    return {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C',
+            'HOME': str(directory), 'TMPDIR': str(directory), 'APT_CONFIG': str(config)}
+
+
+def run_bounded(arguments, directory, env):
+    command = [sys.executable, '-I', '-c', CHILD_LIMITS, *arguments]
+    start = time.monotonic()
+    process = subprocess.Popen(command, env=env, cwd=directory,
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               text=True, start_new_session=True)
+    try:
+        output, _ = process.communicate(timeout=20)
+    finally:
+        # Also terminate a transport child if its parent exits unexpectedly.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait(timeout=5)
+    return start, time.monotonic() - start, process.returncode, output
+
+
 def run_case(origin, parent, name, limit, bad_hash=False):
     directory = parent / name
     directory.mkdir(mode=0o700)
@@ -137,34 +267,20 @@ def run_case(origin, parent, name, limit, bad_hash=False):
     expected = hashlib.sha256(body).hexdigest()
     destination = directory / 'download.bin'
     url = f'http://127.0.0.1:{origin.server_port}/{name}'
-    env = {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C',
-           'HOME': str(directory), 'TMPDIR': str(directory), 'APT_CONFIG': str(config)}
-    command = [sys.executable, '-I', '-c', CHILD_LIMITS, HELPER, 'download-file',
-               url, str(destination), 'SHA256:' + ('0' * 64 if bad_hash else expected)]
-    start = time.monotonic()
-    process = subprocess.Popen(command, env=env, cwd=directory,
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               text=True, start_new_session=True)
-    try:
-        output, _ = process.communicate(timeout=20)
-    finally:
-        # Also terminate a transport child if apt-helper exits unexpectedly.
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait(timeout=5)
-    elapsed = time.monotonic() - start
+    env = private_environment(directory, config)
+    start, elapsed, exit_code, output = run_bounded(
+        [HELPER, 'download-file', url, str(destination),
+         'SHA256:' + ('0' * 64 if bad_hash else expected)], directory, env)
     requests = [{**item, 'at': round(item['at'] - start, 4)}
                 for item in origin.requests if item['path'] == '/' + name]
     result = {'case': name, 'limit_kib_s': limit, 'seconds': round(elapsed, 4),
-              'exit_code': process.returncode, 'requests': requests}
+              'exit_code': exit_code, 'requests': requests}
     if bad_hash:
-        require(process.returncode != 0 and 'Hash Sum mismatch' in output,
+        require(exit_code != 0 and 'Hash Sum mismatch' in output,
                 'incorrect_sha256_was_not_rejected')
         result['hash_mismatch_rejected'] = True
     else:
-        require(process.returncode == 0, f'{name}_download_failed: {output[-2000:]}')
+        require(exit_code == 0, f'{name}_download_failed: {output[-2000:]}')
         actual = hashlib.sha256(destination.read_bytes()).hexdigest()
         require(actual == expected and destination.stat().st_size == len(body),
                 f'{name}_payload_mismatch')
@@ -181,6 +297,94 @@ def run_case(origin, parent, name, limit, bad_hash=False):
         require(delay >= (0.8 if name == 'retry0' else 1.8),
                 f'{name}_retry_delay_not_observed')
         result['retry_gap_seconds'] = round(delay, 4)
+    return result
+
+
+def run_repository_case(origin, parent, name):
+    directory = parent / name
+    directory.mkdir(mode=0o700)
+    for child in ('parts', 'state/lists/partial', 'cache/archives/partial',
+                  'log', 'sources.d', 'trusted.d', 'downloads'):
+        (directory / child).mkdir(mode=0o700, parents=True, exist_ok=True)
+    for child in ('empty.conf', 'status', 'empty.gpg'):
+        (directory / child).touch(mode=0o600)
+    key = directory / 'fixture.asc'
+    key.write_bytes(FIXTURE_KEY)
+    mirrors = directory / 'mirrors'
+    base = f'http://127.0.0.1:{origin.server_port}/{name}'
+    mirrors.write_text(f'{base}/snapshot/\tpriority:1\n'
+                       f'{base}/snapshot2/\tpriority:2\n'
+                       f'{base}/pool/\tpriority:3 type:deb\n')
+    sources = directory / 'sources.list'
+    sources.write_text(f'deb [arch=amd64 signed-by={key}] '
+                       f'mirror+file:{mirrors} probe main\n')
+    values = {
+        'Dir::Etc': directory,
+        'Dir::Etc::sourcelist': sources,
+        'Dir::Etc::sourceparts': directory / 'sources.d',
+        'Dir::Etc::trusted': directory / 'empty.gpg',
+        'Dir::Etc::trustedparts': directory / 'trusted.d',
+        'Dir::State::status': directory / 'status',
+        'Dir::State::lists': directory / 'state/lists',
+        'Dir::Cache::archives': directory / 'cache/archives',
+        'Dir::Cache::pkgcache': '',
+        'Dir::Cache::srcpkgcache': '',
+        'APT::Architecture': 'amd64',
+        'APT::Update::Error-Mode': 'any',
+        'Acquire::Languages': 'none',
+        'APT::Get::AllowUnauthenticated': 'false',
+    }
+    config = directory / 'apt.conf'
+    config.write_text(config_text(directory, 1000) +
+                      ''.join(f'{key} {json.dumps(str(value))};\n'
+                              for key, value in values.items()) +
+                      'APT::Architectures { "amd64"; };\n')
+    env = private_environment(directory, config)
+    start, elapsed, update_code, output = run_bounded(
+        ['/usr/bin/apt-get', 'update'], directory, env)
+    result = {'case': name, 'update_exit_code': update_code,
+              'update_seconds': round(elapsed, 4),
+              'signing_fingerprint': FIXTURE_FINGERPRINT}
+    negative_index = name in ('repo_index_outage', 'repo_tampered')
+    if negative_index:
+        require(update_code != 0, f'{name}_untrusted_or_missing_index_was_accepted')
+        if name == 'repo_tampered':
+            require(re.search(r'signature|sqv|not signed', output, re.IGNORECASE),
+                    f'{name}_failed_without_signature_diagnostic: {output[-1200:]}')
+            result['tampered_signature_rejected'] = True
+        else:
+            result['missing_snapshot_index_rejected'] = True
+    else:
+        require(update_code == 0, f'{name}_signed_index_failed: {output[-1200:]}')
+        _, elapsed, code, output = run_bounded(
+            ['/usr/bin/apt-get', 'download', 'apt-probe-fixture=1.0'],
+            directory / 'downloads', env)
+        result.update({'download_exit_code': code, 'download_seconds': round(elapsed, 4)})
+        if name == 'repo_corrupt':
+            require(code != 0 and 'Hash Sum mismatch' in output,
+                    'corrupt_pool_payload_was_not_rejected')
+            result['corrupt_payload_rejected'] = True
+        else:
+            require(code == 0, f'pool_fallback_failed: {output[-1200:]}')
+            downloaded = list((directory / 'downloads').glob('*.deb'))
+            require(len(downloaded) == 1 and downloaded[0].read_bytes() == FIXTURE_DEB,
+                    'pool_fallback_bytes_differ')
+            result.update({'bytes': len(FIXTURE_DEB),
+                           'sha256': hashlib.sha256(FIXTURE_DEB).hexdigest()})
+    requests = [{**item, 'at': round(item['at'] - start, 4)}
+                for item in origin.requests if item['path'].startswith('/' + name + '/')]
+    result['requests'] = requests
+    require(requests, f'{name}_made_no_fixture_requests')
+    pool = [item for item in requests if item['path'].startswith(f'/{name}/pool/')]
+    require(not any('/dists/' in item['path'] for item in pool),
+            'payload_only_pool_was_asked_for_an_index')
+    result['pool_index_requests'] = 0
+    if negative_index:
+        require(not pool and not any(item['path'].endswith('.deb') for item in requests),
+                'payload_downloaded_without_trusted_snapshot_index')
+    else:
+        require(any(item['path'].endswith(FIXTURE_FILENAME) for item in pool),
+                'pool_payload_fallback_not_exercised')
     return result
 
 
@@ -220,6 +424,8 @@ def main():
                         baseline, limited = result['cases'][:2]
                         require(limited['seconds'] >= baseline['seconds'] + 1.5,
                                 'limited_transfer_not_demonstrably_slower_than_baseline')
+                for name in REPOSITORY_CASES:
+                    result['cases'].append(run_repository_case(origin, Path(scratch), name))
             finally:
                 origin.shutdown()
                 origin.server_close()

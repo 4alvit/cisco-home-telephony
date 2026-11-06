@@ -18,17 +18,19 @@ RUN printf '%s\n' \
 
 # Freeze Debian package indexes as well as Python wheels. Updating this date is
 # an explicit dependency update; the base digest is recorded by the helper.
-# HTTPS mirror lists allow per-file failover from the primary archive to the CDN;
+# Indexes stay on the snapshot mirrors. The last mirror serves only .deb payloads;
 # APT still verifies the same Debian Release signatures and package checksums.
 RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
     && rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
-    && printf '%s\tpriority:1\n%s\tpriority:2\n' \
+    && printf '%s\tpriority:1\n%s\tpriority:2\n%s\tpriority:3 type:deb\n' \
        'https://snapshot.debian.org/archive/debian/20261101T000000Z/' \
        'https://snapshot-cloudflare.debian.org/archive/debian/20261101T000000Z/' \
+       'https://deb.debian.org/debian/' \
        > /etc/apt/cisco-debian-snapshot.mirrors \
-    && printf '%s\tpriority:1\n%s\tpriority:2\n' \
+    && printf '%s\tpriority:1\n%s\tpriority:2\n%s\tpriority:3 type:deb\n' \
        'https://snapshot.debian.org/archive/debian-security/20261101T000000Z/' \
        'https://snapshot-cloudflare.debian.org/archive/debian-security/20261101T000000Z/' \
+       'https://deb.debian.org/debian-security/' \
        > /etc/apt/cisco-security-snapshot.mirrors \
     && printf '%s\n' \
        'deb [check-valid-until=no] mirror+file:/etc/apt/cisco-debian-snapshot.mirrors trixie main' \

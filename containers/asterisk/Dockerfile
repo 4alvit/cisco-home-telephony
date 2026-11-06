@@ -18,7 +18,7 @@ RUN printf '%s\n' \
 # Both compilation and runtime resolve packages from the same reviewed snapshot.
 # Debian slim has no CA bundle. Bootstrap it from the primary archive over HTTP;
 # APT still verifies Debian Release signatures and package checksums. After that,
-# HTTPS mirror lists allow per-file failover from the primary archive to the CDN.
+# Indexes stay on the snapshot mirrors; the last mirror serves only .deb payloads.
 # Keep six retries for CA bootstrap, then use two so mirror failover happens sooner.
 RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
     && rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
@@ -29,13 +29,15 @@ RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
        > /etc/apt/sources.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
-    && printf '%s\tpriority:1\n%s\tpriority:2\n' \
+    && printf '%s\tpriority:1\n%s\tpriority:2\n%s\tpriority:3 type:deb\n' \
        'https://snapshot.debian.org/archive/debian/20261101T000000Z/' \
        'https://snapshot-cloudflare.debian.org/archive/debian/20261101T000000Z/' \
+       'https://deb.debian.org/debian/' \
        > /etc/apt/cisco-debian-snapshot.mirrors \
-    && printf '%s\tpriority:1\n%s\tpriority:2\n' \
+    && printf '%s\tpriority:1\n%s\tpriority:2\n%s\tpriority:3 type:deb\n' \
        'https://snapshot.debian.org/archive/debian-security/20261101T000000Z/' \
        'https://snapshot-cloudflare.debian.org/archive/debian-security/20261101T000000Z/' \
+       'https://deb.debian.org/debian-security/' \
        > /etc/apt/cisco-security-snapshot.mirrors \
     && printf '%s\n' \
        'deb [check-valid-until=no] mirror+file:/etc/apt/cisco-debian-snapshot.mirrors trixie main' \

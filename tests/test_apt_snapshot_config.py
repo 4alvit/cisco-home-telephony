@@ -41,7 +41,7 @@ def emitted_files(commands):
 
 
 class AptSnapshotConfigurationTests(unittest.TestCase):
-    def test_each_archive_has_two_ordered_https_mirrors_for_the_same_snapshot(self):
+    def test_each_archive_has_two_snapshot_mirrors_and_a_payload_only_pool(self):
         expected_archives = {
             '/etc/apt/cisco-debian-snapshot.mirrors': 'debian',
             '/etc/apt/cisco-security-snapshot.mirrors': 'debian-security',
@@ -54,8 +54,8 @@ class AptSnapshotConfigurationTests(unittest.TestCase):
                 self.assertEqual(set(mirrors), set(expected_archives))
                 for path, archive in expected_archives.items():
                     lines = mirrors[path].splitlines()
-                    self.assertEqual(len(lines), 2)
-                    for priority, line in enumerate(lines, 1):
+                    self.assertEqual(len(lines), 3)
+                    for priority, line in enumerate(lines[:2], 1):
                         uri, metadata = line.split('\t')
                         parsed = urlsplit(uri)
                         self.assertEqual(metadata, f'priority:{priority}')
@@ -65,6 +65,12 @@ class AptSnapshotConfigurationTests(unittest.TestCase):
                             'snapshot-cloudflare.debian.org')[priority - 1])
                         self.assertEqual(parsed.path, f'/archive/{archive}/{SNAPSHOT}/')
                         self.assertFalse(parsed.query or parsed.fragment)
+                    # The ordinary archive must never become an index source.
+                    # Native APT treats Target-Type:index and Target-Type:deb
+                    # separately; the isolated runtime probe verifies both.
+                    pool, metadata = lines[2].split('\t')
+                    self.assertEqual(pool, f'https://deb.debian.org/{archive}/')
+                    self.assertEqual(metadata, 'priority:3 type:deb')
 
     def test_final_sources_resolve_the_correct_archive_without_trust_bypasses(self):
         expected = {
