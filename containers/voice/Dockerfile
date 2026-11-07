@@ -51,6 +51,24 @@ RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
     && chown -R 10001:10001 /run/voice \
     && chmod 0700 /run/voice /run/voice/.local /run/voice/.local/config /run/voice/.local/state
 
+# DSA-6613-1: upgrade only zlib from the reviewed security snapshot.
+# Keep the original multimedia snapshot and its exact package pins unchanged.
+RUN printf '%s\tpriority:1\n%s\tpriority:2\n%s\tpriority:3 type:deb\n' \
+       'https://snapshot.debian.org/archive/debian-security/20261107T160000Z/' \
+       'https://snapshot-cloudflare.debian.org/archive/debian-security/20261107T160000Z/' \
+       'https://deb.debian.org/debian-security/' \
+       > /etc/apt/cisco-zlib-security.mirrors \
+    && printf '%s\n' \
+       'deb [check-valid-until=no] mirror+file:/etc/apt/cisco-zlib-security.mirrors trixie-security main' \
+       > /tmp/cisco-zlib-security.list \
+    && apt-get -o Dir::Etc::sourcelist=/tmp/cisco-zlib-security.list -o Dir::Etc::sourceparts=- update \
+    && apt-get -o Dir::Etc::sourcelist=/tmp/cisco-zlib-security.list -o Dir::Etc::sourceparts=- \
+       install -y --no-install-recommends --only-upgrade zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
+    && test "$(dpkg-query -W -f='${Version}' zlib1g)" = '1:1.3.dfsg+really1.3.1-1+deb13u1' \
+    && rm -f /tmp/cisco-zlib-security.list /etc/apt/cisco-zlib-security.mirrors \
+    && rm -rf /var/lib/apt/lists/*
+LABEL io.cisco-home-telephony.zlib-security.snapshot="20261107T160000Z"
+
 COPY containers/voice/requirements.lock /opt/voice/requirements.lock
 COPY containers/voice/install_locked.py /tmp/install_locked.py
 RUN python3 -I /tmp/install_locked.py /opt/voice/requirements.lock \
