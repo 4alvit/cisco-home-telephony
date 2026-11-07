@@ -174,6 +174,16 @@ hash-locked wheels; the wake image inherits that base. Asterisk is compiled and
 run on the same Debian distribution, whose system Python is 3.13. TFTP has no
 multimedia dependency and retains its independent Bookworm base and tag.
 
+The voice and Asterisk final stages apply one additional pinned upgrade:
+`zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1` from the signed Debian security snapshot
+`20261107T160000Z`. [DSA-6613-1](https://security-tracker.debian.org/tracker/DSA-6613-1)
+fixes CVE-2026-76844 and CVE-2026-85091. This temporary source is used only for
+that exact package, then removed; the original snapshot and all other package
+pins stay unchanged. The `zlib-security.snapshot` image label records the extra
+input. APT still verifies Release signatures and package hashes, with the same
+bounded mirror fallback policy. Both security profiles require the fixed zlib
+version, release and epoch in the finished image inventory.
+
 Build helpers resolve each official base tag to a digest before building and
 print that exact input. The runtime image labels retain the base reference and
 package-snapshot date. For a repeat build, supply the recorded
@@ -259,6 +269,7 @@ The reviewed package identities are:
 - `libexpat1=2.9.0-1~deb13u1`.
 - `libssh-4=0.11.5-0+deb13u1`.
 - `libssl3t64=3.5.7-1~deb13u3`.
+- `zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1` (security snapshot `20261107T160000Z`).
 
 This replaces the unsupported Bookworm Mbed TLS branch with the supported
 distribution dependency; it does not delete shared libraries to make a scan

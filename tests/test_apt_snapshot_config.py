@@ -131,6 +131,31 @@ class AptSnapshotConfigurationTests(unittest.TestCase):
         self.assertGreater(policy_index, ca_install)
         self.assertGreater(policy_index, final_sources)
 
+    def test_zlib_repair_uses_an_isolated_signed_snapshot_and_one_exact_upgrade(self):
+        for image in IMAGES:
+            with self.subTest(image=image):
+                commands = run_commands(image, 'cisco-zlib-security.mirrors')
+                files = {path: content for _, path, content in emitted_files(commands)}
+                self.assertEqual(files['/etc/apt/cisco-zlib-security.mirrors'].splitlines(), [
+                    'https://snapshot.debian.org/archive/debian-security/20261107T160000Z/\tpriority:1',
+                    'https://snapshot-cloudflare.debian.org/archive/debian-security/20261107T160000Z/\tpriority:2',
+                    'https://deb.debian.org/debian-security/\tpriority:3 type:deb'])
+                self.assertEqual(files['/tmp/cisco-zlib-security.list'],
+                    'deb [check-valid-until=no] mirror+file:/etc/apt/cisco-zlib-security.mirrors trixie-security main\n')
+                apt = [command for command in commands if command[0] == 'apt-get']
+                prefix = ['apt-get', '-o', 'Dir::Etc::sourcelist=/tmp/cisco-zlib-security.list',
+                          '-o', 'Dir::Etc::sourceparts=-']
+                self.assertEqual(apt, [prefix + ['update'], prefix + [
+                    'install', '-y', '--no-install-recommends', '--only-upgrade',
+                    'zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1']])
+                self.assertIn(['rm', '-f', '/tmp/cisco-zlib-security.list',
+                               '/etc/apt/cisco-zlib-security.mirrors'], commands)
+                self.assertIn(['rm', '-rf', '/var/lib/apt/lists/*'], commands)
+                text = (ROOT / 'containers' / image / 'Dockerfile').read_text()
+                repair = text.index('# DSA-6613-1')
+                self.assertGreater(repair, text.rindex('FROM '))
+                self.assertNotIn('apt-get', text[text.index('LABEL io.cisco-home-telephony.zlib-security.snapshot'):])
+
     def test_all_apt_calls_start_with_bounded_network_policy(self):
         for image in (*IMAGES, 'tftp'):
             with self.subTest(image=image):

@@ -92,11 +92,21 @@ class ImageSecurityTests(unittest.TestCase):
                                                             'Release': '5+deb13u4', 'SrcName': 'pillow'})
                 self.assertFalse(security.verify(data, profile='asterisk')['passed'])
 
-    def test_epoch_is_part_of_the_reviewed_ffmpeg_package_identity(self):
-        data = report()
-        package = next(p for p in data['Results'][0]['Packages'] if p['Name'] == 'ffmpeg')
-        package.pop('Epoch')
-        self.assertFalse(security.verify(data)['passed'])
+    def test_epoch_is_part_of_each_reviewed_native_package_identity(self):
+        for name in ('ffmpeg', 'zlib1g'):
+            with self.subTest(name=name):
+                data = report()
+                package = next(p for p in data['Results'][0]['Packages'] if p['Name'] == name)
+                package.pop('Epoch')
+                self.assertFalse(security.verify(data)['passed'])
+
+    def test_pre_dsa_6613_zlib_is_rejected_in_both_runtime_profiles(self):
+        for profile in ('voice', 'asterisk'):
+            with self.subTest(profile=profile):
+                data = report()
+                package = next(p for p in data['Results'][0]['Packages'] if p['Name'] == 'zlib1g')
+                package['Release'] = '1'
+                self.assertFalse(security.verify(data, profile=profile)['passed'])
 
     def test_old_mbedtls_is_rejected_even_if_scanner_reports_no_advisory(self):
         data = report()
