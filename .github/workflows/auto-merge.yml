@@ -1,0 +1,41 @@
+# Trusted default-branch metadata only; no pull-request code execution.
+name: Auto Merge PRs
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited, converted_to_draft]
+  workflow_run:
+    workflows: ["Validate and build", "Optional wake image", "CodeQL", "Trusted PR approval"]
+    types: [completed]
+  status:
+  check_run:
+    types: [completed]
+  schedule:
+    - cron: '41 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: automerge-reviewed-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  auto-merge:
+    if: >-
+      (github.event_name == 'pull_request_target' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(fromJSON('["4alvit","californiantiramisu","dependabot[bot]","renovate[bot]"]'), github.event.pull_request.user.login)) ||
+      (contains(fromJSON('["workflow_run","status","check_run","schedule","workflow_dispatch"]'), github.event_name) &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    uses: victron-venus/venus-os-ci-toolkit/.github/workflows/auto-merge.yml@ffa568e48a9510bf66dcfe01d6646f6840382431 # main
+    with:
+      reviewed-merge: true
+      reviewed-single-pass: true
+      allow-dependabot-actions-review: true
+      allow-owned-bot-actions-review: true
+      required-status-checks: "images,CodeQL,validate,analyze / CodeQL Analysis,Wake gate"
+    secrets:
+      BOT_PAT: ${{ secrets.BOT_PAT }}
