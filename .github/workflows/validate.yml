@@ -37,7 +37,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The scope decision diffs the event's exact base commit, which needs
           # the pull-request history rather than a single shallow commit.
@@ -106,7 +106,7 @@ jobs:
     timeout-minutes: 40
     steps:
       - name: Check out source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The scope decision diffs the event's exact base commit, which needs
           # the pull-request history rather than a single shallow commit.
@@ -184,7 +184,7 @@ jobs:
         run: python3 scripts/verify_voice_security.py container-trivy.json
       - name: Preserve complete image security evidence
         if: ${{ !cancelled() && steps.scope.outputs.images == 'true' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: voice-security-evidence
           path: |
@@ -209,7 +209,7 @@ jobs:
           test "$voice_bytes" -lt $((250 * 1024 * 1024))
       - name: Upload verified voice runtime
         if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'voice' && github.ref == 'refs/heads/main' && steps.scope.outputs.images == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verified-voice-amd64-${{ github.sha }}
           path: .build/voice-image-artifacts/
@@ -248,7 +248,7 @@ jobs:
         run: python3 scripts/verify_voice_security.py asterisk-trivy.json --profile asterisk
       - name: Preserve complete PBX image security evidence
         if: ${{ !cancelled() && steps.pbx_scan.outcome != 'skipped' && steps.scope.outputs.images == 'true' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: asterisk-security-evidence
           path: |
@@ -298,7 +298,7 @@ jobs:
           test "$total_bytes" -lt $((400 * 1024 * 1024))
       - name: Upload verified amd64 images
         if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'pbx' && github.ref == 'refs/heads/main' && steps.scope.outputs.images == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verified-amd64-images-${{ github.sha }}
           path: .build/image-artifacts/
@@ -319,7 +319,7 @@ jobs:
           test "$(du -sb . | cut -f1)" -lt $((150 * 1024 * 1024))
       - name: Upload verified TFTP image
         if: github.event_name == 'workflow_dispatch' && inputs.export_images && inputs.export_target == 'tftp' && github.ref == 'refs/heads/main' && steps.scope.outputs.images == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verified-tftp-amd64-${{ github.sha }}
           path: .build/tftp-image-artifacts/
