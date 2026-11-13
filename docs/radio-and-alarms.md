@@ -86,6 +86,48 @@ occasional voice messages, rather than music. This is a third-party Internet
 relay, not an official military service or a guarantee of an uninterrupted
 shortwave feed. It was checked separately on **2026-11-12**.
 
+## Expanded music channels
+
+Added on **2026-11-13**. Dial a number directly or use `cisco 212 NUMBER`.
+The same enabled services appear in the gateway directory and Home Assistant radio catalog.
+
+- **724 — SomaFM Sonic Universe**: Modern and avant-garde jazz. [Source](https://somafm.com/sonicuniverse/directstreamlinks.html).
+- **725 — Jazz24**: Jazz. [Source](https://www.jazz24.org/streaming-links/).
+- **726 — France Musique**: Classical music and cultural programmes. [Source](https://developers.radiofrance.fr/doc/tutorial-by-example/list-brands).
+- **727 — France Musique La Baroque**: Baroque and early music. [Source](https://www.radiofrance.com/presse/la-baroque-la-nouvelle-radio-thematique-de-france-musique).
+- **728 — SomaFM Groove Salad**: Ambient and downtempo. [Source](https://somafm.com/groovesalad/directstreamlinks.html).
+- **729 — SomaFM Drone Zone**: Ambient drone. [Source](https://somafm.com/dronezone/directstreamlinks.html).
+- **730 — SomaFM The Trip**: Progressive trance. [Source](https://somafm.com/thetrip/directstreamlinks.html).
+- **731 — BOBs Metallica**: Metallica artist channel. [Source](https://www.radiobob.de/metallica-stream).
+- **732 — BOBs Iron Maiden**: Iron Maiden artist channel. [Source](https://www.radiobob.de/iron-maiden-stream).
+- **733 — SomaFM Metal Detector**: Metal: doom, sludge, progressive, black and thrash. [Source](https://somafm.com/metal/).
+- **734 — BOBs Symphonic Metal**: Symphonic metal. [Source](https://www.radiobob.de/bobs-symphonic-metal-stream).
+- **735 — BOBs Death Metal**: Death metal. [Source](https://streams.radiobob.de/).
+
+Existing home routes also include **714 Baroque**, **715 Radio Swiss Classic**,
+**716 Radio Swiss Jazz**, **705 Gothic** and **717 Sanctuary Dark Electro**.
+These installation-specific entries are preserved during a live catalog update;
+a fresh installation must configure any entries absent from its versioned catalog.
+
+Metal Detector includes doom among several metal styles; it is not a doom-only
+channel. No dedicated working My Dying Bride or Darkseed stream was verified.
+To play those artists specifically from your configured MP3/FLAC library, use:
+
+```bash
+cisco 212 play "My Dying Bride"
+cisco 212 play "Darkseed"
+```
+
+These commands require matching local library files; see [music setup](cli-music.md).
+Radio playlists and artist selection remain controlled by the broadcasters.
+
+The updated shared TFTP template recognizes these numbers after a phone next
+loads its profile. With an older template, enter the number while on hook and
+press **Dial**, or use the CLI; a fleet reboot is not required for the server route.
+The Porch hotline keeps its dedicated off-hook behavior.
+
+[Printable music reference](radio-reference.html) lists these channels in English.
+
 There is no station audio in this repository, archive, proxy endpoint, or
 download library. Use the original broadcasts under each provider's terms.
 Programmes, adverts and availability remain controlled by the broadcaster.
@@ -99,7 +141,7 @@ network, image or HA fields with an example:
 {
   "radio": {
     "enabled": true,
-    "stations": ["matryoshka", "echo", "bob-rock", "bob-metal", "bob-gothic", "soma-poptron", "radyo-viva", "deti-toddlers", "deti-lullabies", "deti-songs", "uvb76"],
+    "stations": ["matryoshka", "echo", "bob-rock", "bob-metal", "bob-gothic", "soma-poptron", "radyo-viva", "deti-toddlers", "deti-lullabies", "deti-songs", "uvb76", "soma-sonic-universe", "jazz24", "france-musique", "france-baroque", "soma-groove-salad", "soma-drone-zone", "soma-the-trip", "bob-metallica", "bob-iron-maiden", "bob-symphonic", "bob-death", "soma-metal"],
     "max_seconds": 1800,
     "max_calls": 2
   },
