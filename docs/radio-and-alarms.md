@@ -40,9 +40,9 @@ dialing are unchanged.
 ## Station numbers
 
 The versioned [catalog](../containers/asterisk/radio-catalog.json) contains the
-stream entry points and the exact host policies. The broadcaster pages below
-are the sources, not third-party stream aggregators. Each station was decoded
-to nonzero 8 kHz PCM by the real worker on **2026-10-17**; availability can change.
+stream entry points and the exact host policies. The source pages below identify each stream. Stations 701–710 were decoded
+by the real worker on **2026-10-17**; later additions have separate verification
+dates. The current worker outputs 16 kHz PCM; availability can change.
 
 - **701 — Matryoshka Radio London** (`matryoshka`), Russian-language music and
   programmes. [Official station](https://matryoshka.fm/). Its HTTPS entry point
@@ -78,6 +78,14 @@ has programmes for older children. All three routes are deployed with the
 updated worker and private station selection, and are available as named
 destinations in Home Assistant.
 
+**723 — UVB-76 (The Buzzer)** (`uvb76`) is the public shortwave-monitor
+relay linked by [Radiopotok](https://radiopotok.ru/radio/620), served by
+[UVB-76 Radio](https://www.uvb76radio.ru/). Its direct HTTPS MP3 stream is
+`https://www.uvb76radio.ru/radio`. Expect the repeated buzzer, radio noise and
+occasional voice messages, rather than music. This is a third-party Internet
+relay, not an official military service or a guarantee of an uninterrupted
+shortwave feed. It was checked separately on **2026-11-12**.
+
 There is no station audio in this repository, archive, proxy endpoint, or
 download library. Use the original broadcasts under each provider's terms.
 Programmes, adverts and availability remain controlled by the broadcaster.
@@ -91,7 +99,7 @@ network, image or HA fields with an example:
 {
   "radio": {
     "enabled": true,
-    "stations": ["matryoshka", "echo", "bob-rock", "bob-metal", "bob-gothic", "soma-poptron", "radyo-viva", "deti-toddlers", "deti-lullabies", "deti-songs"],
+    "stations": ["matryoshka", "echo", "bob-rock", "bob-metal", "bob-gothic", "soma-poptron", "radyo-viva", "deti-toddlers", "deti-lullabies", "deti-songs", "uvb76"],
     "max_seconds": 1800,
     "max_calls": 2
   },
@@ -127,7 +135,7 @@ python3 scripts/check_radio_streams.py --station echo
 ```
 
 The last command contacts one broadcaster and decodes a few seconds without
-placing a call or writing audio. `--all` explicitly probes all ten stations.
+placing a call or writing audio. `--all` explicitly probes all configured catalog stations.
 The command without an option lists the catalog and performs no network
 fetch. Diagnostics contain station IDs, PCM frame counts, signal peaks and
 success state, not redirect tokens, caller details, or raw stream content.
