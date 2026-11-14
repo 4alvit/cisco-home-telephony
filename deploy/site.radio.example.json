@@ -11,7 +11,13 @@
   "ntp_ipv4": "REPLACE_WITH_REACHABLE_NTP_IPV4",
   "radio": {
     "enabled": true,
-    "stations": ["matryoshka", "echo", "bob-rock", "bob-metal", "bob-gothic", "soma-poptron", "radyo-viva", "deti-toddlers", "deti-lullabies", "deti-songs"],
+    "stations": [
+      "matryoshka", "echo", "bob-rock", "bob-metal", "bob-gothic",
+      "soma-poptron", "radyo-viva", "deti-toddlers", "deti-lullabies", "deti-songs",
+      "mega-dance", "kavkaz-hit", "europa-plus", "baroque", "swiss-classic",
+      "swiss-jazz", "sanctuary-dark", "chante-france", "mix-1049", "rt1-black",
+      "radio-krasnodar", "white-noise"
+    ],
     "max_seconds": 1800,
     "max_calls": 2
   },

@@ -70,10 +70,21 @@ def checked_url(url, station, purpose="stream"):
         raise ValueError("invalid stream URL")
     p = urlsplit(url)
     schemes = {"https", "http"} if station.get("allow_http") else {"https"}
+    # A few broadcasters publish Icecast on a non-default port. This policy
+    # belongs to the reviewed station, never caller/site input; host and public
+    # address checks still apply independently to every redirect.
+    default_port = 80 if p.scheme == "http" else 443
+    port_policy = station.get("ports", {})
+    if not isinstance(port_policy, dict):
+        raise ValueError("invalid station port policy")
+    ports = port_policy.get(p.scheme, [default_port])
+    known_port = (isinstance(ports, list) and bool(ports)
+                  and all(type(port) is int and 1 <= port <= 65535 for port in ports)
+                  and (p.port if p.port is not None else default_port) in ports)
     known_host = p.hostname in station["hosts"] or (station.get("redirect_host_regex")
         and p.hostname is not None and re.fullmatch(station["redirect_host_regex"], p.hostname))
     if (p.scheme not in schemes or not known_host or p.username is not None
-            or p.password is not None or p.fragment or p.port not in (None, 80 if p.scheme == "http" else 443)):
+            or p.password is not None or p.fragment or not known_port):
         raise ValueError("stream URL is outside station policy")
     if station.get("resolver") == "gpm-channel":
         channel = station.get("channel_id")
@@ -108,7 +119,7 @@ def open_stream(station, url=None, content_types=None, purpose="stream", metadat
     content_types = content_types or {"audio/mpeg", "audio/mp3", "audio/aac", "audio/aacp", "application/octet-stream"}
     for redirect in range(MAX_REDIRECTS + 1):
         p = checked_url(url, station, purpose)
-        port = 443 if p.scheme == "https" else 80
+        port = p.port if p.port is not None else (443 if p.scheme == "https" else 80)
         addresses = public_addresses(p.hostname, port)
         conn = http.client.HTTPConnection(p.hostname, port, timeout=IO_TIMEOUT)
         try:
