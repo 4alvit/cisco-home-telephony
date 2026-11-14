@@ -81,7 +81,7 @@ service definitions; private phone labels still come from your inventory.
 - **630:** Home Assistant Assist, when the Assist connection is enabled.
 - **640:** the optional legacy alarm-tone service. It is not a scheduled alarm.
 - **641:** toggle the calling phone's saved alarm, when phone services are enabled.
-- **701–710, 723–735:** the enabled subset of the [radio catalog](radio-and-alarms.md).
+- **701–710, 723–736:** the enabled subset of the [radio catalog](radio-and-alarms.md).
 - **801–803:** approved external SIP shortcuts only when the corresponding
   account has a configured outbound peer. Registration alone adds no shortcut.
 

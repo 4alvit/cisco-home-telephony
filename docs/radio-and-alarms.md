@@ -104,6 +104,12 @@ The same enabled services appear in the gateway directory and Home Assistant rad
 - **734 — BOBs Symphonic Metal**: Symphonic metal. [Source](https://www.radiobob.de/bobs-symphonic-metal-stream).
 - **735 — BOBs Death Metal**: Death metal. [Source](https://streams.radiobob.de/).
 
+**736 — RBC Radio** (`rbc`): Russian business news and talk, using the
+[station's live radio service](https://www.rbc.ru/story/radio).
+The HTTPS HLS entry point is `https://hls-01-rbc.hostingradio.ru/rbc/playlist.m3u8`.
+Session-specific playlist URLs are resolved at playback time, not saved in configuration.
+Dial **736** or run `cisco 212 736`.
+
 Existing home routes also include **714 Baroque**, **715 Radio Swiss Classic**,
 **716 Radio Swiss Jazz**, **705 Gothic** and **717 Sanctuary Dark Electro**.
 These installation-specific entries are preserved during a live catalog update;
@@ -141,7 +147,7 @@ network, image or HA fields with an example:
 {
   "radio": {
     "enabled": true,
-    "stations": ["matryoshka", "echo", "bob-rock", "bob-metal", "bob-gothic", "soma-poptron", "radyo-viva", "deti-toddlers", "deti-lullabies", "deti-songs", "uvb76", "soma-sonic-universe", "jazz24", "france-musique", "france-baroque", "soma-groove-salad", "soma-drone-zone", "soma-the-trip", "bob-metallica", "bob-iron-maiden", "bob-symphonic", "bob-death", "soma-metal"],
+    "stations": ["matryoshka", "echo", "bob-rock", "bob-metal", "bob-gothic", "soma-poptron", "radyo-viva", "deti-toddlers", "deti-lullabies", "deti-songs", "uvb76", "soma-sonic-universe", "jazz24", "france-musique", "france-baroque", "soma-groove-salad", "soma-drone-zone", "soma-the-trip", "bob-metallica", "bob-iron-maiden", "bob-symphonic", "bob-death", "soma-metal", "rbc"],
     "max_seconds": 1800,
     "max_calls": 2
   },

@@ -308,6 +308,20 @@
       "allow_http": false,
       "source": "https://somafm.com/metal/",
       "verified_date": "2026-11-13"
+    },
+    "rbc": {
+      "extension": "736",
+      "name": "RBC Radio",
+      "genre": "Russian business news and talk",
+      "url": "https://hls-01-rbc.hostingradio.ru/rbc/playlist.m3u8",
+      "hosts": [
+        "hls-01-rbc.hostingradio.ru"
+      ],
+      "allow_http": false,
+      "format": "aac",
+      "hls": true,
+      "source": "https://www.rbc.ru/story/radio",
+      "verified_date": "2026-11-13"
     }
   }
 }
