@@ -4,7 +4,12 @@
   "node_name": "voice-node",
   "node_ipv4": "192.168.50.10",
   "lan_cidr": "192.168.50.0/24",
-  "phone_cidrs": ["192.168.50.101/32", "192.168.50.102/32", "192.168.50.103/32", "192.168.50.104/32"],
+  "phone_cidrs": [
+    "192.168.50.101/32",
+    "192.168.50.102/32",
+    "192.168.50.103/32",
+    "192.168.50.104/32"
+  ],
   "asterisk_image": "192.168.50.20:5050/cisco-home/asterisk@sha256:REPLACE_WITH_64_HEX_DIGEST",
   "tftp_image": "192.168.50.20:5050/cisco-home/tftp@sha256:REPLACE_WITH_64_HEX_DIGEST",
   "image_pull_secrets": [],
@@ -12,15 +17,51 @@
   "radio": {
     "enabled": true,
     "stations": [
-      "matryoshka", "echo", "bob-rock", "bob-metal", "bob-gothic",
-      "soma-poptron", "radyo-viva", "deti-toddlers", "deti-lullabies", "deti-songs",
-      "mega-dance", "kavkaz-hit", "europa-plus", "baroque", "swiss-classic",
-      "swiss-jazz", "sanctuary-dark", "chante-france", "mix-1049", "rt1-black",
-      "radio-krasnodar", "white-noise"
+      "matryoshka",
+      "echo",
+      "bob-rock",
+      "bob-metal",
+      "bob-gothic",
+      "soma-poptron",
+      "radyo-viva",
+      "deti-toddlers",
+      "deti-lullabies",
+      "deti-songs",
+      "mega-dance",
+      "kavkaz-hit",
+      "europa-plus",
+      "baroque",
+      "swiss-classic",
+      "swiss-jazz",
+      "sanctuary-dark",
+      "chante-france",
+      "mix-1049",
+      "rt1-black",
+      "radio-krasnodar",
+      "white-noise",
+      "uvb76",
+      "soma-sonic-universe",
+      "jazz24",
+      "france-musique",
+      "france-baroque",
+      "soma-groove-salad",
+      "soma-drone-zone",
+      "soma-the-trip",
+      "bob-metallica",
+      "bob-iron-maiden",
+      "soma-metal",
+      "bob-symphonic",
+      "bob-death",
+      "rbc"
     ],
     "max_seconds": 1800,
     "max_calls": 2
   },
-  "alarms": {"enabled": true, "duration_seconds": 15},
-  "gateway": {"enabled": false}
+  "alarms": {
+    "enabled": true,
+    "duration_seconds": 15
+  },
+  "gateway": {
+    "enabled": false
+  }
 }

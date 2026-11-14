@@ -92,6 +92,19 @@ class ExpandedStations(unittest.TestCase):
             self.assertEqual(dial.count(f'exten => {station["extension"]},1,'), 1)
             self.assertIn(f"AGI(radio.py,{name})", dial)
 
+    def test_combined_catalog_keeps_every_station_and_route(self):
+        catalog = radio.catalog()
+        self.assertEqual({station['extension'] for station in catalog.values()},
+                         {str(extension) for extension in range(701, 737)})
+        self.assertEqual(len(catalog), 36)
+        dial, _ = provision.service_dialplan({"radio": {"enabled": True}})
+        for name, station in catalog.items():
+            with self.subTest(station=name):
+                purpose = 'api' if station.get('resolver') == 'gpm-channel' else 'stream'
+                radio.checked_url(station['url'], station, purpose=purpose)
+                self.assertEqual(dial.count(f'exten => {station["extension"]},1,'), 1)
+                self.assertIn(f'AGI(radio.py,{name})', dial)
+
 
 if __name__ == "__main__":
     unittest.main()

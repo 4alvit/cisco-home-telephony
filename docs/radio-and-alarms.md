@@ -21,7 +21,7 @@ personal device names. Check `cisco directory` for the current private catalog.
 Rebuild it from the repository root with Python and ReportLab:
 
 ```bash
-python3 scripts/build-phone-reference.py
+python3 scripts/build-phone-reference.py --html-output docs/radio-reference.html
 ```
 
 See [phone services](phone-services.md) for 621/641 setup and
@@ -40,9 +40,9 @@ dialing are unchanged.
 ## Station numbers
 
 The versioned [catalog](../containers/asterisk/radio-catalog.json) contains the
-stream entry points and the exact host policies. The broadcaster pages below
-are the sources, not third-party stream aggregators. The original 701–710 verification is recorded below; the 711–722 expansion
-uses the 16 kHz worker. Availability can change.
+stream entry points and the exact host policies. The source pages below identify each stream. Stations 701–710 were decoded
+by the real worker on **2026-10-17**; later additions have separate verification
+dates. The current worker outputs 16 kHz PCM; availability can change.
 
 - **701 — Matryoshka Radio London** (`matryoshka`), Russian-language music and
   programmes. [Official station](https://matryoshka.fm/). Its HTTPS entry point
@@ -101,8 +101,64 @@ Every redirect is checked again. Normal stations remain limited to their
 scheme's default port. RT1 uses both `frontend.streamonkey.net` and its narrowly
 matched edge hosts; permitting only the final edge breaks some requests.
 
-There is no station audio stored in this repository, proxy endpoint, or
-local download library. Use the original broadcasts under each provider's terms.
+
+**723 — UVB-76 (The Buzzer)** (`uvb76`) is the public shortwave-monitor
+relay linked by [Radiopotok](https://radiopotok.ru/radio/620), served by
+[UVB-76 Radio](https://www.uvb76radio.ru/). Its direct HTTPS MP3 stream is
+`https://www.uvb76radio.ru/radio`. Expect the repeated buzzer, radio noise and
+occasional voice messages, rather than music. This is a third-party Internet
+relay, not an official military service or a guarantee of an uninterrupted
+shortwave feed. It was checked separately on **2026-11-12**.
+
+## Expanded music channels
+
+Added on **2026-11-13**. Dial a number directly or use `cisco 212 NUMBER`.
+The same enabled services appear in the gateway directory and Home Assistant radio catalog.
+
+- **724 — SomaFM Sonic Universe**: Modern and avant-garde jazz. [Source](https://somafm.com/sonicuniverse/directstreamlinks.html).
+- **725 — Jazz24**: Jazz. [Source](https://www.jazz24.org/streaming-links/).
+- **726 — France Musique**: Classical music and cultural programmes. [Source](https://developers.radiofrance.fr/doc/tutorial-by-example/list-brands).
+- **727 — France Musique La Baroque**: Baroque and early music. [Source](https://www.radiofrance.com/presse/la-baroque-la-nouvelle-radio-thematique-de-france-musique).
+- **728 — SomaFM Groove Salad**: Ambient and downtempo. [Source](https://somafm.com/groovesalad/directstreamlinks.html).
+- **729 — SomaFM Drone Zone**: Ambient drone. [Source](https://somafm.com/dronezone/directstreamlinks.html).
+- **730 — SomaFM The Trip**: Progressive trance. [Source](https://somafm.com/thetrip/directstreamlinks.html).
+- **731 — BOBs Metallica**: Metallica artist channel. [Source](https://www.radiobob.de/metallica-stream).
+- **732 — BOBs Iron Maiden**: Iron Maiden artist channel. [Source](https://www.radiobob.de/iron-maiden-stream).
+- **733 — SomaFM Metal Detector**: Metal: doom, sludge, progressive, black and thrash. [Source](https://somafm.com/metal/).
+- **734 — BOBs Symphonic Metal**: Symphonic metal. [Source](https://www.radiobob.de/bobs-symphonic-metal-stream).
+- **735 — BOBs Death Metal**: Death metal. [Source](https://streams.radiobob.de/).
+
+**736 — RBC Radio** (`rbc`): Russian business news and talk, using the
+[station's live radio service](https://www.rbc.ru/story/radio).
+The HTTPS HLS entry point is `https://hls-01-rbc.hostingradio.ru/rbc/playlist.m3u8`.
+Session-specific playlist URLs are resolved at playback time, not saved in configuration.
+Dial **736** or run `cisco 212 736`.
+
+The same versioned catalog includes **714 Baroque**, **715 Radio Swiss Classic**,
+**716 Radio Swiss Jazz**, **705 Gothic** and **717 Sanctuary Dark Electro**.
+Enable the desired station IDs in the private site configuration.
+
+Metal Detector includes doom among several metal styles; it is not a doom-only
+channel. No dedicated working My Dying Bride or Darkseed stream was verified.
+To play those artists specifically from your configured MP3/FLAC library, use:
+
+```bash
+cisco 212 play "My Dying Bride"
+cisco 212 play "Darkseed"
+```
+
+These commands require matching local library files; see [music setup](cli-music.md).
+Radio playlists and artist selection remain controlled by the broadcasters.
+
+The updated shared TFTP template recognizes these numbers after a phone next
+loads its profile. With an older template, enter the number while on hook and
+press **Dial**, or use the CLI; a fleet reboot is not required for the server route.
+The configured handset hotline keeps its dedicated off-hook behavior.
+
+[Printable music reference](radio-reference.html) lists these channels in English.
+
+There is no station audio in this repository, archive, proxy endpoint, or
+download library. Use the original broadcasts under each provider's terms.
 Programmes, adverts and availability remain controlled by the broadcaster.
 
 ## Enable and verify
@@ -119,7 +175,10 @@ network, image or HA fields with an example:
       "soma-poptron", "radyo-viva", "deti-toddlers", "deti-lullabies", "deti-songs",
       "mega-dance", "kavkaz-hit", "europa-plus", "baroque", "swiss-classic",
       "swiss-jazz", "sanctuary-dark", "chante-france", "mix-1049", "rt1-black",
-      "radio-krasnodar", "white-noise"
+      "radio-krasnodar", "white-noise", "uvb76", "soma-sonic-universe", "jazz24",
+      "france-musique", "france-baroque", "soma-groove-salad", "soma-drone-zone", "soma-the-trip",
+      "bob-metallica", "bob-iron-maiden", "soma-metal", "bob-symphonic", "bob-death",
+      "rbc"
     ],
     "max_seconds": 1800,
     "max_calls": 2
@@ -156,7 +215,7 @@ python3 scripts/check_radio_streams.py --station echo
 ```
 
 The last command contacts one broadcaster and decodes a few seconds without
-placing a call or writing audio. `--all` explicitly probes all catalog entries (currently 22).
+placing a call or writing audio. `--all` explicitly probes all configured catalog stations.
 The command without an option lists the catalog and performs no network
 fetch. Diagnostics contain station IDs, PCM frame counts, signal peaks and
 success state, not redirect tokens, caller details, or raw stream content.

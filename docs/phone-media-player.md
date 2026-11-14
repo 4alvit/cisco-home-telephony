@@ -188,8 +188,8 @@ observed controls, human audio confirmations, and remaining test limitations.
 
 ## Expanded radio sources and mixed phone groups
 
-The [curated radio catalog](radio-and-alarms.md#station-numbers) assigns 701–722
-to 22 sources. A Cisco controlled player can select a catalog number or an
+The [curated radio catalog](radio-and-alarms.md#station-numbers) assigns 701–736
+to 36 sources. A Cisco controlled player can select a catalog number or an
 approved public HTTP(S) audio URL. Publish each new station in both the PBX
 radio selection and the gateway `services`/`dial_allowlist`; deploy the matching
 `radio.py` and catalog to both processes. Updating only the Home Assistant

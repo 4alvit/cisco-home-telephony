@@ -1,27 +1,498 @@
 {
   "verified_date": "2026-10-17",
   "stations": {
-    "matryoshka": {"extension": "701", "name": "Matryoshka Radio London", "genre": "Russian and international music", "url": "https://matryoshka.fm/stream", "hosts": ["matryoshka.fm"], "redirect_host_regex": "n[0-9]{2}-eu[0-9]\\.rcs\\.revma\\.com", "allow_http": true, "format": "mp3", "source": "https://matryoshka.fm/"},
-    "echo": {"extension": "702", "name": "Echo online", "genre": "Russian speech; current Echo service", "url": "https://edifchqufozvbegw.global.ssl.fastly.net/audio_echofm/stream", "hosts": ["edifchqufozvbegw.global.ssl.fastly.net"], "allow_http": false, "format": "mp3", "source": "https://echofm.online/"},
-    "bob-rock": {"extension": "703", "name": "RADIO BOB! Live", "genre": "Rock", "url": "https://streams.radiobob.de/bob-live/mp3-128/streams.radiobob.de/", "hosts": ["streams.radiobob.de", "regiocast.streamabc.net"], "allow_http": false, "format": "mp3", "source": "https://streams.radiobob.de/"},
-    "bob-metal": {"extension": "704", "name": "RADIO BOB! Metal", "genre": "Metal", "url": "https://streams.radiobob.de/bob-metal/mp3-128/streams.radiobob.de/", "hosts": ["streams.radiobob.de", "regiocast.streamabc.net"], "allow_http": false, "format": "mp3", "source": "https://streams.radiobob.de/bob-metal"},
-    "bob-gothic": {"extension": "705", "name": "RADIO BOB! Gothic", "genre": "Gothic rock", "url": "https://streams.radiobob.de/gothic/mp3-128/streams.radiobob.de/", "hosts": ["streams.radiobob.de", "regiocast.streamabc.net"], "allow_http": false, "format": "mp3", "source": "https://streams.radiobob.de/"},
-    "soma-poptron": {"extension": "706", "name": "SomaFM PopTron", "genre": "Electropop and indie dance rock", "url": "https://ice5.somafm.com/poptron-128-mp3", "hosts": ["ice5.somafm.com"], "allow_http": false, "format": "mp3", "source": "https://somafm.com/poptron/directstreamlinks.html"},
-    "radyo-viva": {"extension": "707", "name": "Radyo Viva", "genre": "Turkish music", "url": "https://listen.radyotvonline.net/hls/play/adsonline_radyoviva.m3u8", "hosts": ["listen.radyotvonline.net", "chunks.radyotvonline.net"], "allow_http": false, "format": "aac", "hls": true, "source": "https://www.radyoviva.com.tr/"},
-    "deti-toddlers": {"extension": "708", "name": "Deti FM: Toddlers", "genre": "Music for young children", "url": "https://101.ru/api/channel/getListServersChannel/327/channel/?dataFormat=json", "hosts": ["101.ru", "srv01.gpmradio.ru"], "allow_http": false, "format": "aac", "resolver": "gpm-channel", "channel_id": 327, "source": "https://detifm.ru/channel/327"},
-    "deti-lullabies": {"extension": "709", "name": "Deti FM: Lullabies", "genre": "Lullabies", "url": "https://101.ru/api/channel/getListServersChannel/95/channel/?dataFormat=json", "hosts": ["101.ru", "srv01.gpmradio.ru"], "allow_http": false, "format": "aac", "resolver": "gpm-channel", "channel_id": 95, "source": "https://detifm.ru/channel/95"},
-    "deti-songs": {"extension": "710", "name": "Deti FM: Kids songs", "genre": "Children's songs", "url": "https://101.ru/api/channel/getListServersChannel/93/channel/?dataFormat=json", "hosts": ["101.ru", "srv01.gpmradio.ru"], "allow_http": false, "format": "aac", "resolver": "gpm-channel", "channel_id": 93, "source": "https://detifm.ru/channel/93"},
-    "mega-dance": {"extension": "711", "name": "Mega Dance Radio", "genre": "Dance and electronic music", "url": "http://megadanceradio.hopto.org:8000/livemega.mp3", "hosts": ["megadanceradio.hopto.org"], "ports": {"http": [8000]}, "allow_http": true, "format": "mp3", "source": "https://www.megadanceradio.hu/"},
-    "kavkaz-hit": {"extension": "712", "name": "Kavkaz Hit", "genre": "Caucasus music", "url": "https://kavkazhit.hostingradio.ru:8017/kavkazhit96.mp3", "hosts": ["kavkazhit.hostingradio.ru"], "ports": {"https": [8017]}, "allow_http": false, "format": "mp3", "source": "https://kavkazhit.com/"},
-    "europa-plus": {"extension": "713", "name": "Europa Plus", "genre": "Pop and dance", "url": "http://ep256.hostingradio.ru:8052/europaplus256.mp3", "hosts": ["ep256.hostingradio.ru"], "ports": {"http": [8052]}, "allow_http": true, "format": "mp3", "source": "https://europaplus.ru/"},
-    "baroque": {"extension": "714", "name": "1.FM Baroque Music", "genre": "Baroque classical music", "url": "https://strm112.1.fm/baroque_mobile_mp3", "hosts": ["strm112.1.fm"], "allow_http": false, "format": "mp3", "source": "https://www.1.fm/station/baroque"},
-    "swiss-classic": {"extension": "715", "name": "Radio Swiss Classic", "genre": "Classical music", "url": "https://stream.srg-ssr.ch/srgssr/rsc_de/mp3/128", "hosts": ["stream.srg-ssr.ch"], "redirect_host_regex": "livestreaming-node-[0-9]+\\.srg-ssr\\.ch", "allow_http": false, "format": "mp3", "source": "https://www.radioswissclassic.ch/de/empfang/internet"},
-    "swiss-jazz": {"extension": "716", "name": "Radio Swiss Jazz", "genre": "Jazz, blues and soul", "url": "https://stream.srg-ssr.ch/srgssr/rsj/mp3/128", "hosts": ["stream.srg-ssr.ch"], "redirect_host_regex": "livestreaming-node-[0-9]+\\.srg-ssr\\.ch", "allow_http": false, "format": "mp3", "source": "https://www.radioswissjazz.ch/de/empfang/internet"},
-    "sanctuary-dark": {"extension": "717", "name": "Sanctuary Dark Electro", "genre": "Dark electro, industrial and EBM", "url": "https://stream.sanctuaryradio.com/mainchannel_hq", "hosts": ["stream.sanctuaryradio.com"], "allow_http": false, "format": "mp3", "source": "https://www.sanctuaryradio.com/site/mainlisten.html"},
-    "chante-france": {"extension": "718", "name": "Chante France", "genre": "French popular music", "url": "https://stream1.chantefrance.com/stream_chante_france.mp3", "hosts": ["stream1.chantefrance.com", "chantefrance.ice.infomaniak.ch"], "allow_http": false, "format": "mp3", "source": "https://www.chantefrance.com/"},
-    "mix-1049": {"extension": "719", "name": "Mix 104.9 Darwin", "genre": "Popular music", "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/DAR_MIX1049.mp3", "hosts": ["playerservices.streamtheworld.com"], "redirect_host_regex": "[0-9]{3,6}\\.live\\.streamtheworld\\.com", "allow_http": false, "format": "mp3", "source": "https://www.mix1049.com.au/"},
-    "rt1-black": {"extension": "720", "name": "RT1 Black Beats", "genre": "Hip-hop and R&B", "url": "https://rt1.radio/lbpmm", "hosts": ["rt1.radio", "frontend.streamonkey.net"], "redirect_host_regex": "edge[0-9]{2}\\.streamonkey\\.net", "allow_http": false, "format": "mp3", "source": "https://rt1.radio/"},
-    "radio-krasnodar": {"extension": "721", "name": "Radio Krasnodar 107", "genre": "Popular music", "url": "http://62.183.34.109:8000/radio107_256.mp3", "hosts": ["62.183.34.109"], "ports": {"http": [8000]}, "allow_http": true, "format": "mp3", "source": "https://radio107.ru/"},
-    "white-noise": {"extension": "722", "name": "White noise", "genre": "Continuous white noise recording", "url": "https://archive.org/download/whitenoise12hours/White%20Noise%2012%20Hours.mp3", "hosts": ["archive.org"], "redirect_host_regex": "(?:ia|dn)[0-9]{6}\\.(?:us|ca)\\.archive\\.org", "allow_http": false, "format": "mp3", "source": "https://archive.org/details/whitenoise12hours"}
+    "matryoshka": {
+      "extension": "701",
+      "name": "Matryoshka Radio London",
+      "genre": "Russian and international music",
+      "url": "https://matryoshka.fm/stream",
+      "hosts": [
+        "matryoshka.fm"
+      ],
+      "redirect_host_regex": "n[0-9]{2}-eu[0-9]\\.rcs\\.revma\\.com",
+      "allow_http": true,
+      "format": "mp3",
+      "source": "https://matryoshka.fm/"
+    },
+    "echo": {
+      "extension": "702",
+      "name": "Echo online",
+      "genre": "Russian speech; current Echo service",
+      "url": "https://edifchqufozvbegw.global.ssl.fastly.net/audio_echofm/stream",
+      "hosts": [
+        "edifchqufozvbegw.global.ssl.fastly.net"
+      ],
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://echofm.online/"
+    },
+    "bob-rock": {
+      "extension": "703",
+      "name": "RADIO BOB! Live",
+      "genre": "Rock",
+      "url": "https://streams.radiobob.de/bob-live/mp3-128/streams.radiobob.de/",
+      "hosts": [
+        "streams.radiobob.de",
+        "regiocast.streamabc.net"
+      ],
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://streams.radiobob.de/"
+    },
+    "bob-metal": {
+      "extension": "704",
+      "name": "RADIO BOB! Metal",
+      "genre": "Metal",
+      "url": "https://streams.radiobob.de/bob-metal/mp3-128/streams.radiobob.de/",
+      "hosts": [
+        "streams.radiobob.de",
+        "regiocast.streamabc.net"
+      ],
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://streams.radiobob.de/bob-metal"
+    },
+    "bob-gothic": {
+      "extension": "705",
+      "name": "RADIO BOB! Gothic",
+      "genre": "Gothic rock",
+      "url": "https://streams.radiobob.de/gothic/mp3-128/streams.radiobob.de/",
+      "hosts": [
+        "streams.radiobob.de",
+        "regiocast.streamabc.net"
+      ],
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://streams.radiobob.de/"
+    },
+    "soma-poptron": {
+      "extension": "706",
+      "name": "SomaFM PopTron",
+      "genre": "Electropop and indie dance rock",
+      "url": "https://ice5.somafm.com/poptron-128-mp3",
+      "hosts": [
+        "ice5.somafm.com"
+      ],
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://somafm.com/poptron/directstreamlinks.html"
+    },
+    "radyo-viva": {
+      "extension": "707",
+      "name": "Radyo Viva",
+      "genre": "Turkish music",
+      "url": "https://listen.radyotvonline.net/hls/play/adsonline_radyoviva.m3u8",
+      "hosts": [
+        "listen.radyotvonline.net",
+        "chunks.radyotvonline.net"
+      ],
+      "allow_http": false,
+      "format": "aac",
+      "hls": true,
+      "source": "https://www.radyoviva.com.tr/"
+    },
+    "deti-toddlers": {
+      "extension": "708",
+      "name": "Deti FM: Toddlers",
+      "genre": "Music for young children",
+      "url": "https://101.ru/api/channel/getListServersChannel/327/channel/?dataFormat=json",
+      "hosts": [
+        "101.ru",
+        "srv01.gpmradio.ru"
+      ],
+      "allow_http": false,
+      "format": "aac",
+      "resolver": "gpm-channel",
+      "channel_id": 327,
+      "source": "https://detifm.ru/channel/327"
+    },
+    "deti-lullabies": {
+      "extension": "709",
+      "name": "Deti FM: Lullabies",
+      "genre": "Lullabies",
+      "url": "https://101.ru/api/channel/getListServersChannel/95/channel/?dataFormat=json",
+      "hosts": [
+        "101.ru",
+        "srv01.gpmradio.ru"
+      ],
+      "allow_http": false,
+      "format": "aac",
+      "resolver": "gpm-channel",
+      "channel_id": 95,
+      "source": "https://detifm.ru/channel/95"
+    },
+    "deti-songs": {
+      "extension": "710",
+      "name": "Deti FM: Kids songs",
+      "genre": "Children's songs",
+      "url": "https://101.ru/api/channel/getListServersChannel/93/channel/?dataFormat=json",
+      "hosts": [
+        "101.ru",
+        "srv01.gpmradio.ru"
+      ],
+      "allow_http": false,
+      "format": "aac",
+      "resolver": "gpm-channel",
+      "channel_id": 93,
+      "source": "https://detifm.ru/channel/93"
+    },
+    "mega-dance": {
+      "extension": "711",
+      "name": "Mega Dance Radio",
+      "genre": "Dance and electronic music",
+      "url": "http://megadanceradio.hopto.org:8000/livemega.mp3",
+      "hosts": [
+        "megadanceradio.hopto.org"
+      ],
+      "ports": {
+        "http": [
+          8000
+        ]
+      },
+      "allow_http": true,
+      "format": "mp3",
+      "source": "https://www.megadanceradio.hu/"
+    },
+    "kavkaz-hit": {
+      "extension": "712",
+      "name": "Kavkaz Hit",
+      "genre": "Caucasus music",
+      "url": "https://kavkazhit.hostingradio.ru:8017/kavkazhit96.mp3",
+      "hosts": [
+        "kavkazhit.hostingradio.ru"
+      ],
+      "ports": {
+        "https": [
+          8017
+        ]
+      },
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://kavkazhit.com/"
+    },
+    "europa-plus": {
+      "extension": "713",
+      "name": "Europa Plus",
+      "genre": "Pop and dance",
+      "url": "http://ep256.hostingradio.ru:8052/europaplus256.mp3",
+      "hosts": [
+        "ep256.hostingradio.ru"
+      ],
+      "ports": {
+        "http": [
+          8052
+        ]
+      },
+      "allow_http": true,
+      "format": "mp3",
+      "source": "https://europaplus.ru/"
+    },
+    "baroque": {
+      "extension": "714",
+      "name": "1.FM Baroque Music",
+      "genre": "Baroque classical music",
+      "url": "https://strm112.1.fm/baroque_mobile_mp3",
+      "hosts": [
+        "strm112.1.fm"
+      ],
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://www.1.fm/station/baroque"
+    },
+    "swiss-classic": {
+      "extension": "715",
+      "name": "Radio Swiss Classic",
+      "genre": "Classical music",
+      "url": "https://stream.srg-ssr.ch/srgssr/rsc_de/mp3/128",
+      "hosts": [
+        "stream.srg-ssr.ch"
+      ],
+      "redirect_host_regex": "livestreaming-node-[0-9]+\\.srg-ssr\\.ch",
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://www.radioswissclassic.ch/de/empfang/internet"
+    },
+    "swiss-jazz": {
+      "extension": "716",
+      "name": "Radio Swiss Jazz",
+      "genre": "Jazz, blues and soul",
+      "url": "https://stream.srg-ssr.ch/srgssr/rsj/mp3/128",
+      "hosts": [
+        "stream.srg-ssr.ch"
+      ],
+      "redirect_host_regex": "livestreaming-node-[0-9]+\\.srg-ssr\\.ch",
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://www.radioswissjazz.ch/de/empfang/internet"
+    },
+    "sanctuary-dark": {
+      "extension": "717",
+      "name": "Sanctuary Dark Electro",
+      "genre": "Dark electro, industrial and EBM",
+      "url": "https://stream.sanctuaryradio.com/mainchannel_hq",
+      "hosts": [
+        "stream.sanctuaryradio.com"
+      ],
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://www.sanctuaryradio.com/site/mainlisten.html"
+    },
+    "chante-france": {
+      "extension": "718",
+      "name": "Chante France",
+      "genre": "French popular music",
+      "url": "https://stream1.chantefrance.com/stream_chante_france.mp3",
+      "hosts": [
+        "stream1.chantefrance.com",
+        "chantefrance.ice.infomaniak.ch"
+      ],
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://www.chantefrance.com/"
+    },
+    "mix-1049": {
+      "extension": "719",
+      "name": "Mix 104.9 Darwin",
+      "genre": "Popular music",
+      "url": "https://playerservices.streamtheworld.com/api/livestream-redirect/DAR_MIX1049.mp3",
+      "hosts": [
+        "playerservices.streamtheworld.com"
+      ],
+      "redirect_host_regex": "[0-9]{3,6}\\.live\\.streamtheworld\\.com",
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://www.mix1049.com.au/"
+    },
+    "rt1-black": {
+      "extension": "720",
+      "name": "RT1 Black Beats",
+      "genre": "Hip-hop and R&B",
+      "url": "https://rt1.radio/lbpmm",
+      "hosts": [
+        "rt1.radio",
+        "frontend.streamonkey.net"
+      ],
+      "redirect_host_regex": "edge[0-9]{2}\\.streamonkey\\.net",
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://rt1.radio/"
+    },
+    "radio-krasnodar": {
+      "extension": "721",
+      "name": "Radio Krasnodar 107",
+      "genre": "Popular music",
+      "url": "http://62.183.34.109:8000/radio107_256.mp3",
+      "hosts": [
+        "62.183.34.109"
+      ],
+      "ports": {
+        "http": [
+          8000
+        ]
+      },
+      "allow_http": true,
+      "format": "mp3",
+      "source": "https://radio107.ru/"
+    },
+    "white-noise": {
+      "extension": "722",
+      "name": "White noise",
+      "genre": "Continuous white noise recording",
+      "url": "https://archive.org/download/whitenoise12hours/White%20Noise%2012%20Hours.mp3",
+      "hosts": [
+        "archive.org"
+      ],
+      "redirect_host_regex": "(?:ia|dn)[0-9]{6}\\.(?:us|ca)\\.archive\\.org",
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://archive.org/details/whitenoise12hours"
+    },
+    "uvb76": {
+      "extension": "723",
+      "name": "UVB-76 (The Buzzer)",
+      "genre": "Shortwave monitor: tones and occasional voice",
+      "url": "https://www.uvb76radio.ru/radio",
+      "hosts": [
+        "www.uvb76radio.ru"
+      ],
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://radiopotok.ru/radio/620",
+      "verified_date": "2026-11-12"
+    },
+    "soma-sonic-universe": {
+      "extension": "724",
+      "name": "SomaFM Sonic Universe",
+      "genre": "Modern and avant-garde jazz",
+      "url": "https://ice5.somafm.com/sonicuniverse-128-mp3",
+      "hosts": [
+        "ice5.somafm.com"
+      ],
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://somafm.com/sonicuniverse/directstreamlinks.html",
+      "verified_date": "2026-11-13"
+    },
+    "jazz24": {
+      "extension": "725",
+      "name": "Jazz24",
+      "genre": "Jazz",
+      "url": "https://knkx-live-a.edge.audiocdn.com/6285_128k",
+      "hosts": [
+        "knkx-live-a.edge.audiocdn.com"
+      ],
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://www.jazz24.org/streaming-links/",
+      "verified_date": "2026-11-13"
+    },
+    "france-musique": {
+      "extension": "726",
+      "name": "France Musique",
+      "genre": "Classical music and cultural programmes",
+      "url": "https://icecast.radiofrance.fr/francemusique-midfi.mp3",
+      "hosts": [
+        "icecast.radiofrance.fr"
+      ],
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://developers.radiofrance.fr/doc/tutorial-by-example/list-brands",
+      "verified_date": "2026-11-13"
+    },
+    "france-baroque": {
+      "extension": "727",
+      "name": "France Musique La Baroque",
+      "genre": "Baroque and early music",
+      "url": "https://icecast.radiofrance.fr/francemusiquebaroque-hifi.aac",
+      "hosts": [
+        "icecast.radiofrance.fr"
+      ],
+      "allow_http": false,
+      "format": "aac",
+      "source": "https://www.radiofrance.com/presse/la-baroque-la-nouvelle-radio-thematique-de-france-musique",
+      "verified_date": "2026-11-13"
+    },
+    "soma-groove-salad": {
+      "extension": "728",
+      "name": "SomaFM Groove Salad",
+      "genre": "Ambient and downtempo",
+      "url": "https://ice5.somafm.com/groovesalad-128-mp3",
+      "hosts": [
+        "ice5.somafm.com"
+      ],
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://somafm.com/groovesalad/directstreamlinks.html",
+      "verified_date": "2026-11-13"
+    },
+    "soma-drone-zone": {
+      "extension": "729",
+      "name": "SomaFM Drone Zone",
+      "genre": "Ambient drone",
+      "url": "https://ice5.somafm.com/dronezone-128-mp3",
+      "hosts": [
+        "ice5.somafm.com"
+      ],
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://somafm.com/dronezone/directstreamlinks.html",
+      "verified_date": "2026-11-13"
+    },
+    "soma-the-trip": {
+      "extension": "730",
+      "name": "SomaFM The Trip",
+      "genre": "Progressive trance",
+      "url": "https://ice5.somafm.com/thetrip-128-mp3",
+      "hosts": [
+        "ice5.somafm.com"
+      ],
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://somafm.com/thetrip/directstreamlinks.html",
+      "verified_date": "2026-11-13"
+    },
+    "bob-metallica": {
+      "extension": "731",
+      "name": "BOBs Metallica",
+      "genre": "Metallica artist channel",
+      "url": "https://streams.radiobob.de/metallica/mp3-192/streams.radiobob.de/",
+      "hosts": [
+        "streams.radiobob.de",
+        "regiocast.streamabc.net"
+      ],
+      "format": "mp3",
+      "allow_http": false,
+      "source": "https://www.radiobob.de/metallica-stream",
+      "verified_date": "2026-11-13"
+    },
+    "bob-iron-maiden": {
+      "extension": "732",
+      "name": "BOBs Iron Maiden",
+      "genre": "Iron Maiden artist channel",
+      "url": "https://streams.radiobob.de/bob-ironmaiden/mp3-192/streams.radiobob.de/",
+      "hosts": [
+        "streams.radiobob.de",
+        "regiocast.streamabc.net"
+      ],
+      "format": "mp3",
+      "allow_http": false,
+      "source": "https://www.radiobob.de/iron-maiden-stream",
+      "verified_date": "2026-11-13"
+    },
+    "soma-metal": {
+      "extension": "733",
+      "name": "SomaFM Metal Detector",
+      "genre": "Metal: doom, sludge, progressive, black and thrash",
+      "url": "https://ice6.somafm.com/metal-128-aac",
+      "hosts": [
+        "ice6.somafm.com"
+      ],
+      "format": "aac",
+      "allow_http": false,
+      "source": "https://somafm.com/metal/",
+      "verified_date": "2026-11-13"
+    },
+    "bob-symphonic": {
+      "extension": "734",
+      "name": "BOBs Symphonic Metal",
+      "genre": "Symphonic metal",
+      "url": "https://streams.radiobob.de/symphmetal/mp3-192/streams.radiobob.de/",
+      "hosts": [
+        "streams.radiobob.de",
+        "regiocast.streamabc.net"
+      ],
+      "format": "mp3",
+      "allow_http": false,
+      "source": "https://www.radiobob.de/bobs-symphonic-metal-stream",
+      "verified_date": "2026-11-13"
+    },
+    "bob-death": {
+      "extension": "735",
+      "name": "BOBs Death Metal",
+      "genre": "Death metal",
+      "url": "https://streams.radiobob.de/deathmetal/mp3-192/streams.radiobob.de/",
+      "hosts": [
+        "streams.radiobob.de",
+        "regiocast.streamabc.net"
+      ],
+      "format": "mp3",
+      "allow_http": false,
+      "source": "https://streams.radiobob.de/",
+      "verified_date": "2026-11-13"
+    },
+    "rbc": {
+      "extension": "736",
+      "name": "RBC Radio",
+      "genre": "Russian business news and talk",
+      "url": "https://hls-01-rbc.hostingradio.ru/rbc/playlist.m3u8",
+      "hosts": [
+        "hls-01-rbc.hostingradio.ru"
+      ],
+      "allow_http": false,
+      "format": "aac",
+      "hls": true,
+      "source": "https://www.rbc.ru/story/radio",
+      "verified_date": "2026-11-13"
+    }
   }
 }
