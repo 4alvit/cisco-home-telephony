@@ -10,7 +10,7 @@ numbers. All features on this page are disabled unless explicitly enabled.
 
 ## Printable reference
 
-The [four-page English phone reference](../output/pdf/cisco-phone-reference.pdf)
+The [English phone reference](../output/pdf/cisco-phone-reference.pdf)
 contains the generic phone-number layout, radio stations, Home Assistant
 controls, the optional **621** incoming group and **641** saved-alarm toggle,
 and optional external test routes including **803** The Test Call. Optional
@@ -21,7 +21,7 @@ personal device names. Check `cisco directory` for the current private catalog.
 Rebuild it from the repository root with Python and ReportLab:
 
 ```bash
-python3 scripts/build-phone-reference.py
+python3 scripts/build-phone-reference.py --html-output docs/radio-reference.html
 ```
 
 See [phone services](phone-services.md) for 621/641 setup and
@@ -40,14 +40,14 @@ dialing are unchanged.
 ## Station numbers
 
 The versioned [catalog](../containers/asterisk/radio-catalog.json) contains the
-stream entry points and the exact host policies. The broadcaster pages below
-are the sources, not third-party stream aggregators. Each station was decoded
-to nonzero 8 kHz PCM by the real worker on **2026-10-17**; availability can change.
+stream entry points and the exact host policies. The source pages below identify each stream. Stations 701–710 were decoded
+by the real worker on **2026-10-17**; later additions have separate verification
+dates. The current worker outputs 16 kHz PCM; availability can change.
 
 - **701 — Matryoshka Radio London** (`matryoshka`), Russian-language music and
   programmes. [Official station](https://matryoshka.fm/). Its HTTPS entry point
-  redirects to rotating `nNN-euN.rcs.revma.com` HTTP nodes. This is the only
-  catalog entry that permits HTTP; transport integrity is consequently weaker.
+  redirects to rotating `nNN-euN.rcs.revma.com` HTTP nodes. HTTP transport
+  has weaker integrity than HTTPS.
   The catalog restricts that hostname pattern and checks every resolved IP.
 - **702 — Echo online** (`echo`), Russian-language talk/news.
   [Official Echo](https://echofm.online/). This is the current online service,
@@ -78,6 +78,85 @@ has programmes for older children. All three routes are deployed with the
 updated worker and private station selection, and are available as named
 destinations in Home Assistant.
 
+The expanded catalog also includes these opt-in destinations:
+
+- **711 — Mega Dance Radio** (`mega-dance`), [official station](https://www.megadanceradio.hu/).
+- **712 — Kavkaz Hit** (`kavkaz-hit`), [official station and embedded player](https://kavkazhit.com/).
+- **713 — Europa Plus** (`europa-plus`), [official station](https://europaplus.ru/).
+- **714 — 1.FM Baroque Music** (`baroque`), [station page](https://www.1.fm/station/baroque).
+- **715 — Radio Swiss Classic** (`swiss-classic`), [official stream directory](https://www.radioswissclassic.ch/de/empfang/internet).
+- **716 — Radio Swiss Jazz** (`swiss-jazz`), [official stream directory](https://www.radioswissjazz.ch/de/empfang/internet).
+- **717 — Sanctuary Dark Electro** (`sanctuary-dark`), [official listening page](https://www.sanctuaryradio.com/site/mainlisten.html).
+- **718 — Chante France** (`chante-france`), [official station](https://www.chantefrance.com/).
+- **719 — Mix 104.9 Darwin** (`mix-1049`), [official station](https://www.mix1049.com.au/).
+- **720 — RT1 Black Beats** (`rt1-black`), [official player](https://rt1.radio/).
+- **721 — Radio Krasnodar 107** (`radio-krasnodar`), [official station](https://radio107.ru/).
+- **722 — White noise** (`white-noise`), a finite [12-hour recording](https://archive.org/details/whitenoise12hours), subject to the same shorter call limit as radio.
+
+Mega Dance, Europa Plus and Radio Krasnodar require plain HTTP, respectively
+on ports 8000, 8052 and 8000; Kavkaz Hit uses HTTPS on 8017. These are exact
+per-station exceptions in the reviewed catalog. Adding a port does not allow
+other hosts, local addresses, credentials in a URL, or HTTPS downgrades.
+Every redirect is checked again. Normal stations remain limited to their
+scheme's default port. RT1 uses both `frontend.streamonkey.net` and its narrowly
+matched edge hosts; permitting only the final edge breaks some requests.
+
+
+**723 — UVB-76 (The Buzzer)** (`uvb76`) is the public shortwave-monitor
+relay linked by [Radiopotok](https://radiopotok.ru/radio/620), served by
+[UVB-76 Radio](https://www.uvb76radio.ru/). Its direct HTTPS MP3 stream is
+`https://www.uvb76radio.ru/radio`. Expect the repeated buzzer, radio noise and
+occasional voice messages, rather than music. This is a third-party Internet
+relay, not an official military service or a guarantee of an uninterrupted
+shortwave feed. It was checked separately on **2026-11-12**.
+
+## Expanded music channels
+
+Added on **2026-11-13**. Dial a number directly or use `cisco 212 NUMBER`.
+The same enabled services appear in the gateway directory and Home Assistant radio catalog.
+
+- **724 — SomaFM Sonic Universe**: Modern and avant-garde jazz. [Source](https://somafm.com/sonicuniverse/directstreamlinks.html).
+- **725 — Jazz24**: Jazz. [Source](https://www.jazz24.org/streaming-links/).
+- **726 — France Musique**: Classical music and cultural programmes. [Source](https://developers.radiofrance.fr/doc/tutorial-by-example/list-brands).
+- **727 — France Musique La Baroque**: Baroque and early music. [Source](https://www.radiofrance.com/presse/la-baroque-la-nouvelle-radio-thematique-de-france-musique).
+- **728 — SomaFM Groove Salad**: Ambient and downtempo. [Source](https://somafm.com/groovesalad/directstreamlinks.html).
+- **729 — SomaFM Drone Zone**: Ambient drone. [Source](https://somafm.com/dronezone/directstreamlinks.html).
+- **730 — SomaFM The Trip**: Progressive trance. [Source](https://somafm.com/thetrip/directstreamlinks.html).
+- **731 — BOBs Metallica**: Metallica artist channel. [Source](https://www.radiobob.de/metallica-stream).
+- **732 — BOBs Iron Maiden**: Iron Maiden artist channel. [Source](https://www.radiobob.de/iron-maiden-stream).
+- **733 — SomaFM Metal Detector**: Metal: doom, sludge, progressive, black and thrash. [Source](https://somafm.com/metal/).
+- **734 — BOBs Symphonic Metal**: Symphonic metal. [Source](https://www.radiobob.de/bobs-symphonic-metal-stream).
+- **735 — BOBs Death Metal**: Death metal. [Source](https://streams.radiobob.de/).
+
+**736 — RBC Radio** (`rbc`): Russian business news and talk, using the
+[station's live radio service](https://www.rbc.ru/story/radio).
+The HTTPS HLS entry point is `https://hls-01-rbc.hostingradio.ru/rbc/playlist.m3u8`.
+Session-specific playlist URLs are resolved at playback time, not saved in configuration.
+Dial **736** or run `cisco 212 736`.
+
+The same versioned catalog includes **714 Baroque**, **715 Radio Swiss Classic**,
+**716 Radio Swiss Jazz**, **705 Gothic** and **717 Sanctuary Dark Electro**.
+Enable the desired station IDs in the private site configuration.
+
+Metal Detector includes doom among several metal styles; it is not a doom-only
+channel. No dedicated working My Dying Bride or Darkseed stream was verified.
+To play those artists specifically from your configured MP3/FLAC library, use:
+
+```bash
+cisco 212 play "My Dying Bride"
+cisco 212 play "Darkseed"
+```
+
+These commands require matching local library files; see [music setup](cli-music.md).
+Radio playlists and artist selection remain controlled by the broadcasters.
+
+The updated shared TFTP template recognizes these numbers after a phone next
+loads its profile. With an older template, enter the number while on hook and
+press **Dial**, or use the CLI; a fleet reboot is not required for the server route.
+The configured handset hotline keeps its dedicated off-hook behavior.
+
+[Printable music reference](radio-reference.html) lists these channels in English.
+
 There is no station audio in this repository, archive, proxy endpoint, or
 download library. Use the original broadcasts under each provider's terms.
 Programmes, adverts and availability remain controlled by the broadcaster.
@@ -91,7 +170,16 @@ network, image or HA fields with an example:
 {
   "radio": {
     "enabled": true,
-    "stations": ["matryoshka", "echo", "bob-rock", "bob-metal", "bob-gothic", "soma-poptron", "radyo-viva", "deti-toddlers", "deti-lullabies", "deti-songs"],
+    "stations": [
+      "matryoshka", "echo", "bob-rock", "bob-metal", "bob-gothic",
+      "soma-poptron", "radyo-viva", "deti-toddlers", "deti-lullabies", "deti-songs",
+      "mega-dance", "kavkaz-hit", "europa-plus", "baroque", "swiss-classic",
+      "swiss-jazz", "sanctuary-dark", "chante-france", "mix-1049", "rt1-black",
+      "radio-krasnodar", "white-noise", "uvb76", "soma-sonic-universe", "jazz24",
+      "france-musique", "france-baroque", "soma-groove-salad", "soma-drone-zone", "soma-the-trip",
+      "bob-metallica", "bob-iron-maiden", "soma-metal", "bob-symphonic", "bob-death",
+      "rbc"
+    ],
     "max_seconds": 1800,
     "max_calls": 2
   },
@@ -127,7 +215,7 @@ python3 scripts/check_radio_streams.py --station echo
 ```
 
 The last command contacts one broadcaster and decodes a few seconds without
-placing a call or writing audio. `--all` explicitly probes all ten stations.
+placing a call or writing audio. `--all` explicitly probes all configured catalog stations.
 The command without an option lists the catalog and performs no network
 fetch. Diagnostics contain station IDs, PCM frame counts, signal peaks and
 success state, not redirect tokens, caller details, or raw stream content.
@@ -141,7 +229,7 @@ for immediate number recognition. That step need not change their firmware
 or credentials. Keep the per-phone source guards and normal
 [provisioning cleanup](adding-phones.md) procedure.
 
-Before that optional template refresh, use **on-hook predial** for 708–710:
+Before that optional template refresh, use **on-hook predial** for new numbers:
 leave the handset down and Speaker/Headset off, enter the complete number,
 then press the **Dial** softkey. Do not press a line key first. Cisco documents
 this procedure in the [7945G/7965G user guide](https://www.cisco.com/en/US/docs/voice_ip_comm/cuipph/7965g_7945g/6_1/english/user/guide/65enu61.pdf)
@@ -164,6 +252,22 @@ idle window. The generator removes stale runtime radio configuration and
 routes. Do not remove or regenerate unrelated secret files.
 
 ## Live network verification
+
+On **2026-11-02**, all twelve added stations (711–722) produced 201 nonzero
+16 kHz PCM frames each in passive tests using the candidate worker from the
+running PBX network. Every decoder exited and every worker stopped. Mega Dance
+initially passed only after another DNS lookup; subsequent diagnosis found
+inconsistent upstream DNS/security-filter answers, so that result does not
+establish reliable playback for this station. See the DNS troubleshooting note
+below. RT1 initially exposed an additional
+redirect host; its exact official frontend was added before the successful run.
+The expanded catalog and worker were then deployed to both PBX and gateway
+using immutable code/configuration resources. Both became Ready, their file
+hashes matched the reviewed source, all twelve routes were loaded, and the
+gateway published 22 radio destinations while retaining the four-player limit.
+These checks created no phone calls and do not claim audible output on every
+physical endpoint. The existing dated checks below retain their narrower scope.
+
 
 On **2026-10-17**, all seven catalog stations also passed a passive probe inside
 our running Asterisk pod, using its installed worker and FFmpeg 5.1.9. Each
@@ -217,8 +321,10 @@ public/private address results. It connects to the checked address, verifies
 TLS hostname/certificate where HTTPS is used, and validates up to three
 redirects against the station's immutable host policy. Site configuration
 cannot add URLs or hosts. The HTTP client does not use proxy environment
-variables. Outbound DNS and TCP 443 are needed; Matryoshka additionally needs
-TCP 80 to its approved CDN. Do not open inbound internet ports.
+variables. Outbound DNS and TCP 443 are needed. HTTP stations additionally need
+TCP 80, 8000 or 8052 as listed above, and Kavkaz Hit needs TCP 8017. The worker
+connects to the catalog-approved port, including its explicit HTTP Host port;
+it never falls back silently to port 80/443. Do not open inbound internet ports.
 
 FFmpeg receives audio bytes on standard input with its protocol whitelist set
 to `pipe`, a fixed MP3/AAC demuxer and no shell. It cannot follow a playlist URL
@@ -246,6 +352,27 @@ This uses Asterisk's [AudioSocket channel driver](https://github.com/asterisk/as
 [AudioSocket framing](https://docs.asterisk.org/Configuration/Channel-Drivers/AudioSocket/)
 and [AGI application](https://docs.asterisk.org/Asterisk_22_Documentation/API_Documentation/Dialplan_Applications/AGI/),
 plus FFmpeg's [protocol whitelist and pipe protocol](https://ffmpeg.org/ffmpeg-protocols.html).
+
+### Intermittent DNS or early playback failure
+
+A station can pass a one-off PCM probe and still fail on the next request with
+`socket.gaierror` / `EAI_NONAME`. In a multi-node cluster, compare A, AAAA and
+CNAME answers from each DNS backend and its upstream resolver. One path may
+return the broadcaster's address while another returns a security sinkhole or
+no usable address. Check the failing workload's resolver configuration rather
+than assuming a successful lookup from another host proves the path is healthy.
+
+An AGI process completing with exit status zero also does not prove playback:
+check `RADIOSTATUS`, decoded frames and the AudioSocket lifetime. A connection
+that closes before audio arrives can indicate a source-resolution failure even
+when the local port, codec and phone registration are working.
+
+Preserve the station's hostname policy, checked-address connection and TLS
+verification. Do not hardcode a working IP, disable TLS, switch resolvers or
+retry until a security filter is bypassed. Investigate the upstream discrepancy
+through the network's normal administration process; meanwhile mark the
+station unreliable. A replacement broadcaster URL needs independent verification
+against its official site and the same policy checks before deployment.
 
 ## Timers and weekday alarms: ring until manually stopped
 

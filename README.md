@@ -249,7 +249,7 @@ staging on the node and acceptance checks.
 The starter template uses example extensions **201–210**; the installed two-line
 fleet uses the allocation above. **600** is echo, **601** is a test tone, and
 **620** rings the group. With HA integration enabled, **630** reaches Home
-Assistant Assist. Optional **640** plays bounded alarm audio, and **701-710**
+Assistant Assist. Optional **640** plays bounded alarm audio, and **701-736**
 select internet radio when enabled. External SIP profiles are disabled by
 default; there are no unrestricted PSTN routes, voicemail or emergency calls. Use a working external phone service for emergency calls.
 
