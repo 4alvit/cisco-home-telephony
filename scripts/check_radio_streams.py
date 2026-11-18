@@ -22,12 +22,14 @@ def probe(name):
     thread = threading.Thread(target=call.serve, args=(listener,), daemon=True)
     thread.start()
     frames = peak = 0
+    clean_end = False
     try:
         with socket.create_connection(listener.getsockname(), timeout=20) as conn:
             conn.sendall(b"\x01\x00\x10" + token.bytes)
             while True:
                 kind, data = radio.receive_frame(conn)
                 if kind == 0:
+                    clean_end = not data
                     break
                 if kind != radio.AUDIO_KIND or len(data) != radio.FRAME_BYTES:
                     raise ValueError("unexpected audio frame")
@@ -35,7 +37,7 @@ def probe(name):
                 peak = max(peak, max(abs(x) for x in struct.unpack(
                     "<" + "h" * radio.FRAME_SAMPLES, data)))
     except (OSError, EOFError, ValueError):
-        # Partial probe failures keep measured frames; acceptance also requires audio and reaped workers.
+        # Preserve measurements for diagnosis without accepting a partial probe.
         pass
     finally:
         call.close(); listener.close(); thread.join(timeout=3)
@@ -44,7 +46,9 @@ def probe(name):
     return {"station": name, "decoded_frames": frames, "peak": peak,
             "sample_rate": radio.SAMPLE_RATE,
             "decoder_reaped": decoder_reaped, "worker_stopped": worker_stopped,
-            "passed": frames >= 25 and peak > 0 and decoder_reaped and worker_stopped}
+            "clean_end": clean_end, "stream_failed": call.failed,
+            "passed": (clean_end and not call.failed and frames >= 25 and peak > 0
+                       and decoder_reaped and worker_stopped)}
 
 
 def main():

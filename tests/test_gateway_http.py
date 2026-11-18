@@ -105,6 +105,29 @@ class HTTPTests(unittest.TestCase):
             self.assertEqual(self.request(self.api, '/v1/phones/201/dial', 'POST', b'{}', headers)[0], 400)
             mutate.assert_not_called()
 
+    def test_mutation_rejects_ambiguous_and_excessively_nested_json(self):
+        headers = {'Authorization': 'Bearer ' + config()['api_token'], 'Content-Type': 'application/json'}
+        with patch.object(self.gateway, 'mutate') as mutate:
+            for body in ('{"number":"600","number":"736"}',
+                         '{"metadata":{"title":"First","title":"Second"}}',
+                         '{"extra":' + '[' * 24 + 'null' + ']' * 24 + '}',
+                         '{"extra":' + '[' * 3000 + 'null' + ']' * 3000 + '}'):
+                with self.subTest(length=len(body)):
+                    status, raw, _ = self.request(self.api, '/v1/phones/201/dial', 'POST', body, headers)
+                    self.assertEqual((status, json.loads(raw)['reason']), (400, 'invalid_json'))
+            mutate.assert_not_called()
+
+    def test_existing_duplicate_error_reason_remains_compatible(self):
+        headers = {'Authorization': 'Bearer ' + config()['api_token'], 'Content-Type': 'application/json'}
+        with patch.object(self.gateway, 'voice_request') as voice, \
+                patch.object(self.gateway, 'endpoint_mutate') as endpoint:
+            for path in ('/v1/phones/201/voice_start', '/v1/endpoints/222/call'):
+                with self.subTest(path=path):
+                    status, raw, _ = self.request(self.api, path, 'POST', '{"a":1,"a":2}', headers)
+                    self.assertEqual((status, json.loads(raw)['reason']), (400, 'invalid_voice_request'))
+            voice.assert_not_called()
+            endpoint.assert_not_called()
+
     def test_alert_stop_reaches_gateway_through_authenticated_http(self):
         headers = {'Authorization': 'Bearer ' + config()['api_token'], 'Content-Type': 'application/json'}
         FakeAMI.channels, FakeAMI.calls = [], []

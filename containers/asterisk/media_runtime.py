@@ -132,6 +132,7 @@ def open_media(url, allowed_origins=()):
         addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
         _check_addresses([item[4][0] for item in addresses], (scheme, host, port) in allowed)
         connection = http.client.HTTPConnection(host, port, timeout=IO_TIMEOUT)
+        response = None
         try:
             for family, kind, protocol, _, target in addresses:
                 sock = socket.socket(family, kind, protocol)
@@ -157,6 +158,7 @@ def open_media(url, allowed_origins=()):
                 if not location or redirect == 3:
                     raise MediaError('source_redirect_rejected')
                 url = urljoin(url, location)
+                response.close()
                 connection.close()
                 continue
             if response.status != 200:
@@ -165,6 +167,9 @@ def open_media(url, allowed_origins=()):
                 raise MediaError('source_encoding_rejected')
             return connection, response
         except BaseException:
+            if response is not None:
+                with contextlib.suppress(OSError):
+                    response.close()
             connection.close()
             raise
     raise MediaError('source_redirect_rejected')
@@ -408,6 +413,11 @@ class Decoder:
                 self.error = 'source_failed'
         finally:
             self.ready.set()
+            # Close-delimited HTTP responses own their socket independently.
+            # Close the response here, on the same thread that reads it.
+            if self.response is not None:
+                with contextlib.suppress(OSError):
+                    self.response.close()
             if self.connection:
                 self.connection.close()
             if self.stop.is_set() and self.file and not self.keep_file:

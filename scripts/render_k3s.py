@@ -33,6 +33,8 @@ WALLPAPER_MAX_BYTES = 400_000
 WALLPAPER_PATH = "Desktops/320x212x16"
 
 def validate_site(site, with_tftp=False):
+    if not isinstance(site, dict):
+        raise ValueError("site must be an object")
     _softphones.validate(site)
     ha = site.get("home_assistant", {})
     if not isinstance(ha, dict) or type(ha.get("enabled", False)) is not bool:
@@ -59,7 +61,8 @@ def validate_site(site, with_tftp=False):
     if addr not in net or addr in (net.network_address, net.broadcast_address):
         raise ValueError("node_ipv4 must be a host address inside lan_cidr")
     for key in ("asterisk_image", "tftp_image") if with_tftp else ("asterisk_image",):
-        if not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", site.get(key, "")):
+        image = site.get(key)
+        if not isinstance(image, str) or not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", image):
             raise ValueError(f"site.{key} must use an immutable @sha256 image digest")
     if not isinstance(site.get("image_pull_secrets", []), list):
         raise ValueError("image_pull_secrets must be a list")

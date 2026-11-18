@@ -91,6 +91,16 @@ class PlayerTests(unittest.TestCase):
         PlayerAMI.endpoints[line] = 'In use'
         return token
 
+    def test_shutdown_attempts_other_sessions_when_one_close_raises(self):
+        failing = Mock()
+        failing.close.side_effect = OSError('synthetic decoder shutdown failure')
+        other = Mock()
+        self.server.player.sessions = {'201': {'session': failing}, '203': {'session': other}}
+        with self.assertRaisesRegex(OSError, 'synthetic decoder shutdown failure'):
+            self.server.player.close()
+        failing.close.assert_called_once_with()
+        other.close.assert_called_once_with()
+
     def test_start_reserves_only_port_token_and_uses_selected_line(self):
         token = self.start('202')
         writes = [v for n, v in PlayerAMI.calls if n == 'DBPut']

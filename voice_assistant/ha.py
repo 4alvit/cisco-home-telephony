@@ -229,6 +229,16 @@ def _origin(parts) -> tuple[str, str, int]:
     return parts.scheme, parts.hostname.lower(), port
 
 
+def _conversation_id(output, previous):
+    value = output.get("conversation_id")
+    if value is None or value == "":
+        return previous
+    if not isinstance(value, str):
+        # A bad ID must not enter the phone session and break its next turn.
+        raise AssistError("invalid-conversation-id")
+    return value
+
+
 class HAClient:
     """One independent connection per request; safe to share between phones.
 
@@ -510,7 +520,7 @@ class HAClient:
                     if started:
                         raise AssistError("duplicate-run-start")
                     started = True
-                    conversation_id = data.get("conversation_id") or conversation_id
+                    conversation_id = _conversation_id(data, conversation_id)
                     runner = data.get("runner_data") or {}
                     handler = runner.get("stt_binary_handler_id")
                     if type(handler) is not int or not 0 <= handler <= 255:
@@ -528,7 +538,7 @@ class HAClient:
                 elif kind == "intent-end":
                     intent_done = True
                     output = data.get("intent_output") or {}
-                    conversation_id = output.get("conversation_id") or conversation_id
+                    conversation_id = _conversation_id(output, conversation_id)
                     continue_conversation = output.get("continue_conversation") is True
                     speech = (output.get("response") or {}).get("speech") or {}
                     text = (speech.get("plain") or speech.get("ssml") or {}).get("speech", "")

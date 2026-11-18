@@ -1,4 +1,5 @@
 """HA adapter boundaries: identity, allowlists, no redirects and confirmations."""
+import http.client
 import io
 import json
 from pathlib import Path
@@ -169,6 +170,59 @@ class AppsHATests(unittest.TestCase):
                                   io.BytesIO(json.dumps({'message': 'The timer belongs to the other line'}).encode()))
         with patch.object(self.app.opener, 'open', side_effect=failure):
             with self.assertRaisesRegex(ha.AppsHAError, '^ha_timer_owned_by_other_line$'):
+                self.app.schedule('212', '212')
+
+    def test_truncated_http_success_never_confirms_schedule(self):
+        value = schedule()
+        value['operation_result'] = 'applied'
+        data = json.dumps({'service_response': value}).encode()
+        frame = f'HTTP/1.1 200 OK\r\nContent-Length: {len(data) + 1}\r\n\r\n'.encode() + data
+
+        class InMemorySocket:
+            def makefile(self, *_args):
+                return io.BytesIO(frame)
+
+        response = http.client.HTTPResponse(InMemorySocket())
+        response.begin()
+        with patch.object(self.app.opener, 'open', return_value=response) as call:
+            with self.assertRaisesRegex(ha.AppsHAError, '^ha_request_outcome_unknown$'):
+                self.app.schedule('212', '212', 'timer_cancel', request_id='apps-test-1')
+            call.assert_called_once()
+        self.assertTrue(response.closed)
+
+    def test_optional_http_error_details_share_the_read_budget_and_close(self):
+        class Trickle(io.BytesIO):
+            def read1(self, _size):
+                return self.read(1)
+
+        stream = Trickle(b'{"message":"The timer belongs to the other line"}')
+        failure = error.HTTPError('http://private', 400, 'private', {}, stream)
+        with patch.object(self.app.opener, 'open', side_effect=failure) as call, patch.object(
+                ha.time, 'monotonic', side_effect=[10, 17, 19]):
+            with self.assertRaisesRegex(ha.AppsHAError, '^ha_request_rejected$'):
+                self.app.schedule('212', '212')
+            call.assert_called_once()
+            self.assertTrue(stream.closed)
+
+    def test_incomplete_http_error_details_remain_sanitized(self):
+        class Incomplete(io.BytesIO):
+            def read1(self, _size):
+                raise http.client.IncompleteRead(b'private-HA-detail', 2)
+
+            read = read1
+
+        stream = Incomplete()
+        failure = error.HTTPError('http://private', 500, 'private', {}, stream)
+        with patch.object(self.app.opener, 'open', side_effect=failure):
+            with self.assertRaisesRegex(ha.AppsHAError, '^ha_request_not_confirmed$'):
+                self.app.schedule('212', '212')
+        self.assertTrue(stream.closed)
+
+    def test_nonrepresentable_timer_values_use_fixed_response_error(self):
+        value = schedule()
+        value['timer']['deadline'] = 10 ** 400
+        with patch.object(self.app, '_request', return_value={'service_response': value}):
+            with self.assertRaisesRegex(ha.AppsHAError, '^invalid_ha_response$'):
                 self.app.schedule('212', '212')
 
     def test_camera_proxy_resize_and_metadata_allowlist(self):

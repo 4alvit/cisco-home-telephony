@@ -33,6 +33,13 @@ def configs():
 
 
 class K3sSafetyTests(unittest.TestCase):
+    def test_malformed_site_and_tftp_image_get_validation_errors(self):
+        with self.assertRaisesRegex(ValueError, "site must be an object"):
+            render.validate_site([])
+        for image in (None, 42, ["image"]):
+            with self.subTest(image=image), self.assertRaisesRegex(ValueError, "site.tftp_image"):
+                render.validate_site(dict(fixture(), tftp_image=image), with_tftp=True)
+
     def test_mutable_image_public_address_and_shared_namespace_rejected(self):
         for changes in ({"asterisk_image": "image:latest"}, {"node_ipv4": "8.8.8.8", "lan_cidr": "8.8.8.0/24"},
                         {"node_ipv4": "192.168.161.4"}, {"namespace": "default"}, {"kube_context": ""}):
@@ -261,6 +268,28 @@ esac
             rendered = local / "rendered/core.yaml"
             self.assertEqual(rendered.stat().st_mode & 0o777, 0o600)
             self.assertFalse((local / "rendered/tftp.yaml").exists())
+
+    def test_invalid_deploy_arguments_are_rejected_before_any_preflight(self):
+        cases = (
+            (["--server-dry-run", "--apply", "--firewall-reviewed"], "Choose one deployment mode"),
+            (["--apply", "--server-dry-run"], "Choose one deployment mode"),
+            (["--apply"], "pass --firewall-reviewed"),
+            (["--site"], "--site requires a file path"),
+            (["--phone-addresses", "--profiles-only"], "--phone-addresses requires a file path"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for command in ("python3", "kubectl"):
+                stub = Path(directory, command)
+                stub.write_text("#!/bin/sh\necho 'unexpected execution' >&2\nexit 98\n")
+                stub.chmod(0o700)
+            env = dict(os.environ, PATH=directory + os.pathsep + os.environ["PATH"])
+            for args, diagnostic in cases:
+                with self.subTest(args=args):
+                    result = subprocess.run(["bash", str(ROOT / "scripts/deploy.sh"), *args],
+                                            env=env, capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertIn(diagnostic, result.stderr)
+                    self.assertNotIn("unexpected execution", result.stdout + result.stderr)
 
     def run_tftp_deploy(self, mode, exit_code=0):
         """Shell dispatch is isolated from the separately tested owner controller."""

@@ -41,7 +41,7 @@ class Connection:
 
 
 class DecoderCancellationTests(unittest.TestCase):
-    def http_source(self):
+    def http_source(self, response_bytes=None):
         """Use the real HTTP parser/reader on local sockets, without a server."""
         client, peer = socket.socketpair()
         self.addCleanup(client.close)
@@ -50,8 +50,8 @@ class DecoderCancellationTests(unittest.TestCase):
         connection.sock = client
         self.addCleanup(connection.close)
         connection.request('GET', '/')
-        peer.sendall(b'HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\n'
-                     b'Content-Length: 4\r\n\r\ndata')
+        peer.sendall(response_bytes or (b'HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\n'
+                                       b'Content-Length: 4\r\n\r\ndata'))
         return connection, connection.getresponse()
 
     def test_cancel_never_closes_httpresponse_while_worker_is_reading(self):
@@ -90,6 +90,22 @@ class DecoderCancellationTests(unittest.TestCase):
             self.assertTrue(response.closed)
             self.assertTrue(decoder.file.closed)
             self.assertTrue(decoder.ready.is_set())
+            process.assert_not_called()
+
+    def test_early_media_failure_closes_detached_http_response(self):
+        connection, response = self.http_source(
+            b'HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Type: text/html\r\n\r\ndata')
+        self.addCleanup(response.close)
+        self.assertIsNone(connection.sock)
+        self.assertFalse(response.closed)
+        with patch.object(media, 'open_media', return_value=(connection, response)), \
+                patch.object(media.subprocess, 'Popen') as process:
+            decoder = media.Decoder(SOURCE, (), 1024, lambda _: None)
+            self.addCleanup(decoder.close)
+            decoder.thread.join(2)
+            self.assertFalse(decoder.thread.is_alive())
+            self.assertEqual(decoder.error, 'source_failed')
+            self.assertTrue(response.closed)
             process.assert_not_called()
 
     def test_unexpected_read_attribute_error_is_not_silenced(self):
@@ -179,6 +195,7 @@ class RuntimeValidation(unittest.TestCase):
                 media.open_media('http://audio.example/song')
         socket_instance.connect.assert_called_once_with(('8.8.8.8', 80))
         connection.close.assert_called()
+        self.assertTrue(response.closed)
 
     def test_invalid_metadata_and_unknown_source_fields_rejected(self):
         for values in ({'title': 'x' * 257}, {'artist': 'x\n'}, {'duration': float('nan')},

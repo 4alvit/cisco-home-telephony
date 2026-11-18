@@ -526,7 +526,7 @@ class GatewayVoiceTests(unittest.TestCase):
             sleep.assert_called_once_with(0.05)
             self.gateway.release_voice_shutdown()
 
-    def test_main_reports_incomplete_drain_and_releases_fences_after_callbacks(self):
+    def test_main_releases_voice_fences_after_callbacks_despite_player_failure(self):
         path = Path(self.directory.name) / 'gateway.json'
         path.write_text(json.dumps(config()))
         events = []
@@ -534,6 +534,7 @@ class GatewayVoiceTests(unittest.TestCase):
         instance.phones = self.gateway.phones
         instance.config = self.gateway.config
         instance.voice.close.side_effect = lambda: events.append('voice-close')
+        instance.player.close.side_effect = OSError('synthetic decoder shutdown failure')
         instance.close_voice.side_effect = lambda **_kwargs: (events.append('voice-finish'), False)[1]
         instance.release_voice_shutdown.side_effect = lambda: events.append('release-fences')
         listeners = [mock.Mock(), mock.Mock()]
@@ -557,7 +558,9 @@ class GatewayVoiceTests(unittest.TestCase):
         self.assertLess(events.index('voice-finish'), events.index('listener-shutdown'))
         self.assertGreater(events.index('release-fences'),
                            max(index for index, event in enumerate(events) if event == 'listener-close'))
-        self.assertEqual(stderr.getvalue(), 'Voice shutdown incomplete; ownership records retained.\n')
+        instance.player.close.assert_called_once_with()
+        self.assertEqual(stderr.getvalue(), 'Player shutdown incomplete.\n'
+                         'Voice shutdown incomplete; ownership records retained.\n')
 
 
 if __name__ == '__main__':

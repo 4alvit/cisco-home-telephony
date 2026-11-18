@@ -266,17 +266,27 @@ class Notifications(unittest.TestCase):
         self.assertFalse(self.gateway.calls)
         self.assertEqual(len(self.stops), 1)
 
-    def test_thread_start_failure_stops_accepted_sip_job_once(self):
-        class BrokenThread(DeferredThread):
+    def test_thread_setup_failure_stops_accepted_sip_job_once(self):
+        class CannotConstruct(DeferredThread):
+            def __init__(self, **kwargs):
+                raise RuntimeError('cannot construct thread')
+
+        class CannotStart(DeferredThread):
             def start(self):
-                raise RuntimeError('cannot start')
-        dispatcher = self.dispatcher(self.speech_config(), stopper=self.stop_job)
-        dispatcher.thread_factory = BrokenThread
-        result = dispatcher.dispatch(event())
-        self.assertEqual(result['status'], 'refused')
-        self.assertEqual(len(result['unknown']), 3)
-        self.assertEqual(len(self.stops), 1)
-        self.assertFalse(self.gateway.calls)
+                raise RuntimeError('cannot start thread')
+
+        for thread_factory in (CannotConstruct, CannotStart):
+            with self.subTest(thread_factory=thread_factory):
+                dispatcher = self.dispatcher(self.speech_config(), stopper=self.stop_job)
+                dispatcher.thread_factory = thread_factory
+                self.stops.clear()
+                result = dispatcher.dispatch(event(event_id='job-' + thread_factory.__name__, event_at=self.now))
+                self.assertEqual(result['status'], 'refused')
+                self.assertEqual(len(result['unknown']), 3)
+                self.assertEqual(len(self.stops), 1)
+                self.assertFalse(self.gateway.calls)
+                self.now += 61
+                self.gateway.now = self.now
 
     def test_monitor_deadline_stops_once(self):
         dispatcher = self.speech_dispatcher()

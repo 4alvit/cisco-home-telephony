@@ -503,9 +503,9 @@ class Dispatcher:
     def start_answers(self, body, event_at):
         # The worker holds routing/identity metadata only, never message text.
         observed = {key: value for key, value in body.items() if key != 'text'}
-        self.worker = self.thread_factory(target=self.answer_job, args=(observed, event_at),
-                                          name='notification-answer', daemon=True)
         try:
+            self.worker = self.thread_factory(target=self.answer_job, args=(observed, event_at),
+                                              name='notification-answer', daemon=True)
             self.worker.start()
         except Exception:
             try:

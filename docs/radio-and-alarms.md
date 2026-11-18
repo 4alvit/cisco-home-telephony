@@ -339,8 +339,8 @@ paced in 20 ms / 640-byte frames with a 0.5 volume multiplier. The worker uses
 `Dial(AudioSocket/.../c(slin16))` so the channel stays wideband; the older
 `AudioSocket()` application forces 8 kHz. Asterisk converts the stream to the
 phone's negotiated **G.722**, with G.711 fallback for a narrowband caller.
-The dated live results above describe the previous 8 kHz worker, not proof
-that an installed system already has this upgrade.
+The original October 17 samples used the 8 kHz worker. The November 2
+expansion checks above measured 16 kHz PCM.
 Incoming microphone frames are discarded; they are never sent
 to the station or recorded. Network operations time out after eight seconds;
 initial audio has a 15-second startup bound. A channel-bound watchdog provides
