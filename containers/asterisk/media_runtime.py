@@ -502,8 +502,11 @@ class MediaSession:
         with self.lock:
             if self.thread is not None or self.stop_event.is_set():
                 raise MediaError('session_already_started')
-            self.thread = threading.Thread(target=self._serve, daemon=True)
-            self.thread.start()
+            worker = threading.Thread(target=self._serve, daemon=True)
+            worker.start()
+            # If start fails, close() still has to release the listener and
+            # must not attempt to join a thread that never started.
+            self.thread = worker
         return self
 
     def _metadata(self, generation, values):
@@ -706,7 +709,7 @@ class MediaSession:
                         self.position += FRAME_SECONDS
                         pending_frame = None
                 next_frame = max(next_frame + FRAME_SECONDS, time.monotonic() - FRAME_SECONDS)
-        except (OSError, ValueError, EOFError):
+        except (OSError, ValueError, EOFError, subprocess.SubprocessError):
             with self.lock:
                 if not self.stop_event.is_set():
                     self.state, self.error = 'error', 'playback_failed'
@@ -715,17 +718,24 @@ class MediaSession:
 
     def _shutdown(self):
         self.stop_event.set()
-        if self.decoder:
-            self.decoder.close()
-        if self.peer:
-            with contextlib.suppress(OSError):
-                self.peer.sendall(b'\x00\x00\x00')
-                self.peer.shutdown(socket.SHUT_RDWR)
-            self.peer.close()
-        self.listener.close()
-        with self.lock:
-            if self.state != 'error':
-                self.state = 'idle'
+        try:
+            if self.decoder:
+                self.decoder.close()
+        except (OSError, subprocess.SubprocessError):
+            with self.lock:
+                self.state, self.error = 'error', 'playback_failed'
+        finally:
+            # A decoder that fails to exit cannot keep the PBX bridge open.
+            if self.peer:
+                with contextlib.suppress(OSError):
+                    self.peer.sendall(b'\x00\x00\x00')
+                    self.peer.shutdown(socket.SHUT_RDWR)
+                with contextlib.suppress(OSError):
+                    self.peer.close()
+            self.listener.close()
+            with self.lock:
+                if self.state != 'error':
+                    self.state = 'idle'
 
     def close(self):
         # Serialize cancellation with replacement decoder creation; otherwise
@@ -739,10 +749,16 @@ class MediaSession:
             with contextlib.suppress(OSError):
                 self.peer.shutdown(socket.SHUT_RDWR)
         self.listener.close()
-        if decoder:
-            decoder.close()
-        if self.thread is not None and self.thread is not threading.current_thread():
-            self.thread.join(timeout=3)
+        try:
+            if decoder:
+                decoder.close()
+        except (OSError, subprocess.SubprocessError):
+            with self.lock:
+                self.state, self.error = 'error', 'playback_failed'
+            raise
+        finally:
+            if self.thread is not None and self.thread is not threading.current_thread():
+                self.thread.join(timeout=3)
         with self.lock:
             if self.state != 'error':
                 self.state = 'idle'

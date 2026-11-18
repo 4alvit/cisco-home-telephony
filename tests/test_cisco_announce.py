@@ -130,6 +130,15 @@ class AnnouncementCLITests(unittest.TestCase):
         self.assertEqual(result['reason'], 'announcement_targets_changed')
         self.assertFalse(any(body is not None for _, _, body in requests))
 
+    def test_stop_requires_a_stop_or_terminal_receipt(self):
+        code, result, requests = self.invoke(['212', 'say-stop', IDENTIFIER],
+                                             reply=job(status='running', recipient_status='playing'))
+        self.assertEqual((code, result['status'], result['reason']),
+                         (1, 'not_confirmed', 'announcement_stop_not_confirmed'))
+        self.assertEqual(result['id'], IDENTIFIER)
+        self.assertIn('say-status ' + IDENTIFIER, result['recovery_command'])
+        self.assertEqual(sum(path.endswith('/stop') for _, path, _ in requests), 1)
+
     def test_status_does_not_need_phone_inventory_or_answer(self):
         code, result, requests = self.invoke(['212', 'say-status', IDENTIFIER])
         self.assertEqual(code, 0)
@@ -648,6 +657,34 @@ class AnnouncementPollingTests(unittest.TestCase):
                 inventory_validator=cisco.validate_inventory, read_file=cisco.read_file)
         self.assertEqual(code, 0)
         self.assertEqual(events, ['connect', 'verify-222', 'submit', 'close'])
+
+    def test_native_cleanup_error_preserves_the_job_receipt(self):
+        args = cisco.parser().parse_args(['--idempotency-key', KEY, '222', 'say', 'Example'])
+        requests = []
+
+        class Gateway:
+            def __init__(self, *_):
+                pass
+
+            def request(self, path, body=None):
+                requests.append(path)
+                return inventory() if path == '/v1/phones' else job(('222',))
+
+        def close():
+            raise OSError('private connection details')
+
+        def prepare(_config, _targets, _timeout, connections):
+            connections.callback(close)
+            return {}
+
+        with patch.object(announce, 'prepare_native', side_effect=prepare):
+            result, code = announce.run(args, configuration(), gateway_factory=Gateway,
+                inventory_validator=cisco.validate_inventory, read_file=cisco.read_file)
+        self.assertEqual((code, result['status'], result['id']), (0, 'finished', IDENTIFIER))
+        self.assertEqual(result['connection_cleanup'], 'not_confirmed')
+        self.assertIn('LifeSize connection cleanup', result['note'])
+        self.assertNotIn('private connection details', json.dumps(result))
+        self.assertEqual(requests, ['/v1/phones', '/v1/announcements'])
 
     def test_group_answers_run_in_parallel_and_uncertain_answers_are_never_retried(self):
         args = cisco.parser().parse_args(['--idempotency-key', KEY, '212,222', 'say', 'Example'])

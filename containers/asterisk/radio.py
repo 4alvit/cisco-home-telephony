@@ -172,6 +172,20 @@ def open_stream(station, url=None, content_types=None, purpose="stream", metadat
     raise ValueError("stream redirect limit")
 
 
+def _read_bounded_body(response, limit, label):
+    # HTTPResponse.read(n) can return a short body without raising IncompleteRead.
+    # Capture the expected length first because http.client updates it during reads.
+    length = response.length
+    if length is not None and length > limit:
+        raise ValueError(f"{label} size rejected")
+    body = response.read(limit + 1)
+    if len(body) > limit:
+        raise ValueError(f"{label} size rejected")
+    if length is not None and len(body) != length:
+        raise ValueError(f"{label} incomplete")
+    return body
+
+
 def gpm_stream_url(station):
     """Resolve a fresh official AAC URL per call; never persist its bearer token.
 
@@ -184,9 +198,7 @@ def gpm_stream_url(station):
     checked_url(api, station, "api")
     conn, response = open_stream(station, api, {"application/json"}, purpose="api")
     with contextlib.closing(conn), contextlib.closing(response):
-        body = response.read(GPM_API_LIMIT + 1)
-    if len(body) > GPM_API_LIMIT:
-        raise ValueError("broadcaster response size rejected")
+        body = _read_bounded_body(response, GPM_API_LIMIT, "broadcaster response")
     try:
         document = json.loads(body)
     except (ValueError, UnicodeError, RecursionError):
@@ -233,10 +245,10 @@ def hls_chunks(station, stop):
     while not stop.is_set():
         conn, response = open_stream(station, playlist, {"application/vnd.apple.mpegurl", "application/x-mpegurl", "audio/mpegurl"})
         with contextlib.closing(conn), contextlib.closing(response):
-            body = response.read(65537)
+            if stop.is_set():
+                return
+            body = _read_bounded_body(response, 65536, "HLS playlist")
             effective_url = response.geturl()
-        if len(body) > 65536:
-            raise ValueError("HLS playlist size rejected")
         text = body.decode("utf-8")
         master, urls = hls_playlist(text, effective_url)
         for url in urls:
@@ -254,8 +266,10 @@ def hls_chunks(station, stop):
                 continue
             conn, response = open_stream(station, url)
             with contextlib.closing(conn), contextlib.closing(response):
-                data = response.read(2_000_001)
-            if not data or len(data) > 2_000_000:
+                if stop.is_set():
+                    return
+                data = _read_bounded_body(response, 2_000_000, "HLS segment")
+            if not data:
                 raise ValueError("HLS segment size rejected")
             seen = (seen + [url])[-256:]
             yield data

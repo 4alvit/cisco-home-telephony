@@ -305,6 +305,49 @@ class QueueControls(unittest.TestCase):
             self.assertEqual(self.session.snapshot()['state'], 'idle')
             fetch.assert_not_called()
 
+    def test_failed_thread_start_leaves_session_closable(self):
+        worker = threading.Thread()
+        with patch.object(worker, 'start', side_effect=RuntimeError('thread unavailable')), \
+                patch.object(media.threading, 'Thread', return_value=worker):
+            with self.assertRaisesRegex(RuntimeError, 'thread unavailable'):
+                self.session.start()
+        self.session.close()
+        self.assertIsNone(self.session.thread)
+        self.assertEqual(self.session.listener.fileno(), -1)
+        self.assertEqual(self.session.snapshot()['state'], 'idle')
+
+    def test_decoder_close_timeout_still_ends_transport(self):
+        peer, receiver = socket.socketpair()
+        self.addCleanup(peer.close)
+        self.addCleanup(receiver.close)
+        receiver.settimeout(1)
+        self.session.peer = peer
+        decoder = Mock()
+        decoder.close.side_effect = subprocess.TimeoutExpired('synthetic decoder', 1)
+        self.session.decoder = decoder
+        self.addCleanup(setattr, self.session, 'decoder', None)
+        self.session._shutdown()
+        self.assertEqual(media.radio.receive_frame(receiver), (0, b''))
+        self.assertEqual(receiver.recv(1), b'')
+        self.assertEqual(self.session.listener.fileno(), -1)
+        self.assertTrue(self.session.stop_event.is_set())
+        value = self.session.snapshot()
+        self.assertEqual((value['state'], value['error']), ('error', 'playback_failed'))
+
+    def test_explicit_close_joins_worker_and_propagates_decoder_timeout(self):
+        worker, decoder = Mock(), Mock()
+        failure = subprocess.TimeoutExpired('synthetic decoder', 1)
+        decoder.close.side_effect = failure
+        self.session.thread, self.session.decoder = worker, decoder
+        self.addCleanup(setattr, self.session, 'decoder', None)
+        with self.assertRaises(subprocess.TimeoutExpired) as caught:
+            self.session.close()
+        self.assertIs(caught.exception, failure)
+        worker.join.assert_called_once_with(timeout=3)
+        self.assertEqual(self.session.listener.fileno(), -1)
+        value = self.session.snapshot()
+        self.assertEqual((value['state'], value['error']), ('error', 'playback_failed'))
+
     def test_connection_can_arrive_after_slow_phone_commands(self):
         # The controller may spend 10 seconds on each of two phone requests.
         # A late, valid call must still reach UUID admission without fetching

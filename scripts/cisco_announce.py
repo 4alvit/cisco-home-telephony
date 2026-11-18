@@ -18,6 +18,7 @@ JOB_STATES = frozenset(('accepted', 'running', 'stopping', 'finished', 'stopped'
 RECIPIENT_STATES = frozenset(('queued', 'ringing', 'submitting', 'submitted', 'playing',
                               'completed', 'skipped', 'failed', 'stopping', 'stopped', 'unknown'))
 TERMINAL = frozenset(('finished', 'stopped', 'failed', 'dry_run'))
+STOP_RECEIPTS = frozenset(('stopping', 'finished', 'stopped', 'failed'))
 
 class AnnouncementError(Exception):
     def __init__(self, reason):
@@ -301,6 +302,7 @@ def run(args, config, *, gateway_factory, inventory_validator, read_file, clock=
     identifier, dispatched, lines = None, False, []
     latest, answers, futures = None, {}, {}
     answer_cleanup = None
+    result = None
     cancelled = threading.Event()
     connections = ExitStack()
     try:
@@ -320,6 +322,7 @@ def run(args, config, *, gateway_factory, inventory_validator, read_file, clock=
             if latest['status'] not in TERMINAL:
                 dispatched = True
                 latest = validate_job(service.request('/v1/announcements/' + identifier + '/stop', {}), identifier, lines, routes)
+                require(latest['status'] in STOP_RECEIPTS, 'announcement_stop_not_confirmed')
             return latest, int(any(p['status'] == 'unknown' for p in latest['recipients']))
         text = read_text(args, read_file)
         data = (gateway_factory(config, args.timeout).request('/v1/phones')
@@ -371,7 +374,7 @@ def run(args, config, *, gateway_factory, inventory_validator, read_file, clock=
                                               'lines': ringing, 'reason': 'automatic_answer_failed'}
                             latest = validate_job(service.request('/v1/announcements/' + identifier + '/stop', {}),
                                                   identifier, lines, routes)
-                            require(latest['status'] in TERMINAL or latest['status'] == 'stopping',
+                            require(latest['status'] in STOP_RECEIPTS,
                                     'announcement_stop_not_confirmed')
                             answer_cleanup['status'] = latest['status']
                         if latest['status'] in TERMINAL:
@@ -388,7 +391,8 @@ def run(args, config, *, gateway_factory, inventory_validator, read_file, clock=
         if answer_cleanup is not None:
             latest.update(answer_cleanup=answer_cleanup, recovery_command=recovery(args, identifier))
             latest['note'] += ' Failed automatic answer requested whole-job stop; other recipients may be interrupted.'
-        return latest, int(delivery_failed(latest))
+        result = latest
+        return result, int(delivery_failed(result))
     except (Exception, KeyboardInterrupt) as error:
         cancelled.set()
         # The executor has joined its workers even if a fresh status or stop
@@ -410,7 +414,14 @@ def run(args, config, *, gateway_factory, inventory_validator, read_file, clock=
             result['note'] += ' Whole-job stop was sent once and will not be retried automatically.'
         return result, 1
     finally:
-        connections.close()
+        try:
+            connections.close()
+        except (Exception, KeyboardInterrupt):
+            # Release all prepared transports without losing the job outcome.
+            if result is not None:
+                result['connection_cleanup'] = 'not_confirmed'
+                note = result.get('note', '')
+                result['note'] = (note + ' LifeSize connection cleanup could not be confirmed.').strip()
 
 
 def display(value):

@@ -224,6 +224,7 @@ class RadioIsolation(unittest.TestCase):
         responses = [connection.getresponse.return_value for connection in connections]
         for response, (status, headers, body) in zip(responses, fixtures):
             response.status = status
+            response.length = len(body)
             response.getheader.side_effect = headers.get
             response.read.return_value = body
             response.geturl.side_effect = lambda response=response: response.url
@@ -240,6 +241,46 @@ class RadioIsolation(unittest.TestCase):
         for response, connection in zip(responses, connections):
             response.close.assert_called_once_with()
             connection.close.assert_called_once_with()
+
+    def test_hls_refuses_a_truncated_playlist_or_segment(self):
+        source = 'https://radio.example/index.m3u8'
+        station = {'url': source, 'hosts': ['radio.example']}
+        playlist = b'#EXTM3U\n#EXTINF:3,\nclip.aac\n#EXT-X-ENDLIST\n'
+        clip = b'synthetic AAC data'
+        for truncated in ('playlist', 'segment'):
+            with self.subTest(truncated=truncated):
+                responses = []
+                for kind, body in (('playlist', playlist), ('segment', clip)):
+                    length = len(body) + (10 if kind == truncated else 0)
+                    wire = f'HTTP/1.1 200 OK\r\nContent-Length: {length}\r\n\r\n'.encode() + body
+                    response = r.http.client.HTTPResponse(Mock(makefile=Mock(return_value=io.BytesIO(wire))))
+                    response.begin()
+                    response.url = source
+                    responses.append(response)
+                    self.addCleanup(response.close)
+                connections = [Mock(), Mock()]
+                with patch.object(r, 'open_stream', side_effect=list(zip(connections, responses))), \
+                        self.assertRaisesRegex(ValueError, f'HLS {truncated} incomplete'):
+                    list(r.hls_chunks(station, threading.Event()))
+                opened = 1 if truncated == 'playlist' else 2
+                for conn, response in zip(connections[:opened], responses[:opened]):
+                    conn.close.assert_called_once_with()
+                    self.assertTrue(response.isclosed())
+
+    def test_hls_cancel_after_headers_closes_response_without_reading_body(self):
+        station = {'url': 'https://radio.example/index.m3u8'}
+        stop = threading.Event()
+        connection, response = Mock(), Mock()
+
+        def open_then_stop(*_args):
+            stop.set()
+            return connection, response
+
+        with patch.object(r, 'open_stream', side_effect=open_then_stop):
+            self.assertEqual(list(r.hls_chunks(station, stop)), [])
+        response.read.assert_not_called()
+        response.close.assert_called_once_with()
+        connection.close.assert_called_once_with()
 
     def test_cancellation_during_input_read_does_not_report_failure(self):
         for cancelled in (False, True):
