@@ -267,15 +267,14 @@ class Notifications(unittest.TestCase):
         self.assertEqual(len(self.stops), 1)
 
     def test_thread_setup_failure_stops_accepted_sip_job_once(self):
-        class CannotConstruct(DeferredThread):
-            def __init__(self, **kwargs):
-                raise RuntimeError('cannot construct thread')
+        def cannot_construct(**kwargs):
+            raise RuntimeError('cannot construct thread')
 
         class CannotStart(DeferredThread):
             def start(self):
                 raise RuntimeError('cannot start thread')
 
-        for thread_factory in (CannotConstruct, CannotStart):
+        for thread_factory in (cannot_construct, CannotStart):
             with self.subTest(thread_factory=thread_factory):
                 dispatcher = self.dispatcher(self.speech_config(), stopper=self.stop_job)
                 dispatcher.thread_factory = thread_factory
