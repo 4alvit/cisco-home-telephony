@@ -21,6 +21,8 @@ runtime = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runtime)
 ARGS = ["--foreground", "--user", "tftp", "--secure", "--address",
         "127.0.0.1:69", "--port-range", "20000:20031", "--blocksize", "1468", "/srv/tftp"]
+# Shell, supervisor and fake daemon startup/exit share a bounded test budget.
+FIXTURE_PROCESS_TIMEOUT = 10
 
 
 @unittest.skipUnless(os.name == "posix", "POSIX descriptor locks and signals")
@@ -92,7 +94,7 @@ sys.exit(int(os.environ.get('TFTP_TEST_EXIT', '0')))
             if process.poll() is None:
                 process.terminate()
             try:
-                process.communicate(timeout=3)
+                process.communicate(timeout=FIXTURE_PROCESS_TIMEOUT)
             except subprocess.TimeoutExpired:
                 # Only this test's synthetic child and supervisor are targeted.
                 if files["ready"].exists():
@@ -103,7 +105,7 @@ sys.exit(int(os.environ.get('TFTP_TEST_EXIT', '0')))
                         # The synthetic child may already have exited; still reap its wrapper process.
                         pass
                 process.kill()
-                process.communicate(timeout=3)
+                process.communicate(timeout=FIXTURE_PROCESS_TIMEOUT)
 
     def start(self, *, managed=True, hold=False, args=None, lock=None, exit_code=0, fork=False):
         index = len(self.processes)
@@ -122,7 +124,9 @@ sys.exit(int(os.environ.get('TFTP_TEST_EXIT', '0')))
         return process, files
 
     def ready(self, process, path):
-        deadline = time.monotonic() + 3
+        # The handshake follows two Python process launches. It is separate
+        # from the production readiness contract and can lag on a busy host.
+        deadline = time.monotonic() + FIXTURE_PROCESS_TIMEOUT
         while time.monotonic() < deadline:
             if path.exists():
                 return json.loads(path.read_text()) if path.name.endswith("ready") else path.read_text()
@@ -133,21 +137,21 @@ sys.exit(int(os.environ.get('TFTP_TEST_EXIT', '0')))
 
     def refused(self, *, lock=None, args=None):
         process, files = self.start(lock=lock, args=args)
-        _, error = process.communicate(timeout=3)
+        _, error = process.communicate(timeout=FIXTURE_PROCESS_TIMEOUT)
         self.assertNotEqual(process.returncode, 0, error)
         self.assertFalse(files["ready"].exists())
         return error
 
     def test_unmanaged_keeps_arguments_and_exit_status(self):
         process, files = self.start(managed=False, args=["--version"], exit_code=23)
-        process.communicate(timeout=3)
+        process.communicate(timeout=FIXTURE_PROCESS_TIMEOUT)
         self.assertEqual(process.returncode, 23)
         self.assertEqual(json.loads(files["ready"].read_text())["args"], ["--version"])
         self.assertFalse(self.lock.exists())
 
     def test_managed_private_inode_is_reused_and_bind_preserved(self):
         process, files = self.start()
-        process.communicate(timeout=3)
+        process.communicate(timeout=FIXTURE_PROCESS_TIMEOUT)
         self.assertEqual(process.returncode, 0)
         arguments = json.loads(files["ready"].read_text())["args"]
         self.assertEqual(arguments, ["--map-file", runtime.RULES_FILE,
@@ -156,7 +160,7 @@ sys.exit(int(os.environ.get('TFTP_TEST_EXIT', '0')))
         self.assertEqual(self.lock.stat().st_mode & 0o777, 0o600)
         inode = self.lock.stat().st_ino
         second, _ = self.start()
-        second.communicate(timeout=3)
+        second.communicate(timeout=FIXTURE_PROCESS_TIMEOUT)
         self.assertEqual(second.returncode, 0)
         self.assertEqual(self.lock.stat().st_ino, inode)
 
@@ -175,10 +179,10 @@ sys.exit(int(os.environ.get('TFTP_TEST_EXIT', '0')))
         self.assertIsNone(first.poll())
         self.assertIn("owner already active", self.refused())
         files["release"].touch()
-        first.communicate(timeout=3)
+        first.communicate(timeout=FIXTURE_PROCESS_TIMEOUT)
         self.assertEqual(first.returncode, 0)
         replacement, _ = self.start()
-        replacement.communicate(timeout=3)
+        replacement.communicate(timeout=FIXTURE_PROCESS_TIMEOUT)
         self.assertEqual(replacement.returncode, 0)
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "Linux subreaper integration")
@@ -190,13 +194,13 @@ sys.exit(int(os.environ.get('TFTP_TEST_EXIT', '0')))
         self.assertIsNone(first.poll())
         self.assertIn("owner already active", self.refused())
         files["release"].touch()
-        first.communicate(timeout=3)
+        first.communicate(timeout=FIXTURE_PROCESS_TIMEOUT)
         self.assertEqual(first.returncode, 17)
         self.assertEqual(self.lock.read_bytes(), b"")
         with self.assertRaises(ProcessLookupError):
             os.kill(record["child"], 0)
         replacement, _ = self.start()
-        replacement.communicate(timeout=3)
+        replacement.communicate(timeout=FIXTURE_PROCESS_TIMEOUT)
         self.assertEqual(replacement.returncode, 0)
 
     def test_read_only_root_rejects_writable_files_symlinks_and_unknown_directories(self):
@@ -234,7 +238,7 @@ sys.exit(int(os.environ.get('TFTP_TEST_EXIT', '0')))
         for directory in (wallpaper, wallpaper.parent, self.served):
             directory.chmod(0o555)
         child, _ = self.start()
-        child.communicate(timeout=3)
+        child.communicate(timeout=FIXTURE_PROCESS_TIMEOUT)
         self.assertEqual(child.returncode, 0)
 
     def test_managed_hup_does_not_reload_daemon_or_release_ownership(self):
