@@ -110,6 +110,34 @@ def _text(value, limit=80):
     return value
 
 
+def _read_body(response, limit, deadline):
+    length = response.headers.get('Content-Length')
+    if length is not None:
+        require(length.isascii() and length.isdecimal(), 'invalid_ha_response')
+        significant = length.lstrip('0') or '0'
+        require(len(significant) <= len(str(limit)), 'ha_response_too_large')
+        length = int(significant)
+        require(length <= limit, 'ha_response_too_large')
+    chunks, size = [], 0
+    while True:
+        remaining = deadline - time.monotonic()
+        require(remaining > 0, 'ha_request_outcome_unknown')
+        sock = getattr(getattr(getattr(response, 'fp', None), 'raw', None), '_sock', None)
+        if sock is not None:
+            sock.settimeout(remaining)
+        # read1 may return early on a truncated response, even when the
+        # bytes received so far happen to form a valid JSON document.
+        chunk = response.read1(min(65536, limit + 1 - size))
+        if not chunk:
+            break
+        size += len(chunk)
+        require(size <= limit, 'ha_response_too_large')
+        chunks.append(chunk)
+    if length is not None and response.headers.get('Transfer-Encoding') is None:
+        require(size == length, 'ha_request_outcome_unknown')
+    return b''.join(chunks)
+
+
 class HomeAssistantApps:
     def __init__(self, config):
         self.config = validate_config(config)
@@ -128,35 +156,20 @@ class HomeAssistantApps:
         try:
             with self.opener.open(req, timeout=timeout) as response:
                 require(response.status == 200, 'ha_request_not_confirmed')
-                length = response.headers.get('Content-Length')
-                require(length is None or length.isdecimal() and int(length) <= limit,
-                        'ha_response_too_large')
-                chunks, size = [], 0
-                while True:
-                    remaining = deadline - time.monotonic()
-                    require(remaining > 0, 'ha_request_outcome_unknown')
-                    sock = getattr(getattr(getattr(response, 'fp', None), 'raw', None), '_sock', None)
-                    if sock is not None:
-                        sock.settimeout(remaining)
-                    chunk = response.read1(min(65536, limit + 1 - size))
-                    if not chunk:
-                        break
-                    size += len(chunk)
-                    require(size <= limit, 'ha_response_too_large')
-                    chunks.append(chunk)
-                raw = b''.join(chunks)
+                raw = _read_body(response, limit, deadline)
             return raw if binary else json.loads(raw)
         except error.HTTPError as exc:
             # Never echo the HA response, origin or credentials into a phone page.
             reason = 'ha_request_rejected' if 400 <= exc.code < 500 else 'ha_request_not_confirmed'
-            if exc.code in (400, 500):
-                try:
-                    message = json.loads(exc.read(4097)).get('message')
-                    reason = HA_ERRORS.get(message, reason)
-                except (ValueError, TypeError, AttributeError, OSError):
-                    # Untrusted error details are optional; retain the fixed sanitized HA error reason.
-                    pass
-            exc.close()
+            with exc:
+                if exc.code in (400, 500):
+                    try:
+                        message = json.loads(_read_body(exc, 4096, deadline)).get('message')
+                        reason = HA_ERRORS.get(message, reason)
+                    except (AppsHAError, ValueError, TypeError, AttributeError, OSError,
+                            http.client.HTTPException, RecursionError):
+                        # Error details are optional. Keep the sanitized status.
+                        pass
             raise AppsHAError(reason) from None
         except (OSError, error.URLError, http.client.HTTPException):
             raise AppsHAError('ha_request_outcome_unknown') from None
@@ -230,8 +243,14 @@ class HomeAssistantApps:
                 (timer.get('id') is None or _match(r'[0-9a-f]{32}', timer['id'])), 'invalid_ha_response')
         for key in ('deadline', 'remaining_seconds'):
             item = timer.get(key)
-            require(item is None or type(item) in ((int,) if key == 'remaining_seconds' else (int, float))
-                    and math.isfinite(item) and item >= 0, 'invalid_ha_response')
+            if item is None:
+                continue
+            allowed = (int,) if key == 'remaining_seconds' else (int, float)
+            try:
+                require(type(item) in allowed and math.isfinite(item) and item >= 0,
+                        'invalid_ha_response')
+            except OverflowError:
+                raise AppsHAError('invalid_ha_response') from None
         require(alarm.get('line') in lines and type(alarm.get('configured')) is bool and
                 type(alarm.get('enabled')) is bool and
                 _match(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]', alarm.get('time')) and

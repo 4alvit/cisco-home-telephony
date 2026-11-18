@@ -98,19 +98,25 @@ def check_phone_config(site, configs):
         elif current is not None and "=" in line:
             key, value = (part.strip() for part in line.split("=", 1))
             current.setdefault(key, []).append(value)
+    local_transports = {"transport-udp": "udp", "transport-tcp": "tcp"}
     transports = set()
     for section in sections:
         if section.get("type") == ["transport"]:
             if section["name"] in external["transports"]:
                 continue
-            transports.add(section["name"])
+            name = section["name"]
+            if (name not in local_transports or name in transports
+                    or section.get("protocol") != [local_transports[name]]
+                    or section.get("bind") != [f"{site['node_ipv4']}:5060"]):
+                raise ValueError("PJSIP transport name, protocol or bind differs from site.json; rerun provision.py")
+            transports.add(name)
             if section.get("local_net") != local_networks(site):
                 raise ValueError("PJSIP local networks differ from site.json; rerun provision.py")
         if (section.get("type") == ["endpoint"] and section["name"] != "ha-assist"
                 and section["name"] not in external["endpoints"] and section["name"] not in generic):
             if section.get("deny") != ["0.0.0.0/0"] or section.get("permit") != expected:
                 raise ValueError("Phone source ACL differs from site.json; rerun provision.py")
-    if transports != {"transport-udp", "transport-tcp"}:
+    if transports != local_transports.keys():
         raise ValueError("PJSIP transports differ from generated configuration; rerun provision.py")
 
 
@@ -158,8 +164,18 @@ def check_ha_config(site, configs):
 
 def inspect_cluster(site):
     base = ["kubectl", "--context", site["kube_context"], "--request-timeout=15s"]
-    result = subprocess.run(base + ["get", "node", site["node_name"], "-o", "json"], check=True, capture_output=True, text=True)
-    node = json.loads(result.stdout)
+
+    def get_json(*args):
+        # The request timeout alone cannot bound the local kubectl process,
+        # for example while it waits for an exec credential helper.
+        try:
+            result = subprocess.run(base + ["get", *args, "-o", "json"],
+                                    check=True, capture_output=True, text=True, timeout=20)
+        except subprocess.TimeoutExpired:
+            raise ValueError("Cluster preflight timed out waiting for kubectl") from None
+        return json.loads(result.stdout)
+
+    node = get_json("node", site["node_name"])
     conditions = {c["type"]: c["status"] for c in node["status"].get("conditions", [])}
     if conditions.get("Ready") != "True":
         raise ValueError("Selected node is not Ready")
@@ -176,9 +192,8 @@ def inspect_cluster(site):
     info = node["status"]["nodeInfo"]
     if info["operatingSystem"] != "linux" or info["architecture"] not in ("amd64", "arm64"):
         raise ValueError("Node must be Linux amd64/arm64; build the matching image architecture")
-    pods = subprocess.run(base + ["get", "pods", "-A", "--field-selector", f"spec.nodeName={site['node_name']}", "-o", "json"],
-                          check=True, capture_output=True, text=True)
-    other_host_pods = [p["metadata"]["name"] for p in json.loads(pods.stdout)["items"] if p["spec"].get("hostNetwork")
+    pods = get_json("pods", "-A", "--field-selector", f"spec.nodeName={site['node_name']}")
+    other_host_pods = [p["metadata"]["name"] for p in pods["items"] if p["spec"].get("hostNetwork")
                        and p["metadata"].get("namespace") != site["namespace"]]
     print(f"Node checked: {site['node_name']} {site['node_ipv4']} {info['architecture']} {info['kubeletVersion']}")
     if other_host_pods:

@@ -122,6 +122,7 @@ def open_stream(station, url=None, content_types=None, purpose="stream", metadat
         port = p.port if p.port is not None else (443 if p.scheme == "https" else 80)
         addresses = public_addresses(p.hostname, port)
         conn = http.client.HTTPConnection(p.hostname, port, timeout=IO_TIMEOUT)
+        response = None
         try:
             last_error = None
             for family, kind, protocol, _, address in addresses:
@@ -150,6 +151,7 @@ def open_stream(station, url=None, content_types=None, purpose="stream", metadat
                 if not location or redirect == MAX_REDIRECTS:
                     raise ValueError("stream redirect limit")
                 url = urljoin(url, location)
+                response.close()
                 conn.close()
                 continue
             if response.status != 200:
@@ -159,11 +161,29 @@ def open_stream(station, url=None, content_types=None, purpose="stream", metadat
                 raise ValueError("stream is not supported direct audio")
             if not metadata and response.getheader("icy-metaint") not in (None, "0"):
                 raise ValueError("server returned unsupported ICY metadata")
+            # HTTPResponse.geturl() expects the effective URL, as used by urllib.
+            response.url = url
             return conn, response
         except BaseException:
-            conn.close()
+            with contextlib.closing(conn):
+                if response is not None:
+                    response.close()
             raise
     raise ValueError("stream redirect limit")
+
+
+def _read_bounded_body(response, limit, label):
+    # HTTPResponse.read(n) can return a short body without raising IncompleteRead.
+    # Capture the expected length first because http.client updates it during reads.
+    length = response.length
+    if length is not None and length > limit:
+        raise ValueError(f"{label} size rejected")
+    body = response.read(limit + 1)
+    if len(body) > limit:
+        raise ValueError(f"{label} size rejected")
+    if length is not None and len(body) != length:
+        raise ValueError(f"{label} incomplete")
+    return body
 
 
 def gpm_stream_url(station):
@@ -177,12 +197,8 @@ def gpm_stream_url(station):
     api = station["url"]
     checked_url(api, station, "api")
     conn, response = open_stream(station, api, {"application/json"}, purpose="api")
-    try:
-        body = response.read(GPM_API_LIMIT + 1)
-    finally:
-        conn.close()
-    if len(body) > GPM_API_LIMIT:
-        raise ValueError("broadcaster response size rejected")
+    with contextlib.closing(conn), contextlib.closing(response):
+        body = _read_bounded_body(response, GPM_API_LIMIT, "broadcaster response")
     try:
         document = json.loads(body)
     except (ValueError, UnicodeError, RecursionError):
@@ -208,11 +224,14 @@ def gpm_stream_url(station):
 
 def hls_playlist(text, base):
     """Small unencrypted audio HLS subset; no keys, byte ranges or external maps."""
-    if len(text) > 65536 or not text.startswith("#EXTM3U"):
+    if len(text) > 65536:
+        raise ValueError("HLS playlist size rejected")
+    lines = [line.strip() for line in text.splitlines()]
+    if not lines or lines[0] != "#EXTM3U":
         raise ValueError("invalid HLS playlist")
     if any(tag in text for tag in ("#EXT-X-KEY", "#EXT-X-MAP", "#EXT-X-BYTERANGE", "#EXT-X-I-FRAME")):
         raise ValueError("unsupported HLS feature")
-    urls = [urljoin(base, line.strip()) for line in text.splitlines() if line.strip() and not line.startswith("#")]
+    urls = [urljoin(base, line) for line in lines if line and not line.startswith("#")]
     if not 1 <= len(urls) <= 64:
         raise ValueError("invalid HLS entry count")
     return "#EXT-X-STREAM-INF:" in text, urls
@@ -225,11 +244,13 @@ def hls_chunks(station, stop):
     master_count = 0
     while not stop.is_set():
         conn, response = open_stream(station, playlist, {"application/vnd.apple.mpegurl", "application/x-mpegurl", "audio/mpegurl"})
-        try:
-            body = response.read(65537).decode("utf-8")
-        finally:
-            conn.close()
-        master, urls = hls_playlist(body, playlist)
+        with contextlib.closing(conn), contextlib.closing(response):
+            if stop.is_set():
+                return
+            body = _read_bounded_body(response, 65536, "HLS playlist")
+            effective_url = response.geturl()
+        text = body.decode("utf-8")
+        master, urls = hls_playlist(text, effective_url)
         for url in urls:
             checked_url(url, station)
         if master:
@@ -244,15 +265,15 @@ def hls_chunks(station, stop):
             if url in seen:
                 continue
             conn, response = open_stream(station, url)
-            try:
-                data = response.read(2_000_001)
-            finally:
-                conn.close()
-            if not data or len(data) > 2_000_000:
+            with contextlib.closing(conn), contextlib.closing(response):
+                if stop.is_set():
+                    return
+                data = _read_bounded_body(response, 2_000_000, "HLS segment")
+            if not data:
                 raise ValueError("HLS segment size rejected")
             seen = (seen + [url])[-256:]
             yield data
-        if "#EXT-X-ENDLIST" in body:
+        if "#EXT-X-ENDLIST" in text:
             return
         stop.wait(1.5)
 
@@ -304,58 +325,64 @@ class Call:
     def __init__(self, station, seconds, token, opener=open_stream):
         self.station, self.seconds, self.token, self.opener = station, seconds, token, opener
         self.stop = threading.Event()
-        self.proc = self.http = self.peer = None
+        self.close_lock = threading.Lock()
+        self.proc = self.peer = None
         self.failed = False
         self.frames = 0
 
     def close(self):
         self.stop.set()
-        if self.peer:
-            with contextlib.suppress(OSError):
-                self.peer.shutdown(socket.SHUT_RDWR)
-        if self.proc:
-            if self.proc.poll() is None:
-                self.proc.terminate()
-                try:
-                    self.proc.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    self.proc.kill()
-                    self.proc.wait(timeout=1)
-            for pipe in (self.proc.stdin, self.proc.stdout):
+        with self.close_lock:
+            if self.peer:
                 with contextlib.suppress(OSError):
-                    pipe.close()
-        if self.http:
-            self.http.close()
+                    self.peer.shutdown(socket.SHUT_RDWR)
+            if self.proc:
+                if self.proc.poll() is None:
+                    self.proc.terminate()
+                    try:
+                        self.proc.wait(timeout=1)
+                    except subprocess.TimeoutExpired:
+                        self.proc.kill()
+                        self.proc.wait(timeout=1)
+                for pipe in (self.proc.stdin, self.proc.stdout):
+                    with contextlib.suppress(OSError):
+                        pipe.close()
 
     def feed(self):
         try:
-            if self.station.get("hls"):
-                chunks = hls_chunks(self.station, self.stop)
-            else:
-                self.http, response = self.opener(self.station)
-                chunks = iter(lambda: response.read1(8192), b"")
-            # A hard byte ceiling complements timeouts even for fast/malicious sources.
-            budget = self.seconds * 128000 + 2_000_000
-            for data in chunks:
-                if self.stop.is_set():
-                    break
-                budget -= len(data)
-                if budget <= 0:
-                    raise ValueError("stream byte limit")
-                while data and not self.stop.is_set():
-                    written = self.proc.stdin.write(data)
-                    if not written:
-                        raise OSError("decoder input closed")
-                    data = data[written:]
-                self.proc.stdin.flush()
+            if self.stop.is_set():
+                return
+            # The fetching thread owns HTTP objects. Closing HTTPResponse from
+            # the socket thread can block behind a read on its buffered file.
+            with contextlib.ExitStack() as resources:
+                if self.station.get("hls"):
+                    chunks = resources.enter_context(contextlib.closing(hls_chunks(self.station, self.stop)))
+                else:
+                    conn, response = self.opener(self.station)
+                    resources.enter_context(contextlib.closing(conn))
+                    resources.enter_context(contextlib.closing(response))
+                    chunks = iter(lambda: response.read1(8192), b"")
+                # A hard byte ceiling complements timeouts for fast sources.
+                budget = self.seconds * 128000 + 2_000_000
+                while not self.stop.is_set():
+                    data = next(chunks, None)
+                    if data is None:
+                        break
+                    budget -= len(data)
+                    if budget <= 0:
+                        raise ValueError("stream byte limit")
+                    while data and not self.stop.is_set():
+                        written = self.proc.stdin.write(data)
+                        if not written:
+                            raise OSError("decoder input closed")
+                        data = data[written:]
         except (OSError, ValueError, http.client.HTTPException):
-            self.failed = True
+            if not self.stop.is_set():
+                self.failed = True
         finally:
             if self.proc:
                 with contextlib.suppress(OSError):
                     self.proc.stdin.close()
-            if self.http:
-                self.http.close()
 
     def discard_input(self, conn):
         try:
@@ -377,14 +404,20 @@ class Call:
         try:
             conn, address = listener.accept()
             with conn:
-                self.peer = conn
+                with self.close_lock:
+                    if self.stop.is_set():
+                        return
+                    self.peer = conn
                 conn.settimeout(3)
                 kind, data = receive_frame(conn)
                 if address[0] != "127.0.0.1" or kind != 1 or data != self.token.bytes:
                     raise ValueError("AudioSocket call identity mismatch")
                 conn.settimeout(IO_TIMEOUT)
-                self.proc = subprocess.Popen(ffmpeg_args(self.station), stdin=subprocess.PIPE,
-                                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+                with self.close_lock:
+                    if self.stop.is_set():
+                        return
+                    self.proc = subprocess.Popen(ffmpeg_args(self.station), stdin=subprocess.PIPE,
+                                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
                 threading.Thread(target=self.feed, daemon=True).start()
                 threading.Thread(target=self.discard_input, args=(conn,), daemon=True).start()
                 last_data = time.monotonic()
@@ -395,11 +428,13 @@ class Call:
                     if select.select([self.proc.stdout], [], [], 0.1)[0]:
                         data = os.read(self.proc.stdout.fileno(), 8192)
                         if not data:
-                            self.failed = True
+                            if not self.stop.is_set():
+                                self.failed = True
                             break
                         pending.extend(data)
                         last_data = time.monotonic()
-                    if time.monotonic() - last_data > (START_TIMEOUT if not self.frames else IO_TIMEOUT):
+                    timeout = START_TIMEOUT if not self.frames else IO_TIMEOUT
+                    if not self.stop.is_set() and time.monotonic() - last_data > timeout:
                         self.failed = True
                         break
                     while len(pending) >= FRAME_BYTES and not self.stop.is_set():
@@ -419,7 +454,8 @@ class Call:
                 with contextlib.suppress(OSError):
                     conn.sendall(b"\x00\x00\x00")
         except (OSError, EOFError, ValueError):
-            self.failed = True
+            if not self.stop.is_set():
+                self.failed = True
         finally:
             self.close()
 

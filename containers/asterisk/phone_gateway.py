@@ -1885,13 +1885,25 @@ class Gateway:
                 pass
 
 
-def voice_object(pairs):
-    """Reject duplicate JSON fields before dispatching any voice operation."""
+def request_object(pairs, duplicate_reason):
+    """Reject ambiguous JSON before dispatching a mutation."""
     value = {}
     for key, item in pairs:
-        require(key not in value, 'invalid_voice_request', 400)
+        require(key not in value, duplicate_reason, 400)
         value[key] = item
     return value
+
+
+def require_json_depth(value, remaining=16):
+    if isinstance(value, dict):
+        children = value.values()
+    elif isinstance(value, list):
+        children = value
+    else:
+        return
+    require(remaining > 0, 'invalid_json', 400)
+    for child in children:
+        require_json_depth(child, remaining - 1)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1932,6 +1944,15 @@ class Handler(BaseHTTPRequestHandler):
         require(length.isdigit() and int(length) <= limit, 'request_too_large', 413)
         data = self.rfile.read(int(length))
         require(len(data) == int(length), 'truncated_request', 400)
+        return data
+
+    def json_body(self, limit, *, duplicate_reason='invalid_voice_request'):
+        try:
+            data = json.loads(self.body(limit),
+                              object_pairs_hook=lambda pairs: request_object(pairs, duplicate_reason))
+        except (ValueError, RecursionError):
+            raise Refused('invalid_json', 400) from None
+        require_json_depth(data)
         return data
 
     def handle_request(self):
@@ -2009,10 +2030,7 @@ class Handler(BaseHTTPRequestHandler):
             require(gateway.notifications is not None, 'notifications_not_configured', 503)
             require(self.headers.get('Content-Type', '').split(';')[0] == 'application/json',
                     'json_required', 400)
-            try:
-                data = json.loads(self.body(16384), object_pairs_hook=voice_object)
-            except (ValueError, UnicodeError):
-                raise Refused('invalid_json', 400) from None
+            data = self.json_body(16384)
             require(isinstance(data, dict), 'json_object_required', 400)
             dry_run = data.pop('dry_run', False)
             require(type(dry_run) is bool, 'invalid_dry_run', 400)
@@ -2027,10 +2045,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(200, gateway.endpoint_listing(extension))
             require(self.command == 'POST' and action is not None, 'not_found', 404)
             require(self.headers.get('Content-Type', '').split(';')[0] == 'application/json', 'json_required', 400)
-            try:
-                data = json.loads(self.body(8192), object_pairs_hook=voice_object)
-            except (ValueError, UnicodeError):
-                raise Refused('invalid_json', 400) from None
+            data = self.json_body(8192)
             return self.reply(200, gateway.endpoint_mutate(extension, action, data))
         voice_match = re.fullmatch(
             r'/v1/phones/(2[0-9]{2})/voice_(status|start|stop|recovery_status|recover|hands_free_status|hands_free_enable|hands_free_disable)(\?include_playback=1)?', self.path)
@@ -2044,10 +2059,7 @@ class Handler(BaseHTTPRequestHandler):
                 require(self.command == 'POST', 'bad_voice_method', 400)
                 require(self.headers.get('Content-Type', '').split(';')[0] == 'application/json',
                         'json_required', 400)
-                try:
-                    data = json.loads(self.body(8192), object_pairs_hook=voice_object)
-                except (ValueError, UnicodeError):
-                    raise Refused('invalid_json', 400) from None
+                data = self.json_body(8192)
             context = {'source': source,
                        'authorization': tuple(self.headers.get_all('Authorization', []))}
             return self.reply(200, gateway.voice_request(
@@ -2058,10 +2070,7 @@ class Handler(BaseHTTPRequestHandler):
         match = re.fullmatch(r'/v1/phones/(2[0-9]{2})/([a-z]+(?:_[a-z]+)*)', self.path)
         require(match, 'not_found', 404)
         require(self.headers.get('Content-Type', '').split(';')[0] == 'application/json', 'json_required', 400)
-        try:
-            data = json.loads(self.body(MAX_BODY))
-        except (ValueError, UnicodeError):
-            raise Refused('invalid_json', 400) from None
+        data = self.json_body(MAX_BODY, duplicate_reason='invalid_json')
         return self.reply(200, gateway.mutate(match[1], match[2], data))
 
     def do_GET(self):
@@ -2123,7 +2132,10 @@ def main():
                 uncertain = True
         gateway.stopped.set()
         if gateway.player is not None:
-            gateway.player.close()
+            try:
+                gateway.player.close()
+            except Exception:
+                print('Player shutdown incomplete.', file=sys.stderr)
         if gateway.camera_preview is not None:
             try:
                 gateway.camera_preview.close()

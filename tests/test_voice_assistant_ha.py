@@ -124,6 +124,25 @@ class HAProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(socket.commands[-1], {"id": 2, "type": "ping"})
         self.assertTrue(socket.closed)
 
+    async def test_malformed_conversation_id_cannot_poison_the_next_turn(self):
+        for value in ({"private": "synthetic value"}, [], False, 13):
+            completion = answer_events()
+            intent = next(item for item in completion if item["event"]["type"] == "intent-end")
+            intent["event"]["data"]["intent_output"]["conversation_id"] = value
+            socket = FakeWebSocket(completion=completion)
+            with self.subTest(value=value), self.assertRaisesRegex(
+                    AssistError, r"\(invalid-conversation-id\)$"):
+                await client_for(socket).run(samples())
+            self.assertTrue(socket.closed)
+
+    async def test_absent_conversation_id_keeps_the_previous_id(self):
+        completion = answer_events()
+        intent = next(item for item in completion if item["event"]["type"] == "intent-end")
+        intent["event"]["data"]["intent_output"]["conversation_id"] = None
+        socket = FakeWebSocket(completion=completion)
+        result = await client_for(socket).run(samples())
+        self.assertEqual(result.conversation_id, "initial-conversation")
+
     async def test_auth_error_does_not_send_pipeline_or_audio(self):
         socket = FakeWebSocket(auth_ok=False)
         with self.assertRaises(AssistError) as raised:

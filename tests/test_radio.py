@@ -14,7 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 import uuid
 
 ROOT = Path(__file__).parents[1]
@@ -199,13 +199,107 @@ class RadioIsolation(unittest.TestCase):
         master, urls = r.hls_playlist('#EXTM3U\n#EXTINF:3,\nhttps://chunks.radyotvonline.net/one.aac\n', station['url'])
         self.assertFalse(master)
         r.checked_url(urls[0], station)
-        for body in ('not a playlist', '#EXTM3U\n#EXT-X-KEY:METHOD=AES-128\nhttps://x/one.aac',
+        for body in ('not a playlist', '#EXTM3U-invalid\nhttps://x/one.aac',
+                     '#EXTM3U\n#EXT-X-KEY:METHOD=AES-128\nhttps://x/one.aac',
                      '#EXTM3U\n#EXT-X-BYTERANGE:10\nhttps://x/one.aac', '#EXTM3U\n'+'x'*65536):
             with self.assertRaises(ValueError):
                 r.hls_playlist(body, station['url'])
         _, urls = r.hls_playlist('#EXTM3U\nfile:///etc/passwd\n', station['url'])
         with self.assertRaises(ValueError):
             r.checked_url(urls[0], station)
+
+    def test_hls_uses_each_redirected_playlist_base_and_closes_responses(self):
+        source = 'http://radio.example/live/playlist.m3u8'
+        station = {'url': source, 'hosts': ['radio.example', 'cdn.example'], 'allow_http': True}
+        fixtures = [
+            (302, {'Location': 'http://cdn.example/master/index.m3u8'}, b''),
+            (200, {'Content-Type': 'application/vnd.apple.mpegurl'},
+             b'#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=120000\ntrack/list.m3u8\n'),
+            (302, {'Location': '/media/session.m3u8'}, b''),
+            (200, {'Content-Type': 'application/vnd.apple.mpegurl'},
+             b'#EXTM3U\n   #EXTINF:3,\nclip.aac\n#EXT-X-ENDLIST\n'),
+            (200, {'Content-Type': 'audio/aac'}, b'fixture'),
+        ]
+        connections = [Mock() for _ in fixtures]
+        responses = [connection.getresponse.return_value for connection in connections]
+        for response, (status, headers, body) in zip(responses, fixtures):
+            response.status = status
+            response.length = len(body)
+            response.getheader.side_effect = headers.get
+            response.read.return_value = body
+            response.geturl.side_effect = lambda response=response: response.url
+        address = (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('8.8.8.8', 80))
+        with patch.object(r, 'public_addresses', return_value=[address]), \
+                patch.object(r.socket, 'socket'), \
+                patch.object(r.http.client, 'HTTPConnection', side_effect=connections) as connect:
+            self.assertEqual(list(r.hls_chunks(station, threading.Event())), [b'fixture'])
+        self.assertEqual([item.args[0] for item in connect.call_args_list],
+                         ['radio.example'] + ['cdn.example'] * 4)
+        self.assertEqual([conn.request.call_args.args[1] for conn in connections],
+                         ['/live/playlist.m3u8', '/master/index.m3u8', '/master/track/list.m3u8',
+                          '/media/session.m3u8', '/media/clip.aac'])
+        for response, connection in zip(responses, connections):
+            response.close.assert_called_once_with()
+            connection.close.assert_called_once_with()
+
+    def test_hls_refuses_a_truncated_playlist_or_segment(self):
+        source = 'https://radio.example/index.m3u8'
+        station = {'url': source, 'hosts': ['radio.example']}
+        playlist = b'#EXTM3U\n#EXTINF:3,\nclip.aac\n#EXT-X-ENDLIST\n'
+        clip = b'synthetic AAC data'
+        for truncated in ('playlist', 'segment'):
+            with self.subTest(truncated=truncated):
+                responses = []
+                for kind, body in (('playlist', playlist), ('segment', clip)):
+                    length = len(body) + (10 if kind == truncated else 0)
+                    wire = f'HTTP/1.1 200 OK\r\nContent-Length: {length}\r\n\r\n'.encode() + body
+                    response = r.http.client.HTTPResponse(Mock(makefile=Mock(return_value=io.BytesIO(wire))))
+                    response.begin()
+                    response.url = source
+                    responses.append(response)
+                    self.addCleanup(response.close)
+                connections = [Mock(), Mock()]
+                with patch.object(r, 'open_stream', side_effect=list(zip(connections, responses))), \
+                        self.assertRaisesRegex(ValueError, f'HLS {truncated} incomplete'):
+                    list(r.hls_chunks(station, threading.Event()))
+                opened = 1 if truncated == 'playlist' else 2
+                for conn, response in zip(connections[:opened], responses[:opened]):
+                    conn.close.assert_called_once_with()
+                    self.assertTrue(response.isclosed())
+
+    def test_hls_cancel_after_headers_closes_response_without_reading_body(self):
+        station = {'url': 'https://radio.example/index.m3u8'}
+        stop = threading.Event()
+        connection, response = Mock(), Mock()
+
+        def open_then_stop(*_args):
+            stop.set()
+            return connection, response
+
+        with patch.object(r, 'open_stream', side_effect=open_then_stop):
+            self.assertEqual(list(r.hls_chunks(station, stop)), [])
+        response.read.assert_not_called()
+        response.close.assert_called_once_with()
+        connection.close.assert_called_once_with()
+
+    def test_cancellation_during_input_read_does_not_report_failure(self):
+        for cancelled in (False, True):
+            with self.subTest(cancelled=cancelled):
+                connection, response = Mock(), Mock()
+                call = r.Call({}, 1, uuid.uuid4(), opener=lambda _station: (connection, response))
+                call.proc = Mock()
+
+                def read(_size):
+                    if cancelled:
+                        call.stop.set()
+                    raise OSError('fixture read interrupted')
+
+                response.read1.side_effect = read
+                call.feed()
+                self.assertEqual(call.failed, not cancelled)
+                response.close.assert_called_once_with()
+                connection.close.assert_called_once_with()
+                call.proc.stdin.close.assert_called_once_with()
 
     def test_ffmpeg_has_no_network_input_and_no_shell(self):
         args = r.ffmpeg_args(r.catalog()["echo"])
@@ -282,6 +376,22 @@ class RadioIsolation(unittest.TestCase):
             self.assertTrue(call.failed)
             popen.assert_not_called()
 
+    def test_close_during_handshake_does_not_start_decoder(self):
+        call = r.Call({}, 1, uuid.uuid4())
+        listener, conn = Mock(), MagicMock()
+        conn.__enter__.return_value = conn
+        listener.accept.return_value = (conn, ('127.0.0.1', 12345))
+
+        def cancelled_handshake(_peer):
+            call.close()
+            return 1, call.token.bytes
+
+        with patch.object(r, 'receive_frame', side_effect=cancelled_handshake), \
+                patch.object(r.subprocess, 'Popen') as launch:
+            call.serve(listener)
+        launch.assert_not_called()
+        self.assertFalse(call.failed)
+
     @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg required for real decoder test")
     def test_real_mp3_and_aac_preserve_wideband_audio_and_reap_on_hangup_or_hash(self):
         class Http:
@@ -340,8 +450,32 @@ class RadioIsolation(unittest.TestCase):
                     thread.join(3)
                 self.assertFalse(thread.is_alive())
                 self.assertTrue(call.stop.is_set())
+                self.assertFalse(call.failed)
                 self.assertIsNotNone(call.proc)
                 self.assertIsNotNone(call.proc.poll())
+
+
+class RadioProbe(unittest.TestCase):
+    def test_probe_requires_a_clean_end_even_after_receiving_live_samples(self):
+        script = module('radio_probe_test', 'scripts/check_radio_streams.py')
+        frames = [(r.AUDIO_KIND, struct.pack('<h', 400) * r.FRAME_SAMPLES)] * 25
+        for ending, failed, expected in ((EOFError(), False, False),
+                                         ((0, b'wrong'), False, False),
+                                         ((0, b''), True, False),
+                                         ((0, b''), False, True)):
+            with self.subTest(ending=ending, failed=failed):
+                call = Mock(failed=failed)
+                call.proc.poll.return_value = 0
+                with patch.object(script.radio, 'Call', return_value=call), \
+                        patch.object(script.radio, 'receive_frame', side_effect=[*frames, ending]), \
+                        patch.object(script.socket, 'socket'), \
+                        patch.object(script.socket, 'create_connection'), \
+                        patch.object(script.threading, 'Thread') as worker:
+                    worker.return_value.is_alive.return_value = False
+                    result = script.probe('echo')
+                self.assertEqual(result['decoded_frames'], 25)
+                self.assertEqual(result['peak'], 400)
+                self.assertEqual(result['passed'], expected)
 
 
 if __name__ == "__main__":

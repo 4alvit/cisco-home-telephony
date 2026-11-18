@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("render_k3s", ROOT / "scripts/render_k3s.py")
@@ -33,6 +34,13 @@ def configs():
 
 
 class K3sSafetyTests(unittest.TestCase):
+    def test_malformed_site_and_tftp_image_get_validation_errors(self):
+        with self.assertRaisesRegex(ValueError, "site must be an object"):
+            render.validate_site([])
+        for image in (None, 42, ["image"]):
+            with self.subTest(image=image), self.assertRaisesRegex(ValueError, "site.tftp_image"):
+                render.validate_site(dict(fixture(), tftp_image=image), with_tftp=True)
+
     def test_mutable_image_public_address_and_shared_namespace_rejected(self):
         for changes in ({"asterisk_image": "image:latest"}, {"node_ipv4": "8.8.8.8", "lan_cidr": "8.8.8.0/24"},
                         {"node_ipv4": "192.168.161.4"}, {"namespace": "default"}, {"kube_context": ""}):
@@ -106,17 +114,58 @@ class K3sSafetyTests(unittest.TestCase):
 
     def test_readiness_requires_both_transports_not_just_running_process(self):
         probe = render.render_core(fixture(), configs())["items"][2]["spec"]["template"]["spec"]["containers"][0]["readinessProbe"]["exec"]["command"]
+        udp = "Transport: transport-udp udp 0 0 192.168.50.58:5060"
+        tcp = "Transport: transport-tcp tcp 0 0 192.168.50.58:5060"
         with tempfile.TemporaryDirectory() as directory:
             binary = Path(directory) / "asterisk"
             binary.write_text("#!/bin/sh\nprintf '%s\\n' \"$TEST_TRANSPORTS\"\n")
             binary.chmod(0o700)
             env = dict(os.environ, PATH=directory + os.pathsep + os.environ["PATH"])
-            for output, success in (("Transport: header only", False),
-                                    ("Transport: transport-udp udp 0 0 192.168.50.58:5060", False),
-                                    ("Transport: transport-udp udp 0 0 192.168.50.58:5060\nTransport: transport-tcp tcp 0 0 192.168.50.58:5060", True)):
-                env["TEST_TRANSPORTS"] = output
-                result = subprocess.run(probe, env=env, capture_output=True)
-                self.assertEqual(result.returncode == 0, success)
+            for output, success in (("Transport: header only", False), (udp, False),
+                                    (udp + "\n" + tcp, True),
+                                    (udp + "\n" + tcp.replace("192.168.50.58", "192.168.50.57"), False),
+                                    (udp + "\n" + tcp.replace("192.168.50.58", "0.0.0.0"), False),
+                                    (udp.replace(":5060", ":50600") + "\n" + tcp, False)):
+                with self.subTest(output=output):
+                    env["TEST_TRANSPORTS"] = output
+                    result = subprocess.run(probe, env=env, capture_output=True, timeout=5)
+                    self.assertEqual(result.returncode == 0, success)
+
+    def test_preflight_rejects_stale_or_inconsistent_local_transports(self):
+        with patch.object(sys, "path", [str(ROOT / "scripts"), *sys.path]):
+            import preflight
+        site, config = fixture(), configs()
+        preflight.check_phone_config(site, config)
+        original = config["pjsip.conf"]
+        cases = (
+            (dict(site, node_ipv4="192.168.50.57"), original),
+            (site, original.replace("protocol=tcp", "protocol=udp")),
+            (site, original.replace("bind=192.168.50.58:5060", "bind=0.0.0.0:5060")),
+            (site, original + original),
+        )
+        for changed_site, pjsip in cases:
+            with self.subTest(site=changed_site, pjsip=pjsip):
+                with self.assertRaisesRegex(ValueError, "PJSIP transport .* rerun provision.py"):
+                    preflight.check_phone_config(changed_site, dict(config, **{"pjsip.conf": pjsip}))
+
+    def test_cluster_preflight_bounds_both_kubectl_processes(self):
+        with patch.object(sys, "path", [str(ROOT / "scripts"), *sys.path]):
+            import preflight
+        site = fixture()
+        ready_node = json.dumps({"status": {
+            "conditions": [{"type": "Ready", "status": "True"}],
+            "addresses": [{"type": "InternalIP", "address": site["node_ipv4"]}],
+            "nodeInfo": {"operatingSystem": "linux", "architecture": "amd64", "kubeletVersion": "fixture"},
+        }})
+        timeout = subprocess.TimeoutExpired(["kubectl"], 20, stderr="private diagnostic")
+        for outcomes in ([timeout], [subprocess.CompletedProcess([], 0, ready_node), timeout]):
+            with self.subTest(calls=len(outcomes)), patch.object(preflight.subprocess, "run", side_effect=outcomes) as run:
+                with self.assertRaisesRegex(ValueError, "^Cluster preflight timed out waiting for kubectl$"):
+                    preflight.inspect_cluster(site)
+                self.assertEqual(run.call_count, len(outcomes))
+                for call in run.call_args_list:
+                    self.assertEqual(call.kwargs["timeout"], 20)
+                    self.assertIn("--request-timeout=15s", call.args[0])
 
     def run_ha_probe(self, tcp_row, *, assist=True,
                      codec="codec_opus_open_source.so Opus transcoder 0 Running core",
@@ -261,6 +310,28 @@ esac
             rendered = local / "rendered/core.yaml"
             self.assertEqual(rendered.stat().st_mode & 0o777, 0o600)
             self.assertFalse((local / "rendered/tftp.yaml").exists())
+
+    def test_invalid_deploy_arguments_are_rejected_before_any_preflight(self):
+        cases = (
+            (["--server-dry-run", "--apply", "--firewall-reviewed"], "Choose one deployment mode"),
+            (["--apply", "--server-dry-run"], "Choose one deployment mode"),
+            (["--apply"], "pass --firewall-reviewed"),
+            (["--site"], "--site requires a file path"),
+            (["--phone-addresses", "--profiles-only"], "--phone-addresses requires a file path"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for command in ("python3", "kubectl"):
+                stub = Path(directory, command)
+                stub.write_text("#!/bin/sh\necho 'unexpected execution' >&2\nexit 98\n")
+                stub.chmod(0o700)
+            env = dict(os.environ, PATH=directory + os.pathsep + os.environ["PATH"])
+            for args, diagnostic in cases:
+                with self.subTest(args=args):
+                    result = subprocess.run(["bash", str(ROOT / "scripts/deploy.sh"), *args],
+                                            env=env, capture_output=True, text=True, timeout=5)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertIn(diagnostic, result.stderr)
+                    self.assertNotIn("unexpected execution", result.stdout + result.stderr)
 
     def run_tftp_deploy(self, mode, exit_code=0):
         """Shell dispatch is isolated from the separately tested owner controller."""
