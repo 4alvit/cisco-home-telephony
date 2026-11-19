@@ -159,3 +159,8 @@ BLF, shared lines, transfer and voicemail; generated configuration alone
 does not establish that a feature works on a phone.
 
 PJSIP reference: [official Asterisk examples](https://docs.asterisk.org/Configuration/Channel-Drivers/SIP/Configuring-res_pjsip/res_pjsip-Configuration-Examples/).
+
+When the TFTP Pod sandbox restarts, the init container rebuilds its sealed
+serving tree on the retained `emptyDir` before the daemon starts. This also
+drops profiles removed from the projection. The firmware directory and
+projected configuration remain read-only inputs.

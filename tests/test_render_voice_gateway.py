@@ -208,7 +208,6 @@ class RenderVoiceGatewayTests(unittest.TestCase):
             self.assertNotIn('/workspace', [m['mountPath'] for m in container['volumeMounts']])
         self.assertIn({'name': 'voice-runtime', 'mountPath': '/run/voice', 'subPath': 'private'},
                       pod['containers'][0]['volumeMounts'])
-        self.assertIn('path.chmod(0o700)', r.INIT_CODE)
         self.assertFalse(pod['automountServiceAccountToken'])
 
     def test_actual_stager_and_control_loader_used_without_gateway_construction(self):
@@ -235,7 +234,7 @@ class RenderVoiceGatewayTests(unittest.TestCase):
         with mock.patch.object(r.control, 'load_control_config', side_effect=inspect_staged):
             self.render(profiles=self.profiles)
 
-    def test_init_creates_owner_only_regular_files_and_retry_fails_without_changes(self):
+    def test_init_creates_owner_only_regular_files_on_retained_volume(self):
         source = self.workspace / 'inputs'
         source.mkdir()
         (source / 'gateway.json').write_text('{}')
@@ -256,8 +255,9 @@ class RenderVoiceGatewayTests(unittest.TestCase):
         self.assertFalse(config.is_symlink())
         before = config.read_bytes()
         repeated = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
-        self.assertNotEqual(repeated.returncode, 0)
+        self.assertEqual(repeated.returncode, 0, repeated.stderr)
         self.assertEqual(config.read_bytes(), before)
+        self.assertEqual(stat.S_IMODE(config.stat().st_mode), 0o600)
 
     def test_main_bootstrap_checks_state_without_modifying_it_and_execs_gateway(self):
         state = self.workspace / 'state'
@@ -485,6 +485,76 @@ class RenderVoiceGatewayTests(unittest.TestCase):
         self.write('voice.json', self.voice)
         self.write('transport.json', self.transport)
         return root
+
+    def assert_restart_stages_only_scratch(self, *, wake):
+        model_source = self.wake_profile() if wake else self.workspace / 'unused-models'
+        result = self.render(profiles=self.profiles, models_claim='example-models' if wake else None)
+        runtime = self.workspace / 'scratch'
+        inputs = self.workspace / 'projected'
+        runtime.mkdir()
+        inputs.mkdir()
+        for name, value in self.files(result).items():
+            (inputs / name).write_text(value)
+        configs = runtime / 'private/.local/config'
+        models = runtime / 'private/.local/models'
+        state = runtime / 'private/.local/state'
+        external = self.workspace / 'persistent-state'
+        external.write_text('keep')
+        external.chmod(0o640)
+        init = self.pod(result)['initContainers']
+        def run_all():
+            for container in init:
+                command = container['command'][-1]
+                command = command.replace('/runtime/private', str(runtime / 'private'))
+                command = command.replace('/run/voice-inputs', str(inputs)).replace('/run/wake-models', str(model_source))
+                command = command.replace('/opt/voice-wake', str(ROOT / 'containers/voice-wake'))
+                command = command.replace('/opt/voice', str(ROOT / 'containers/voice'))
+                command = command.replace('uid, gid = 10001, 10001', 'uid, gid = os.geteuid(), os.getegid()')
+                subprocess.run([sys.executable, '-c', command], check=True)
+        run_all()
+        (configs / 'obsolete').symlink_to(external)
+        (state / 'keep').write_text('state')
+        if wake:
+            (models / 'classifier.onnx').write_bytes(b'old scratch')
+        (inputs / 'gateway.json').write_text('new projection')
+        run_all()
+        self.assertEqual((configs / 'gateway.json').read_text(), 'new projection')
+        self.assertFalse((configs / 'obsolete').is_symlink())
+        self.assertEqual(external.read_text(), 'keep')
+        self.assertEqual((state / 'keep').read_text(), 'state')
+        self.assertEqual(external.stat().st_mode & 0o777, 0o640)
+        if wake:
+            self.assertEqual((model_source / 'classifier.onnx').read_bytes(), b'synthetic-model-classifier')
+            self.assertEqual((models / 'classifier.onnx').read_bytes(), b'synthetic-model-classifier')
+        self.assertFalse(any(m['name'] == 'state' for c in init for m in c['volumeMounts']))
+
+    def test_previous_manual_gateway_can_upgrade_but_modified_command_cannot(self):
+        result = self.render(profiles=self.profiles)
+        self.deployment = result['items'][1]
+        legacy = """import os, sys
+from pathlib import Path
+os.umask(0o077)
+root = Path('/runtime/private')
+for path in (root, root / '.local', root / '.local/config', root / '.local/state'):
+    path.mkdir(mode=0o700)
+    path.chmod(0o700)
+sys.path.insert(0, '/opt/voice')
+from stage_private import stage_private
+stage_private('/run/voice-inputs', root / '.local/config', '/run/voice-inputs/staging.json')
+"""
+        command = self.pod(result)['initContainers'][0]['command']
+        command[-1] = legacy
+        upgraded = self.render(profiles=self.profiles)
+        self.assertEqual(self.pod(upgraded)['initContainers'][0]['command'][-1], r.INIT_CODE)
+        command[-1] += '\n'
+        with self.assertRaisesRegex(ValueError, 'foreign_init_containers'):
+            self.render(profiles=self.profiles)
+
+    def test_manual_staging_runs_twice_on_one_emptydir(self):
+        self.assert_restart_stages_only_scratch(wake=False)
+
+    def test_wake_staging_runs_twice_on_one_emptydir(self):
+        self.assert_restart_stages_only_scratch(wake=True)
 
     def test_wake_profile_stages_pinned_models_without_secret_payloads_or_pvc_chown(self):
         self.wake_profile()

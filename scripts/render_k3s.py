@@ -401,6 +401,15 @@ def _render_tftp(site, configs, wallpaper=None, *, profiles_only=False):
         chmod 0755 /served/root/Desktops /served/root/Desktops/320x212x16
         chmod 0644 /served/root/Desktops/320x212x16/List.xml /served/root/Desktops/320x212x16/home.png /served/root/Desktops/320x212x16/home-thumb.png
         """
+    # A sandbox restart reuses the sealed tree on this emptyDir. Restore
+    # directory permissions before removing it. find does not follow symlinks.
+    stage_command = spec["initContainers"][0]["command"]
+    stage_command[2] = """if [ -e /served/root ] || [ -L /served/root ]; then
+        [ -d /served/root ] && [ ! -L /served/root ] || exit 1
+        find /served/root -type d -exec chmod 0700 {} +
+        find /served/root -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+    fi
+    """ + stage_command[2]
     # The serving mount is read-only too: WRQ cannot create OR replace a file.
     # GNU chmod needs five digits to clear SGID inherited from the fsGroup volume.
     spec["initContainers"][0]["command"][2] += "\nfind /served/root -type f -exec chmod 0444 {} +\nfind /served/root -type d -exec chmod 00555 {} +\n"
