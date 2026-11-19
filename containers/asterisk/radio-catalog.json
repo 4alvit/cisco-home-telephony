@@ -493,6 +493,20 @@
       "hls": true,
       "source": "https://www.rbc.ru/story/radio",
       "verified_date": "2026-11-13"
+    },
+    "ksfo-tower": {
+      "extension": "737",
+      "name": "KSFO Tower",
+      "genre": "San Francisco International Airport air traffic control",
+      "url": "https://d.liveatc.net/ksfo_twr",
+      "hosts": [
+        "d.liveatc.net",
+        "s1-bos.liveatc.net"
+      ],
+      "allow_http": false,
+      "format": "mp3",
+      "source": "https://www.liveatc.net/play/ksfo_twr.pls",
+      "verified_date": "2026-11-18"
     }
   }
 }

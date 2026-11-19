@@ -95,8 +95,8 @@ class ExpandedStations(unittest.TestCase):
     def test_combined_catalog_keeps_every_station_and_route(self):
         catalog = radio.catalog()
         self.assertEqual({station['extension'] for station in catalog.values()},
-                         {str(extension) for extension in range(701, 737)})
-        self.assertEqual(len(catalog), 36)
+                         {str(extension) for extension in range(701, 738)})
+        self.assertEqual(len(catalog), 37)
         dial, _ = provision.service_dialplan({"radio": {"enabled": True}})
         for name, station in catalog.items():
             with self.subTest(station=name):
