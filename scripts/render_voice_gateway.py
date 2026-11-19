@@ -29,45 +29,68 @@ MODELS = RUNTIME + '/.local/models'
 MANAGED = 'voice-gateway.cisco-home-telephony/renderer'
 IMAGE = re.compile(r'[a-z0-9][a-z0-9._:/-]*@sha256:[0-9a-f]{64}\Z')
 
-# The emptyDir root is kubelet-owned. Only children created by this UID are
-# private. Init never mounts or chmods the persistent state volume.
+# Init mounts only the scratch volume here. Kubernetes can reuse it after a
+# sandbox restart. The staging helpers still require empty destinations.
 INIT_CODE = """import os, sys
 from pathlib import Path
 os.umask(0o077)
 root = Path('/runtime/private')
-for path in (root, root / '.local', root / '.local/config', root / '.local/state'):
-    path.mkdir(mode=0o700)
-    path.chmod(0o700)
+def private_dir(path):
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        if os.fstat(fd).st_uid != os.geteuid():
+            raise ValueError('unexpected_private_directory_owner')
+        os.fchmod(fd, 0o700)
+    finally:
+        os.close(fd)
+def fresh_stage(path):
+    private_dir(path)
+    # Stagers produce only flat files. Unlinking a symlink leaves its target alone.
+    for entry in path.iterdir():
+        entry.unlink()
+private_dir(root)
+private_dir(root / '.local')
+private_dir(root / '.local/state')
+fresh_stage(root / '.local/config')
 sys.path.insert(0, '/opt/voice')
 from stage_private import stage_private
 stage_private('/run/voice-inputs', root / '.local/config', '/run/voice-inputs/staging.json')
 """
 
-# Wake models use a separate read-only PVC. Do not apply fsGroup to that PVC
-# or the existing state directory: prepare only the new emptyDir children.
-WAKE_PREPARE_CODE = """import os
+# With only CAP_CHOWN, root cannot traverse a retained 0700 user-owned
+# directory. Give the runtime UID its top directory and let it prepare children.
+WAKE_PREPARE_CODE = """import os, stat
 from pathlib import Path
 os.umask(0o077)
 root = Path('/runtime/private')
-paths = (root, root / '.local', root / '.local/config', root / '.local/models', root / '.local/state')
-for path in paths:
-    path.mkdir(mode=0o700)
-    path.chmod(0o700)
-# CAP_CHOWN does not bypass mode-0700 traversal. Transfer parents last.
-for path in reversed(paths):
-    os.chown(path, 10001, 10001)
+uid, gid = 10001, 10001
+try:
+    root.mkdir(mode=0o700)
+except FileExistsError:
+    info = root.lstat()
+    if not stat.S_ISDIR(info.st_mode):
+        raise ValueError('unexpected_voice_runtime_directory')
+    if (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) == (uid, gid, 0o700):
+        raise SystemExit(0)
+    if info.st_uid != 0:
+        raise ValueError('unexpected_voice_runtime_permissions')
+fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    os.fchmod(fd, 0o700)
+    os.fchown(fd, uid, gid)
+finally:
+    os.close(fd)
 """
-WAKE_INIT_CODE = """import json, os, sys
-from pathlib import Path
-os.umask(0o077)
-root = Path('/runtime/private/.local')
-sys.path.insert(0, '/opt/voice')
-from stage_private import stage_private
-stage_private('/run/voice-inputs', root / 'config', '/run/voice-inputs/staging.json')
+WAKE_INIT_CODE = INIT_CODE + """import json
+fresh_stage(root / '.local/models')
 sys.path.insert(0, '/opt/voice-wake')
 from stage_models import stage_models
-bundle = json.loads((root / 'config/wake-bundle.json').read_text())
-stage_models('/run/wake-models', root / 'models', bundle)
+bundle = json.loads((root / '.local/config/wake-bundle.json').read_text())
+stage_models('/run/wake-models', root / '.local/models', bundle)
 """
 
 # Fail closed instead of changing ownership/modes of existing persistent data.
@@ -389,7 +412,13 @@ def render(deployment, config, receipt, capacity, *, image, cpu_request, cpu_lim
                  and init[0].get('command') == ['/usr/local/bin/python3', '-c', WAKE_PREPARE_CODE]
                  and init[1].get('name') == 'stage-voice-private'
                  and init[1].get('command') == ['/usr/local/bin/python3', '-c', WAKE_INIT_CODE])
-    require(not init or (managed and (manual_init or wake_init)),
+    # Allow the two exact init sequences emitted before restart-safe staging.
+    signature = [(c.get('name'), c.get('command')) for c in init]
+    legacy_init = hashlib.sha256(canonical(signature).encode()).hexdigest() in {
+        '419c935673b9c575445a0d3594e191e1ef7ab58bf9572795bea1960447562f0f',  # manual
+        'acb305edbcb00722d052e85a526a7040037980a970a698bbf5aff15cdf1e0fdd',  # wake
+    }
+    require(not init or (managed and (manual_init or wake_init or legacy_init)),
             'foreign_init_containers_not_supported')
     path, mount = state_binding(pod, container)
     # One second per callback/API listener plus ten seconds of scheduling margin.
