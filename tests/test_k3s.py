@@ -112,6 +112,48 @@ class K3sSafetyTests(unittest.TestCase):
         self.assertNotIn("--create", daemon["args"])
         self.assertTrue(daemon["volumeMounts"][0]["readOnly"])
 
+    def test_tftp_reinit_replaces_only_the_sealed_serving_tree(self):
+        for profiles_only in (False, True):
+            with self.subTest(profiles_only=profiles_only), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                served, firmware, config = (root / name for name in ("served", "firmware", "config"))
+                for directory in (served, firmware, config):
+                    directory.mkdir()
+                (firmware / "example.loads").write_text("firmware")
+                external = root / "external"
+                external.mkdir()
+                sentinel = external / "keep"
+                sentinel.write_text("preserve")
+                configs = {"phone.xml": "<device/>"}
+                profile = config / "phone.xml"
+                profile.write_text(configs["phone.xml"])
+                result = render._render_tftp(fixture(), configs, profiles_only=profiles_only)
+                init = result["items"][-1]["spec"]["template"]["spec"]["initContainers"][0]
+                command = list(init["command"])
+                for path in (served, firmware, config):
+                    command[-1] = command[-1].replace("/" + path.name, str(path))
+                subprocess.run(command, check=True)
+                public = served / "root"
+                root_inode = public.stat().st_ino
+                self.assertEqual(public.stat().st_mode & 0o777, 0o555)
+                public.chmod(0o755)
+                (public / "obsolete").write_text("old profile")
+                (public / "old-link").symlink_to(external, target_is_directory=True)
+                public.chmod(0o555)
+                profile.write_text("<new/>")
+                subprocess.run(command, check=True)
+                try:
+                    expected = {"phone.xml"} if profiles_only else {"phone.xml", "example.loads"}
+                    self.assertEqual({p.name for p in public.iterdir()}, expected)
+                    self.assertEqual((public / "phone.xml").read_text(), "<new/>")
+                    self.assertEqual((public / "phone.xml").stat().st_mode & 0o777, 0o444)
+                    self.assertEqual(public.stat().st_mode & 0o777, 0o555)
+                    self.assertEqual(public.stat().st_ino, root_inode)
+                    self.assertEqual(sentinel.read_text(), "preserve")
+                    self.assertEqual((firmware / "example.loads").read_text(), "firmware")
+                finally:
+                    public.chmod(0o755)
+
     def test_readiness_requires_both_transports_not_just_running_process(self):
         probe = render.render_core(fixture(), configs())["items"][2]["spec"]["template"]["spec"]["containers"][0]["readinessProbe"]["exec"]["command"]
         udp = "Transport: transport-udp udp 0 0 192.168.50.58:5060"
