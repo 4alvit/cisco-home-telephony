@@ -169,7 +169,7 @@ Passing this gate does **not** mean an image has no reported vulnerabilities.
 
 The runtime upgrade for [issue #48](https://github.com/4alvit/cisco-home-telephony/issues/48)
 uses official Debian 13 (`trixie`) bases and the signed Debian package snapshot
-`20261101T000000Z`. The manual voice image retains Python 3.12 and its existing
+`20261124T000000Z`. The manual voice image retains Python 3.12 and its existing
 hash-locked wheels; the wake image inherits that base. Asterisk is compiled and
 run on the same Debian distribution, whose system Python is 3.13. TFTP has no
 multimedia dependency and retains its independent Bookworm base and tag.
@@ -268,7 +268,7 @@ The reviewed package identities are:
 - `libbrotli1=1.1.0-2+deb13u1`.
 - `libexpat1=2.9.0-1~deb13u1`.
 - `libssh-4=0.11.5-0+deb13u1`.
-- `libssl3t64=3.5.7-1~deb13u3`.
+- `libssl3t64=3.5.9-1~deb13u1`.
 - `zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1` (security snapshot `20261107T160000Z`).
 
 The exact snapshot pins can be older than the security fixes already present in a

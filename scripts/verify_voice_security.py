@@ -12,13 +12,13 @@ from collections import Counter
 from pathlib import Path
 import re
 
-# Exact Debian 13 packages from snapshot 20261101T000000Z, with the
+# Exact Debian 13 packages from snapshot 20261124T000000Z, with the
 # DSA-6613-1 zlib repair from security snapshot 20261107T160000Z. Epochs
 # are separate Trivy fields; checking only Version/Release would miss them.
 EXACT_PACKAGES = {'libbrotli1': ('1.1.0', '2+deb13u1'),
                   'libexpat1': ('2.9.0', '1~deb13u1'),
                   'libssh-4': ('0.11.5', '0+deb13u1'),
-                  'libssl3t64': ('3.5.7', '1~deb13u3'),
+                  'libssl3t64': ('3.5.9', '1~deb13u1'),
                   'libmbedcrypto16': ('3.6.6', '0.1~deb13u1'),
                   'ffmpeg': ('7.1.5', '0+deb13u1'),
                   'zlib1g': ('1.3.dfsg+really1.3.1', '1+deb13u1')}

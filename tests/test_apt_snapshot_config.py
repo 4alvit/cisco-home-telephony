@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGES = ('asterisk', 'voice')
-SNAPSHOT = '20261101T000000Z'
+SNAPSHOT = '20261124T000000Z'
 
 
 def run_commands(image, contains):
