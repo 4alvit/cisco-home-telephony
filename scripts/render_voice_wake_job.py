@@ -46,12 +46,13 @@ PREPARE = """import os
 from pathlib import Path
 os.umask(0o077)
 root = Path('/runtime/private')
-root.mkdir(mode=0o700)
+# The emptyDir survives init-container restarts; re-seeding must not abort.
+root.mkdir(mode=0o700, exist_ok=True)
 paths = [root, root/'.local', root/'.local/config', root/'.local/models',
          root/'.local/state', root/'.local/state/voice-control']
 for path in paths:
     if path != root:
-        path.mkdir(mode=0o700)
+        path.mkdir(mode=0o700, exist_ok=True)
 for path in reversed(paths):
     os.chown(path, 10001, 10001)
 """

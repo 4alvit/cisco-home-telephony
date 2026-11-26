@@ -347,6 +347,7 @@ def _render_tftp(site, configs, wallpaper=None, *, profiles_only=False):
     if profiles_only:
         spec["tolerations"] = fixed_node_tolerations()
     spec["initContainers"] = [{"name": "stage", "image": site["tftp_image"], "command": ["/bin/sh", "-ec", """
+        rm -rf /served/root
         mkdir -p /served/root
         for f in /firmware/*; do
             [ -e "$f" ] || continue
@@ -382,7 +383,7 @@ def _render_tftp(site, configs, wallpaper=None, *, profiles_only=False):
         # Only validated literal keys enter this shell fragment. Kubernetes Secret
         # projections are symlinks; dereference exactly these keys into regular files.
         stage = spec["initContainers"][0]
-        stage["command"][2] = "mkdir -p /served/root\n" + "\n".join(
+        stage["command"][2] = "rm -rf /served/root\nmkdir -p /served/root\n" + "\n".join(
             f"cp -L /config/{filename} /served/root/{filename}" for filename in sorted(configs))
         stage["volumeMounts"] = [item for item in stage["volumeMounts"] if item["name"] != "firmware"]
         spec["volumes"] = [item for item in spec["volumes"] if item["name"] != "firmware"]
