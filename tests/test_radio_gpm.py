@@ -17,6 +17,7 @@ class Response(io.BytesIO):
     def __init__(self, body=b'', status=200, **headers):
         super().__init__(body)
         self.status, self.headers = status, headers
+        self.length = int(headers["Content-Length"]) if "Content-Length" in headers else None
 
     def getheader(self, name, default=None):
         return self.headers.get(name, default)
@@ -67,6 +68,16 @@ class ChildRadioTests(unittest.TestCase):
             {'format':'AAC','urlStream':self.url.replace('https:','http:').replace(':443',':80')},
             {'format':'AAC','urlStream':self.url.replace('srv01','srv11').replace(':443',':8443')}]
         self.assertEqual(self.resolve(document), self.url)
+
+    def test_valid_looking_json_requires_complete_declared_http_body(self):
+        connection = Mock()
+        body = json.dumps(self.document()).encode()
+        response = Response(body, **{"Content-Length": str(len(body) + 1)})
+        with patch.object(radio, 'open_stream', return_value=(connection, response)), \
+                self.assertRaisesRegex(ValueError, 'broadcaster response incomplete'):
+            radio.gpm_stream_url(self.station)
+        self.assertTrue(response.closed)
+        connection.close.assert_called_once_with()
 
     def test_tokens_are_resolved_fresh_and_never_written_to_catalog(self):
         before = radio.CATALOG.read_bytes()

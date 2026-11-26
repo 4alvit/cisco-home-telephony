@@ -49,9 +49,11 @@ also mounted at `/run/voice/.local/state` for persistent voice ownership and
 cleanup journals. Source stays in the image under `/workspace`.
 
 The non-root init container creates its own mode-0700 configuration directory
-under a fresh volume and uses
+on the runtime `emptyDir` and uses
 [`stage_private.py`](../containers/voice/stage_private.py) to copy an explicit
-file list to mode-0600 regular files. It does not recursively change ownership
+file list to mode-0600 regular files. On a Pod sandbox retry, it clears the
+previously staged files in `.local/config` and, for wake profiles, `.local/models`
+before staging the current inputs. It does not recursively change ownership
 or permissions on the persistent state volume. `fsGroup` alone does not make a
 volume's root owned by UID 10001. Prepare the persistent directory with the
 correct ownership before installation; an existing directory must be reviewed,
@@ -353,8 +355,9 @@ weights enter the Secret, and no voice session starts during initialization.
 All wake profiles in this deployment must use the same pinned bundle; use a
 separate design review before introducing per-phone model bundles.
 
-For this wake variant, a minimal root init step creates/chowns only fresh
-`emptyDir` children. Model staging and the gateway run as UID 10001. There is
+For the wake variant, a root init step prepares the top-level private directory
+on the `emptyDir` for UID 10001. It accepts an existing directory only with the
+expected ownership and mode. UID 10001 stages the inputs and runs the gateway. There is
 no Pod `fsGroup` that could recursively alter the existing model PVC or state
 volume. Provision PVC read permissions for UID 10001 explicitly. The model
 stager requests 128 MiB; capacity validation includes this peak. The ordinary
@@ -462,12 +465,11 @@ resources as deployment cleanup.
   the input Secret exists, the new configuration directory is owned by UID
   10001 with mode 0700, and the persistent host path already exists with the
   expected ownership. Do not solve this by running the gateway as root or
-  relaxing private files to world-readable permissions. Staging deliberately
-  refuses an existing destination, including after a partial init attempt.
-  After fixing the cause and confirming active work has stopped, perform a
-  reviewed Deployment template rollout using `Recreate` to obtain a fresh Pod
-  and empty configuration volume. Do not clear the persistent state volume or
-  force-delete a Pod to retry staging.
+  relaxing private files to world-readable permissions. Kubelet can retry staging with the same scratch volume. The init container
+  accepts its owner-only directories and clears previously staged files. If
+  initialization still fails, check the source Secret, model hashes and any
+  unexpected directory or ownership reported by the init container. The
+  persistent state volume belongs to the gateway throughout recovery.
 - **Ready but API or AMI fails:** check the preserved bearer token, exact-source
   firewall rules, local-node AMI ACL and actual callback ports. Readiness does
   not authenticate to AMI or HA.

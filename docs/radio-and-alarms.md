@@ -134,6 +134,10 @@ The HTTPS HLS entry point is `https://hls-01-rbc.hostingradio.ru/rbc/playlist.m3
 Session-specific playlist URLs are resolved at playback time, not saved in configuration.
 Dial **736** or run `cisco 212 736`.
 
+**737 — KSFO Tower** (`ksfo-tower`): Live air traffic control radio from
+San Francisco International Airport. Quiet gaps between transmissions are
+normal. Dial **737** or run `cisco 212 737`. [LiveATC playlist](https://www.liveatc.net/play/ksfo_twr.pls).
+
 The same versioned catalog includes **714 Baroque**, **715 Radio Swiss Classic**,
 **716 Radio Swiss Jazz**, **705 Gothic** and **717 Sanctuary Dark Electro**.
 Enable the desired station IDs in the private site configuration.
@@ -155,7 +159,7 @@ loads its profile. With an older template, enter the number while on hook and
 press **Dial**, or use the CLI; a fleet reboot is not required for the server route.
 The configured handset hotline keeps its dedicated off-hook behavior.
 
-[Printable music reference](radio-reference.html) lists these channels in English.
+[Printable radio reference](radio-reference.html) lists these channels in English.
 
 There is no station audio in this repository, archive, proxy endpoint, or
 download library. Use the original broadcasts under each provider's terms.
@@ -339,8 +343,8 @@ paced in 20 ms / 640-byte frames with a 0.5 volume multiplier. The worker uses
 `Dial(AudioSocket/.../c(slin16))` so the channel stays wideband; the older
 `AudioSocket()` application forces 8 kHz. Asterisk converts the stream to the
 phone's negotiated **G.722**, with G.711 fallback for a narrowband caller.
-The dated live results above describe the previous 8 kHz worker, not proof
-that an installed system already has this upgrade.
+The original October 17 samples used the 8 kHz worker. The November 2
+expansion checks above measured 16 kHz PCM.
 Incoming microphone frames are discarded; they are never sent
 to the station or recorded. Network operations time out after eight seconds;
 initial audio has a 15-second startup bound. A channel-bound watchdog provides

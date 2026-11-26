@@ -1471,7 +1471,7 @@ def main(argv=None):
                 announcement_operation('display', result)
             return code
         lifesize = config.get('lifesize', {})
-        if args.extension in lifesize and args.command != 'directory':
+        if args.extension in lifesize and args.command not in ('directory', 'search'):
             native_lifesize = True
             data = Gateway(config, args.timeout).request('/v1/phones')
             validate_inventory(data)

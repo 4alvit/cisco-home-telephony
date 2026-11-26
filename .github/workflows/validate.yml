@@ -34,7 +34,7 @@ jobs:
   # mode changes and uncertain history still run the full checks.
   validate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -50,6 +50,7 @@ jobs:
         run: python3 scripts/verify_docs_links.py
       - name: Install public test dependencies
         if: steps.scope.outputs.documentation_only != 'true'
+        timeout-minutes: 17
         run: |
           python3 -m venv .venv
           .venv/bin/python -m pip install --disable-pip-version-check \
@@ -85,6 +86,7 @@ jobs:
           ffprobe -version
       - name: Python and shell checks
         if: steps.scope.outputs.documentation_only != 'true'
+        timeout-minutes: 6
         run: |
           .venv/bin/python -m unittest discover -s tests -v
           .venv/bin/python -m compileall -q scripts voice_assistant containers/asterisk tools/firmware_lab tools/sip_video tools/l16_lab

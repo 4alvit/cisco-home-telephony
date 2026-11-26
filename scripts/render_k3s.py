@@ -33,6 +33,8 @@ WALLPAPER_MAX_BYTES = 400_000
 WALLPAPER_PATH = "Desktops/320x212x16"
 
 def validate_site(site, with_tftp=False):
+    if not isinstance(site, dict):
+        raise ValueError("site must be an object")
     _softphones.validate(site)
     ha = site.get("home_assistant", {})
     if not isinstance(ha, dict) or type(ha.get("enabled", False)) is not bool:
@@ -59,7 +61,8 @@ def validate_site(site, with_tftp=False):
     if addr not in net or addr in (net.network_address, net.broadcast_address):
         raise ValueError("node_ipv4 must be a host address inside lan_cidr")
     for key in ("asterisk_image", "tftp_image") if with_tftp else ("asterisk_image",):
-        if not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", site.get(key, "")):
+        image = site.get(key)
+        if not isinstance(image, str) or not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", image):
             raise ValueError(f"site.{key} must use an immutable @sha256 image digest")
     if not isinstance(site.get("image_pull_secrets", []), list):
         raise ValueError("image_pull_secrets must be a list")
@@ -250,12 +253,21 @@ def render_core(site, configs):
     spec = pod_base(site)
     spec["tolerations"] = fixed_node_tolerations()
     spec["securityContext"].update({"runAsNonRoot": True, "runAsUser": 10001, "runAsGroup": 10001, "fsGroup": 10001})
+    sip_bind = str(ipaddress.IPv4Address(site["node_ipv4"])).replace(".", "[.]") + ":5060"
+    sip_readiness = "transports=$(asterisk -rx 'pjsip show transports')"
+    for protocol in ("udp", "tcp"):
+        # Asterisk prints the transport name, protocol, CoS, ToS and bind address.
+        sip_readiness += (
+            "; printf '%s\\n' \"$transports\" | grep -Eq '^[[:space:]]*Transport:[[:space:]]+"
+            f"transport-{protocol}[[:space:]]+{protocol}[[:space:]]+"
+            f"[0-9]+[[:space:]]+[0-9]+[[:space:]]+{sip_bind}[[:space:]]*$'"
+        )
     spec["containers"] = [{"name": "asterisk", "image": site["asterisk_image"], "imagePullPolicy": "IfNotPresent",
         "securityContext": {"allowPrivilegeEscalation": False, "readOnlyRootFilesystem": True, "capabilities": {"drop": ["ALL"]}},
         "ports": [{"name": "sip-udp", "containerPort": 5060, "protocol": "UDP"}, {"name": "sip-tcp", "containerPort": 5060, "protocol": "TCP"}],
         "resources": {"requests": {"cpu": "50m", "memory": "128Mi"}, "limits": {"cpu": "1000m", "memory": "512Mi"}},
         "startupProbe": {"exec": {"command": ["asterisk", "-rx", "core show uptime"]}, "periodSeconds": 5, "failureThreshold": 30},
-        "readinessProbe": {"exec": {"command": ["/bin/sh", "-ec", "transports=$(asterisk -rx 'pjsip show transports'); printf '%s\\n' \"$transports\" | grep -Eq 'Transport:.*transport-udp[[:space:]]+udp.*:5060'; printf '%s\\n' \"$transports\" | grep -Eq 'Transport:.*transport-tcp[[:space:]]+tcp.*:5060'"]}, "periodSeconds": 10},
+        "readinessProbe": {"exec": {"command": ["/bin/sh", "-ec", sip_readiness]}, "periodSeconds": 10},
         "livenessProbe": {"exec": {"command": ["asterisk", "-rx", "core show uptime"]}, "periodSeconds": 30, "failureThreshold": 3},
         "volumeMounts": [{"name": "config", "mountPath": "/etc/asterisk", "readOnly": True}] + [
             {"name": n, "mountPath": p} for n, p in (("run", "/run/asterisk"), ("db", "/var/lib/asterisk/db"),
@@ -389,6 +401,15 @@ def _render_tftp(site, configs, wallpaper=None, *, profiles_only=False):
         chmod 0755 /served/root/Desktops /served/root/Desktops/320x212x16
         chmod 0644 /served/root/Desktops/320x212x16/List.xml /served/root/Desktops/320x212x16/home.png /served/root/Desktops/320x212x16/home-thumb.png
         """
+    # A sandbox restart reuses the sealed tree on this emptyDir. Restore
+    # directory permissions before removing it. find does not follow symlinks.
+    stage_command = spec["initContainers"][0]["command"]
+    stage_command[2] = """if [ -e /served/root ] || [ -L /served/root ]; then
+        [ -d /served/root ] && [ ! -L /served/root ] || exit 1
+        find /served/root -type d -exec chmod 0700 {} +
+        find /served/root -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+    fi
+    """ + stage_command[2]
     # The serving mount is read-only too: WRQ cannot create OR replace a file.
     # GNU chmod needs five digits to clear SGID inherited from the fsGroup volume.
     spec["initContainers"][0]["command"][2] += "\nfind /served/root -type f -exec chmod 0444 {} +\nfind /served/root -type d -exec chmod 00555 {} +\n"

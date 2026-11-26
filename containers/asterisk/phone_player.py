@@ -4,6 +4,7 @@ The HTTP controller never passes a URL to Asterisk or to a shell. It reserves
 one short-lived AudioSocket destination in AstDB; the dialplan consumes it once.
 All subsequent controls refer to the opaque session and the observed call UID.
 """
+from contextlib import ExitStack
 import math
 import re
 import time
@@ -370,6 +371,7 @@ class PhonePlayer:
 
     def close(self):
         # Unconsumed owners remain in SQLite for cleanup by the next process.
-        for record in list(self.sessions.values()):
-            record['session'].close()
+        with ExitStack() as cleanup:
+            for record in reversed(list(self.sessions.values())):
+                cleanup.callback(record['session'].close)
         self.sessions.clear()

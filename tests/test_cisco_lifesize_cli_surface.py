@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
@@ -16,6 +17,24 @@ import test_cisco_lifesize as lifesize_fixture
 
 
 class LifeSizeCLISurfaceTests(unittest.TestCase):
+    def test_library_search_on_lifesize_needs_no_device_or_gateway(self):
+        with TemporaryDirectory() as directory:
+            Path(directory, 'Example.flac').write_bytes(b'fixture')
+            config = {'lifesize': {'222': {}}, 'music': {
+                'directory': directory,
+                'media_source_prefix': 'media-source://media_source/library',
+            }}
+            with patch.object(cisco, 'load_config', return_value=config), \
+                    patch.object(cisco, 'Gateway') as gateway, \
+                    patch.object(cisco, 'lifesize_operation') as native, \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                code = cisco.main(['--json', '222', 'search', 'Example'])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(output.getvalue())['matches'],
+                         [{'relative_path': 'Example.flac', 'size_bytes': 7}])
+        gateway.assert_not_called()
+        native.assert_not_called()
+
     def test_native_volume_and_microphone_parser(self):
         args = cisco.parser().parse_args(['222', 'volume', 'ringer', 'set', '7'])
         self.assertEqual((args.context, args.direction, args.value, args.steps), ('ringer', 'set', 7, 1))
