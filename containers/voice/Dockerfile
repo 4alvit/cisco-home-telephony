@@ -39,7 +39,7 @@ RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
        > /etc/apt/sources.list \
     && apt-get update \
     && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends tzdata \
+    && apt-get install -y --no-install-recommends --allow-downgrades tzdata \
        ffmpeg=7:7.1.5-0+deb13u1 libmbedcrypto16=3.6.6-0.1~deb13u1 \
        libbrotli1=1.1.0-2+deb13u1 libexpat1=2.9.0-1~deb13u1 \
        libssh-4=0.11.5-0+deb13u1 libssl3t64=3.5.7-1~deb13u3 \

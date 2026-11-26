@@ -122,7 +122,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libopus-dev \
     && cp /build/opus-source/LICENSE /build/opus-source/README.md /stage/usr/share/doc/asterisk-opus-open-source/ \
     && cp /tmp/opus-source.tar.gz /stage/usr/share/doc/asterisk-opus-open-source/source.tar.gz
 FROM distribution
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends --allow-downgrades \
     ca-certificates tzdata libedit2 libxml2 libuuid1 libsqlite3-0 libncurses6 libopus0 libunbound8 python3 \
     ffmpeg=7:7.1.5-0+deb13u1 libmbedcrypto16=3.6.6-0.1~deb13u1 \
     libbrotli1=1.1.0-2+deb13u1 libexpat1=2.9.0-1~deb13u1 \

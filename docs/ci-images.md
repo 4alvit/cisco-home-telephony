@@ -271,6 +271,13 @@ The reviewed package identities are:
 - `libssl3t64=3.5.7-1~deb13u3`.
 - `zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1` (security snapshot `20261107T160000Z`).
 
+The exact snapshot pins can be older than the security fixes already present in a
+newly published base image, so the pinned install allows an explicit downgrade:
+the reviewed snapshot identity wins over whatever the base happened to ship, and
+`scripts/verify_voice_security.py` still rejects any other version. Without the
+flag APT aborts the build with `Packages were downgraded and -y was used without
+--allow-downgrades`.
+
 This replaces the unsupported Bookworm Mbed TLS branch with the supported
 distribution dependency; it does not delete shared libraries to make a scan
 smaller. Debian's [CVE-2025-47917 record](https://security-tracker.debian.org/tracker/CVE-2025-47917)
