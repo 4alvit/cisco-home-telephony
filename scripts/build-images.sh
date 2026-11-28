@@ -23,7 +23,7 @@ resolve_base() {
 pbx_base=$(resolve_base debian:trixie-slim "${ASTERISK_DEBIAN_IMAGE:-}")
 tftp_base=$(resolve_base debian:bookworm-slim "${TFTP_DEBIAN_IMAGE:-}")
 printf 'PBX base: %s\nTFTP base: %s\n' "$pbx_base" "$tftp_base"
-printf 'PBX Debian package snapshot: 20261101T000000Z\n'
+printf 'PBX Debian package snapshot: 20261125T000000Z\n'
 # Populate each independent build stage sequentially so APT downloads do not
 # compete for the snapshot service. The final build reuses their normal cache.
 pbx_build_args=(--platform "${BUILD_PLATFORM:-linux/amd64}" --build-arg "DEBIAN_IMAGE=$pbx_base")

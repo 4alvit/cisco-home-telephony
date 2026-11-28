@@ -169,7 +169,7 @@ Passing this gate does **not** mean an image has no reported vulnerabilities.
 
 The runtime upgrade for [issue #48](https://github.com/4alvit/cisco-home-telephony/issues/48)
 uses official Debian 13 (`trixie`) bases and the signed Debian package snapshot
-`20261101T000000Z`. The manual voice image retains Python 3.12 and its existing
+`20261125T000000Z`. The manual voice image retains Python 3.12 and its existing
 hash-locked wheels; the wake image inherits that base. Asterisk is compiled and
 run on the same Debian distribution, whose system Python is 3.13. TFTP has no
 multimedia dependency and retains its independent Bookworm base and tag.
@@ -183,6 +183,12 @@ pins stay unchanged. The `zlib-security.snapshot` image label records the extra
 input. APT still verifies Release signatures and package hashes, with the same
 bounded mirror fallback policy. Both security profiles require the fixed zlib
 version, release and epoch in the finished image inventory.
+
+The main snapshot's security suite also carries
+[DSA-6657-1](https://security-tracker.debian.org/tracker/DSA-6657-1), which fixes
+CVE-2026-124851. Both runtime stages pin `libzstd1=1.5.7+dfsg-1+deb13u1`, so the
+reviewed snapshot cannot silently keep the older library, and both security
+profiles require that exact version in the finished image inventory.
 
 Build helpers resolve each official base tag to a digest before building and
 print that exact input. The runtime image labels retain the base reference and
@@ -268,8 +274,16 @@ The reviewed package identities are:
 - `libbrotli1=1.1.0-2+deb13u1`.
 - `libexpat1=2.9.0-1~deb13u1`.
 - `libssh-4=0.11.5-0+deb13u1`.
-- `libssl3t64=3.5.7-1~deb13u3`.
+- `libssl3t64=3.5.9-1~deb13u1`.
 - `zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1` (security snapshot `20261107T160000Z`).
+
+The reviewed snapshot must carry the same or newer versions than the base image
+already ships. The pinned install does not allow downgrades: APT aborts with
+`Packages were downgraded and -y was used without --allow-downgrades`, because a
+pin older than the base would revert a published security fix. That abort means
+the snapshot is behind the base and has to move forward; it is not a reason to
+pass the flag. `scripts/verify_voice_security.py` still rejects any version other
+than the listed ones.
 
 This replaces the unsupported Bookworm Mbed TLS branch with the supported
 distribution dependency; it does not delete shared libraries to make a scan
