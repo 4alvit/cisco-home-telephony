@@ -4,7 +4,7 @@ ARG PYTHON_IMAGE
 FROM ${PYTHON_IMAGE}
 ARG PYTHON_IMAGE
 LABEL org.opencontainers.image.base.name="${PYTHON_IMAGE}" \
-      io.cisco-home-telephony.debian.snapshot="20261124T000000Z"
+      io.cisco-home-telephony.debian.snapshot="20261125T000000Z"
 # Bound archive retries and stalled connections for every APT operation.
 RUN printf '%s\n' \
        'Acquire::Retries "2";' \
@@ -23,13 +23,13 @@ RUN printf '%s\n' \
 RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
     && rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources \
     && printf '%s\tpriority:1\n%s\tpriority:2\n%s\tpriority:3 type:deb\n' \
-       'https://snapshot.debian.org/archive/debian/20261124T000000Z/' \
-       'https://snapshot-cloudflare.debian.org/archive/debian/20261124T000000Z/' \
+       'https://snapshot.debian.org/archive/debian/20261125T000000Z/' \
+       'https://snapshot-cloudflare.debian.org/archive/debian/20261125T000000Z/' \
        'https://deb.debian.org/debian/' \
        > /etc/apt/cisco-debian-snapshot.mirrors \
     && printf '%s\tpriority:1\n%s\tpriority:2\n%s\tpriority:3 type:deb\n' \
-       'https://snapshot.debian.org/archive/debian-security/20261124T000000Z/' \
-       'https://snapshot-cloudflare.debian.org/archive/debian-security/20261124T000000Z/' \
+       'https://snapshot.debian.org/archive/debian-security/20261125T000000Z/' \
+       'https://snapshot-cloudflare.debian.org/archive/debian-security/20261125T000000Z/' \
        'https://deb.debian.org/debian-security/' \
        > /etc/apt/cisco-security-snapshot.mirrors \
     && printf '%s\n' \
@@ -43,6 +43,7 @@ RUN grep -qx 'VERSION_CODENAME=trixie' /etc/os-release \
        ffmpeg=7:7.1.5-0+deb13u1 libmbedcrypto16=3.6.6-0.1~deb13u1 \
        libbrotli1=1.1.0-2+deb13u1 libexpat1=2.9.0-1~deb13u1 \
        libssh-4=0.11.5-0+deb13u1 libssl3t64=3.5.9-1~deb13u1 \
+       libzstd1=1.5.7+dfsg-1+deb13u1 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 cisco-voice \
     && useradd --uid 10001 --gid 10001 --no-create-home \

@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGES = ('asterisk', 'voice')
-SNAPSHOT = '20261124T000000Z'
+SNAPSHOT = '20261125T000000Z'
 
 
 def run_commands(image, contains):
@@ -155,6 +155,15 @@ class AptSnapshotConfigurationTests(unittest.TestCase):
                 repair = text.index('# DSA-6613-1')
                 self.assertGreater(repair, text.rindex('FROM '))
                 self.assertNotIn('apt-get', text[text.index('LABEL io.cisco-home-telephony.zlib-security.snapshot'):])
+
+    def test_runtime_stages_pin_the_dsa_6657_zstd_repair(self):
+        for image in IMAGES:
+            with self.subTest(image=image):
+                commands = run_commands(image, 'libzstd1=1.5.7+dfsg-1+deb13u1')
+                installs = [command for command in commands if command[0] == 'apt-get'
+                            and command[1] == 'install']
+                self.assertEqual(len(installs), 1)
+                self.assertIn('libzstd1=1.5.7+dfsg-1+deb13u1', installs[0])
 
     def test_all_apt_calls_start_with_bounded_network_policy(self):
         for image in (*IMAGES, 'tftp'):

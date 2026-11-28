@@ -84,7 +84,7 @@ for relative in files:
 PY
 
 printf 'Pinned base: %s\n' "$base"
-printf 'Debian package snapshot: 20261124T000000Z\n'
+printf 'Debian package snapshot: 20261125T000000Z\n'
 docker build --platform "$platform" --build-arg "PYTHON_IMAGE=$base" \
     -f "$context/containers/voice/Dockerfile" -t "$prefix/voice:pilot" "$context"
 bash scripts/smoke-voice-image.sh "$prefix/voice:pilot"
